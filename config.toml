@@ -1,0 +1,11 @@
+[paths]
+sharepoint_root = "./data/publications"   # local sync of SharePoint folders
+database = "./oa_tracker.sqlite"
+output_dir = "./output"                   # reports, action sheets
+email_drafts_dir = "./output/email_drafts"
+template_dir = "./templates"
+
+[reminders]
+first_reminder_days = 14      # days after became_active before first reminder
+reminder_interval_days = 7    # days between subsequent reminders
+max_reminders = 5

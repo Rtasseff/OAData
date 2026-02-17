@@ -1,0 +1,16 @@
+Subject: Reminder: Data upload pending for publication {publication_id}
+
+Dear data contact,
+
+This is a reminder (#{reminder_number}) regarding the Open Access data deposit for publication {publication_id}.
+
+We created a SharePoint folder for you to upload the associated research data. Our records show that the folder has been active since {became_active_at}, but the archiving process has not yet been completed.
+
+Current status: {current_status}
+
+Could you please check the status of your upload and let us know if you need any assistance?
+
+Best regards,
+Ryan Tasseff
+Data Quality Officer
+CIC biomaGUNE
