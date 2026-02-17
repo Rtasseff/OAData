@@ -2,7 +2,7 @@ Subject: Reminder: Data upload pending for publication {publication_id}
 
 Dear data contact,
 
-This is a reminder (#{reminder_number}) regarding the Open Access data deposit for publication {publication_id}.
+This is a reminder (#{reminder_number}) regarding the Open Access data deposit for publication {publication_id} ({publication_name}).
 
 The project office created a SharePoint folder for you to upload the associated research data. Our records suggest that the archiving process has not yet been completed.
 
