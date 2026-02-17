@@ -72,9 +72,9 @@ def apply_actions(sheet_path: Path, config: Config) -> ApplyResult:
 
             pub_id = row["publication_id"].strip()
             task_code = row["task_code"].strip()
-            pid = row.get("pid", "").strip()
-            url = row.get("url", "").strip()
-            note = row.get("note", "").strip()
+            pid = (row.get("pid") or "").strip().strip("-")
+            url = (row.get("url") or "").strip().strip("-")
+            note = (row.get("note") or "").strip()
 
             archive = db.get_archive(conn, pub_id)
             if archive is None:
