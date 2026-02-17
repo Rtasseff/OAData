@@ -81,9 +81,15 @@ def test_generates_reminder_task_when_due(test_config):
     _insert(
         test_config.database, "PUB001", OPEN_ACTIVE,
         next_reminder_at="2020-01-01T00:00:00",  # in the past
+        reminder_count=2,
     )
     path = generate_sheet(test_config)
     rows = _read_sheet(path)
     task_codes = [r["task_code"] for r in rows if r["publication_id"] == "PUB001"]
     assert "remind_sent" in task_codes
     assert "qa_pass" in task_codes  # also gets the pipeline task
+    # Verify info columns are populated
+    remind_row = [r for r in rows if r["task_code"] == "remind_sent"][0]
+    assert remind_row["first_seen_at"] == "2026-01-01T00:00:00"
+    assert remind_row["next_reminder_at"] == "2020-01-01T00:00:00"
+    assert remind_row["reminder_count"] == "2"

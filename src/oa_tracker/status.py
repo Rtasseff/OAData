@@ -51,11 +51,11 @@ TASK_CODES = {
         "changes_status": False,
     },
     "qa_pass": {
-        "description": "QA complete; ready for Zenodo draft",
+        "description": "Review uploaded data and approve QA",
         "changes_status": True,
     },
     "qa_hold": {
-        "description": "QA not passed; add note and keep monitoring",
+        "description": "Flag QA issue; add note and keep monitoring",
         "changes_status": False,
     },
     "zenodo_draft_created": {
@@ -67,7 +67,7 @@ TASK_CODES = {
         "changes_status": True,
     },
     "zenodo_published": {
-        "description": "Publish Zenodo record",
+        "description": "Publish Zenodo record (enter PID and URL)",
         "changes_status": True,
         "requires_pid": True,
     },
@@ -76,7 +76,7 @@ TASK_CODES = {
         "changes_status": True,
     },
     "folder_removed": {
-        "description": "Remove SharePoint folder; close archive",
+        "description": "Confirm SharePoint folder removed; close archive",
         "changes_status": True,
     },
     "close_publication_only": {
@@ -84,7 +84,7 @@ TASK_CODES = {
         "changes_status": True,
     },
     "close_exception": {
-        "description": "Close with exception (note strongly encouraged)",
+        "description": "Close with exception (add note explaining why)",
         "changes_status": True,
     },
 }

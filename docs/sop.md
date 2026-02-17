@@ -107,9 +107,68 @@ CLOSED:
 * `CLOSED_PUBLICATION_ONLY`
 * `CLOSED_EXCEPTION` (note strongly encouraged)
 
-## 7. Procedure
+## 7. Action Sheet Task Code Reference
 
-### 7.1 Regular scanning (daily or as-needed)
+The `task_code` column in `action_sheet.tsv` identifies the **action you are being asked to perform**. It is NOT the current status — see `current_status` for that. Setting `done=1` on a row asserts that you have completed the action described in `task_text`.
+
+### Status transitions (normal pipeline)
+
+| current_status | task_code | task_text (action to take) | resulting status |
+|---|---|---|---|
+| `OPEN_ACTIVE` | `qa_pass` | Review uploaded data and approve QA | `OPEN_READY_FOR_ZENODO_DRAFT` |
+| `OPEN_ACTIVE` | `qa_hold` | Flag QA issue; add note and keep monitoring | *(stays OPEN_ACTIVE)* |
+| `OPEN_READY_FOR_ZENODO_DRAFT` | `zenodo_draft_created` | Create Zenodo draft deposit | `OPEN_ZENODO_DRAFT_CREATED` |
+| `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_validated` | Validate Zenodo draft metadata and files | `OPEN_ZENODO_DRAFT_VALIDATED` |
+| `OPEN_ZENODO_DRAFT_VALIDATED` | `zenodo_published` | Publish Zenodo record (enter PID and URL) | `OPEN_ZENODO_PUBLISHED` |
+| `OPEN_ZENODO_PUBLISHED` | `db_updated` | Update internal publication DB with dataset DOI/URL | `OPEN_DB_UPDATED` |
+| `OPEN_DB_UPDATED` | `folder_removed` | Confirm SharePoint folder removed; close archive | `CLOSED_DATA_ARCHIVED` |
+
+### Special actions (available from any OPEN status)
+
+| task_code | task_text | resulting status |
+|---|---|---|
+| `remind_sent` | Send reminder email to data contact | *(no status change; updates reminder count)* |
+| `close_publication_only` | Close as publication-only (no data deposit needed) | `CLOSED_PUBLICATION_ONLY` |
+| `close_exception` | Close with exception (add note explaining why) | `CLOSED_EXCEPTION` |
+
+### How to edit the action sheet
+
+The sheet is generated with one row per archive showing the next expected action. **You only need to edit three columns:** `done`, `pid`/`url` (when applicable), and `note`. Leave all other columns as-is.
+
+- **To complete an action:** Set `done=1`. The system applies the `task_code` already in the row.
+- **To provide data:** Fill in `pid` and/or `url` (e.g. when marking `zenodo_published`).
+- **To add context:** Write in the `note` column. Notes are preserved in the audit log.
+- **To take an alternate action:** Change `task_code` (and optionally `task_text`) before setting `done=1`. This is mainly relevant at the QA step — see below.
+
+### QA review: branching decision
+
+When an archive is `OPEN_ACTIVE`, the sheet pre-fills `task_code=qa_pass` (the optimistic path). After reviewing the uploaded data:
+
+- **QA passes:** Set `done=1`. Status advances to `OPEN_READY_FOR_ZENODO_DRAFT`.
+- **QA does not pass:** Change `task_code` from `qa_pass` to `qa_hold`, add a `note` explaining the issue, then set `done=1`. Status stays `OPEN_ACTIVE` and the note is recorded. The next time you run `oa sheet`, a fresh `qa_pass` row will appear for that archive so you can revisit it.
+- **Not ready to decide yet:** Leave `done=0`. The row stays in the sheet untouched.
+
+All other pipeline steps are linear — no branching needed.
+
+### Action sheet columns
+
+| Column | Purpose |
+|---|---|
+| `publication_id` | The folder/publication identifier |
+| `current_status` | The archive's current status in the database |
+| `task_code` | The action code — identifies what to do (see tables above) |
+| `task_text` | Human-readable description of the action to take |
+| `first_seen_at` | When the folder was first detected by the scanner |
+| `next_reminder_at` | When the next reminder is due (blank if not applicable) |
+| `reminder_count` | Number of reminders already sent |
+| `done` | Set to `1` when you have completed this action |
+| `pid` | Enter the dataset DOI/PID here (required for `zenodo_published`) |
+| `url` | Enter the dataset URL here (optional) |
+| `note` | Optional free-text note (recorded in audit log) |
+
+## 8. Procedure
+
+### 8.1 Regular scanning (daily or as-needed)
 
 1. Run `scan_folders`.
 2. Script updates SQLite:
@@ -118,7 +177,7 @@ CLOSED:
    * Empty→non-empty transition → `OPEN_ACTIVE` and sets `became_active_at`
    * Folder missing while status OPEN → flags integrity warning
 
-### 7.2 Weekly operations (recommended cadence)
+### 8.2 Weekly operations (recommended cadence)
 
 1. Run `make_weekly_report`:
 
@@ -139,19 +198,19 @@ CLOSED:
    * Appends to audit log
    * Regenerates any newly-available email drafts (e.g., completion email once DOI is entered)
 
-### 7.3 Email handling
+### 8.3 Email handling
 
 * Reminder and completion emails are generated as drafts.
 * Sending remains manual (copy/paste), but `apply_actions` records `remind_sent` or `completion_sent` when you mark them.
 
-## 8. Integrity controls
+## 9. Integrity controls
 
 * If a folder disappears but the archive is not `CLOSED_*`, the report flags:
 
   * “Missing folder but still OPEN” → manual reconciliation required.
 * Closed items remain in SQLite permanently for lookup/audit.
 
-## 9. Audit trail
+## 10. Audit trail
 
 Every applied action is recorded in an `events` table (timestamp, publication_id, action_code, old_status, new_status, user_note, pid/url if supplied).
 

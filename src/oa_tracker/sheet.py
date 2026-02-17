@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from oa_tracker import db, status as st
@@ -14,16 +14,14 @@ SHEET_COLUMNS = [
     "current_status",
     "task_code",
     "task_text",
-    "due_date",
+    "first_seen_at",
+    "next_reminder_at",
+    "reminder_count",
     "done",
     "pid",
     "url",
     "note",
 ]
-
-
-def _due_date(days_from_now: int = 7) -> str:
-    return (datetime.now() + timedelta(days=days_from_now)).strftime("%Y-%m-%d")
 
 
 def generate_sheet(config: Config) -> Path:
@@ -43,6 +41,9 @@ def generate_sheet(config: Config) -> Path:
         for archive in open_archives:
             pub_id = archive["publication_id"]
             cur_status = archive["status"]
+            first_seen = archive.get("first_seen_at") or ""
+            next_rem = archive.get("next_reminder_at") or ""
+            rem_count = str(archive.get("reminder_count") or 0)
 
             # Add reminder task if due
             if pub_id in reminders_due:
@@ -51,7 +52,9 @@ def generate_sheet(config: Config) -> Path:
                     "current_status": cur_status,
                     "task_code": "remind_sent",
                     "task_text": st.TASK_CODES["remind_sent"]["description"],
-                    "due_date": _due_date(0),
+                    "first_seen_at": first_seen,
+                    "next_reminder_at": next_rem,
+                    "reminder_count": rem_count,
                     "done": "0",
                     "pid": "",
                     "url": "",
@@ -67,7 +70,9 @@ def generate_sheet(config: Config) -> Path:
                     "current_status": cur_status,
                     "task_code": next_task,
                     "task_text": meta["description"],
-                    "due_date": _due_date(7),
+                    "first_seen_at": first_seen,
+                    "next_reminder_at": next_rem,
+                    "reminder_count": rem_count,
                     "done": "0",
                     "pid": "",
                     "url": "",
