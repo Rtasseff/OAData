@@ -150,6 +150,27 @@ When an archive is `OPEN_ACTIVE`, the sheet pre-fills `task_code=qa_pass` (the o
 
 All other pipeline steps are linear — no branching needed.
 
+### Shortcuts: fast-track and full closure
+
+Two shortcuts let you skip intermediate pipeline steps when you've already done the work:
+
+**`done=1` with a PID or URL → fast-track to `OPEN_ZENODO_PUBLISHED`**
+
+If you set `done=1` on any row and fill in the `pid` and/or `url` columns, the system skips straight to `OPEN_ZENODO_PUBLISHED` regardless of the current status or task code. Use this when you've already completed QA, created the Zenodo deposit, and published it — just record the result in one step.
+
+Example: an `OPEN_ACTIVE` archive where you did everything at once. Set `done=1`, paste the Zenodo DOI in `pid` and the URL in `url`. The archive jumps directly to `OPEN_ZENODO_PUBLISHED`.
+
+This does NOT apply to `remind_sent` or `qa_hold` rows — those are handled normally even if a PID is present.
+
+**`done=2` → full closure (everything done, folder removed)**
+
+Setting `done=2` means: "I did everything needed and the folder has been removed." The system closes the archive immediately:
+
+- If a PID is present (either in the `pid` column or already recorded in the database) → `CLOSED_DATA_ARCHIVED`
+- If no PID anywhere → `CLOSED_EXCEPTION` (with a warning)
+
+Use `done=2` when you want to close out an archive in a single action without stepping through each intermediate status.
+
 ### Action sheet columns
 
 | Column | Purpose |
@@ -161,7 +182,7 @@ All other pipeline steps are linear — no branching needed.
 | `first_seen_at` | When the folder was first detected by the scanner |
 | `next_reminder_at` | When the next reminder is due (blank if not applicable) |
 | `reminder_count` | Number of reminders already sent |
-| `done` | Set to `1` when you have completed this action |
+| `done` | `0` = not done, `1` = done, `2` = fully closed (see shortcuts below) |
 | `pid` | Enter the dataset DOI/PID here (required for `zenodo_published`) |
 | `url` | Enter the dataset URL here (optional) |
 | `note` | Optional free-text note (recorded in audit log) |

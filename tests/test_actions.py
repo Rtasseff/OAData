@@ -5,7 +5,10 @@ from pathlib import Path
 
 from oa_tracker.actions import apply_actions
 from oa_tracker.db import get_archive, get_connection, upsert_archive, get_recent_events
-from oa_tracker.status import OPEN_ACTIVE, OPEN_READY_FOR_ZENODO_DRAFT, CLOSED_EXCEPTION
+from oa_tracker.status import (
+    OPEN_ACTIVE, OPEN_READY_FOR_ZENODO_DRAFT, OPEN_ZENODO_PUBLISHED,
+    CLOSED_DATA_ARCHIVED, CLOSED_EXCEPTION,
+)
 
 
 def _write_sheet(path: Path, rows: list[dict]) -> Path:
@@ -79,6 +82,7 @@ def test_apply_skips_undone(test_config):
 
 
 def test_apply_invalid_transition(test_config):
+    """Invalid transition with no PID should still error."""
     _insert_active_archive(test_config.database, "PUB001")
     sheet = _write_sheet(test_config.output_dir, [{
         "publication_id": "PUB001",
@@ -89,7 +93,7 @@ def test_apply_invalid_transition(test_config):
         "next_reminder_at": "",
         "reminder_count": "0",
         "done": "1",
-        "pid": "10.5281/zenodo.123",
+        "pid": "",
         "url": "",
         "note": "",
     }])
@@ -218,3 +222,166 @@ def test_apply_unknown_publication(test_config):
     result = apply_actions(sheet, test_config)
     assert result.applied == 0
     assert len(result.errors) == 1
+
+
+# ── Fast-track shortcuts ─────────────────────────────────────────────
+
+def test_fast_track_pid_jumps_to_zenodo_published(test_config):
+    """done=1 with PID should skip straight to OPEN_ZENODO_PUBLISHED."""
+    _insert_active_archive(test_config.database, "PUB001")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": OPEN_ACTIVE,
+        "task_code": "qa_pass",
+        "task_text": "Review uploaded data and approve QA",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "1",
+        "pid": "10.5281/zenodo.123456",
+        "url": "https://zenodo.org/record/123456",
+        "note": "Already published externally",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+    assert result.errors == []
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == OPEN_ZENODO_PUBLISHED
+        assert archive["final_pid"] == "10.5281/zenodo.123456"
+        assert archive["final_url"] == "https://zenodo.org/record/123456"
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+        assert any(e["action_code"] == "fast_track_published" for e in events)
+
+
+def test_fast_track_url_only_jumps_to_zenodo_published(test_config):
+    """done=1 with URL (no PID) should also fast-track."""
+    _insert_active_archive(test_config.database, "PUB001")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": OPEN_ACTIVE,
+        "task_code": "qa_pass",
+        "task_text": "Review",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "1",
+        "pid": "",
+        "url": "https://zenodo.org/record/999",
+        "note": "",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == OPEN_ZENODO_PUBLISHED
+
+
+def test_fast_track_does_not_apply_to_remind_sent(test_config):
+    """PID on a remind_sent row should NOT fast-track."""
+    _insert_active_archive(test_config.database, "PUB001")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": OPEN_ACTIVE,
+        "task_code": "remind_sent",
+        "task_text": "Send reminder",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "2026-01-19T00:00:00",
+        "reminder_count": "0",
+        "done": "1",
+        "pid": "10.5281/zenodo.123456",
+        "url": "",
+        "note": "",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == OPEN_ACTIVE
+        assert archive["reminder_count"] == 1
+
+
+# ── done=2 full closure shortcuts ────────────────────────────────────
+
+def test_done2_with_pid_closes_data_archived(test_config):
+    """done=2 with PID should close as CLOSED_DATA_ARCHIVED."""
+    _insert_active_archive(test_config.database, "PUB001")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": OPEN_ACTIVE,
+        "task_code": "qa_pass",
+        "task_text": "Review",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "2",
+        "pid": "10.5281/zenodo.789",
+        "url": "https://zenodo.org/record/789",
+        "note": "All done",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+    assert result.errors == []
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == CLOSED_DATA_ARCHIVED
+        assert archive["final_pid"] == "10.5281/zenodo.789"
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+        assert any(e["action_code"] == "full_closure" for e in events)
+
+
+def test_done2_without_pid_closes_exception(test_config):
+    """done=2 with no PID should close as CLOSED_EXCEPTION."""
+    _insert_active_archive(test_config.database, "PUB001")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": OPEN_ACTIVE,
+        "task_code": "qa_pass",
+        "task_text": "Review",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "2",
+        "pid": "",
+        "url": "",
+        "note": "No data to archive",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+    assert len(result.warnings) == 1
+    assert "CLOSED_EXCEPTION" in result.warnings[0]
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == CLOSED_EXCEPTION
+
+
+def test_done2_uses_existing_pid_from_db(test_config):
+    """done=2 with no PID in the row but a PID already in the DB should close normally."""
+    _insert_active_archive(test_config.database, "PUB001", "OPEN_ZENODO_PUBLISHED")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB001", final_pid="10.5281/zenodo.555")
+
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": "OPEN_ZENODO_PUBLISHED",
+        "task_code": "db_updated",
+        "task_text": "Update DB",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "2",
+        "pid": "",
+        "url": "",
+        "note": "",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == CLOSED_DATA_ARCHIVED

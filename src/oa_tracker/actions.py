@@ -66,7 +66,7 @@ def apply_actions(sheet_path: Path, config: Config) -> ApplyResult:
     with db.get_connection(config.database) as conn:
         for i, row in enumerate(rows):
             done = row.get("done", "0").strip()
-            if done != "1":
+            if done not in ("1", "2"):
                 result.skipped += 1
                 continue
 
@@ -82,6 +82,65 @@ def apply_actions(sheet_path: Path, config: Config) -> ApplyResult:
                 continue
 
             old_status = archive["status"]
+
+            # ── done=2: full closure shortcut ─────────────────────────
+            if done == "2":
+                extra_fields: dict[str, Any] = {}
+                if pid:
+                    extra_fields["final_pid"] = pid
+                if url:
+                    extra_fields["final_url"] = url
+                if note:
+                    existing_notes = archive.get("notes") or ""
+                    separator = "\n" if existing_notes else ""
+                    extra_fields["notes"] = f"{existing_notes}{separator}[{now}] {note}"
+
+                has_pid = pid or archive.get("final_pid")
+                if has_pid:
+                    new_status = st.CLOSED_DATA_ARCHIVED
+                else:
+                    new_status = st.CLOSED_EXCEPTION
+                    result.warnings.append(
+                        f"Row {i+1} ({pub_id}): done=2 with no PID; closing as CLOSED_EXCEPTION"
+                    )
+
+                db.update_archive_status(conn, pub_id, new_status, **extra_fields)
+                db.insert_event(
+                    conn, pub_id, "full_closure", old_status, new_status, "action_sheet",
+                    pid=pid or None, url=url or None, note=note or None,
+                )
+                result.applied += 1
+                applied_indices.append(i)
+                continue
+
+            # ── done=1 with PID/URL: fast-track to OPEN_ZENODO_PUBLISHED ──
+            if (pid or url) and task_code not in ("remind_sent", "qa_hold"):
+                if _looks_like_paper_doi(pid):
+                    result.warnings.append(
+                        f"Row {i+1} ({pub_id}): PID {pid!r} looks like a paper DOI, not a Zenodo DOI"
+                    )
+
+                extra_fields = {}
+                if pid:
+                    extra_fields["final_pid"] = pid
+                if url:
+                    extra_fields["final_url"] = url
+                if note:
+                    existing_notes = archive.get("notes") or ""
+                    separator = "\n" if existing_notes else ""
+                    extra_fields["notes"] = f"{existing_notes}{separator}[{now}] {note}"
+
+                new_status = st.OPEN_ZENODO_PUBLISHED
+                db.update_archive_status(conn, pub_id, new_status, **extra_fields)
+                db.insert_event(
+                    conn, pub_id, "fast_track_published", old_status, new_status, "action_sheet",
+                    pid=pid or None, url=url or None, note=note or None,
+                )
+                result.applied += 1
+                applied_indices.append(i)
+                continue
+
+            # ── done=1 standard flow ──────────────────────────────────
 
             # Validate transition
             try:
@@ -136,7 +195,7 @@ def apply_actions(sheet_path: Path, config: Config) -> ApplyResult:
                 continue
 
             # Standard status transition
-            extra_fields: dict[str, Any] = {}
+            extra_fields = {}
             if pid:
                 extra_fields["final_pid"] = pid
             if url:
