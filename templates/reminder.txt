@@ -4,11 +4,16 @@ Dear data contact,
 
 This is a reminder (#{reminder_number}) regarding the Open Access data deposit for publication {publication_id}.
 
-We created a SharePoint folder for you to upload the associated research data. Our records show that the folder has been active since {became_active_at}, but the archiving process has not yet been completed.
+The project office created a SharePoint folder for you to upload the associated research data. Our records suggest that the archiving process has not yet been completed.
 
-Current status: {current_status}
+Could you please check the status of your upload and let me know if you need any assistance?
 
-Could you please check the status of your upload and let us know if you need any assistance?
+Links:
+
+SharePoint for your data - https://biomagune.sharepoint.com/sites/PublicationsData/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FPublicationsData%2FShared%20Documents%2F{publication_id}
+
+Protocol for Open Access Data - https://biomagune.sharepoint.com/:w:/s/ResearchDataManagement/IQBZr-ga4BCNQpXNesqWrKkIAbQ64o7l1RYH3iBm0fEgd-0?e=5IhaD6
+
 
 Best regards,
 Ryan Tasseff
