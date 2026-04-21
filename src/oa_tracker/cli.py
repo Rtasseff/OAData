@@ -113,6 +113,60 @@ def emails(
 
 
 @app.command()
+def action(
+    pub_id: str = typer.Argument(..., help="Publication ID to act on"),
+    task_code: str = typer.Argument(..., help="Task code (e.g. qa_pass, qa_hold, close_exception, zenodo_published)"),
+    done: int = typer.Option(1, "--done", help="1 = apply the task; 2 = full closure"),
+    pid: str = typer.Option("", "--pid", help="Dataset PID / DOI"),
+    url: str = typer.Option("", "--url", help="Dataset URL"),
+    note: str = typer.Option("", "--note", help="Free-text note, recorded in the audit log"),
+    config: Optional[str] = ConfigOption,
+    db: Optional[str] = DbOption,
+):
+    """Apply a single action to one archive without going through the action sheet.
+
+    Use this for mid-week one-offs — a PI calls, you decide to move one
+    archive forward or close it out. The semantics match what a single
+    row on the action sheet would do (validate_transition, fast-track
+    when a PID is supplied, done=2 full closure, qa_hold / remind_sent
+    / contact_pi_manual special handling).
+    """
+    from oa_tracker import status as st
+    from oa_tracker.actions import apply_single
+
+    if done not in (1, 2):
+        typer.echo(f"--done must be 1 or 2 (got {done})")
+        raise typer.Exit(2)
+    if task_code not in st.TASK_CODES:
+        typer.echo(
+            f"Unknown task_code {task_code!r}. Valid codes: "
+            f"{', '.join(sorted(st.TASK_CODES))}"
+        )
+        raise typer.Exit(2)
+
+    cfg = _get_config(config, db)
+    result, old_status, new_status = apply_single(
+        cfg, pub_id, task_code, done=done, pid=pid, url=url, note=note,
+    )
+
+    for w in result.warnings:
+        typer.echo(f"Warning: {w}")
+    for e in result.errors:
+        typer.echo(f"Error: {e}")
+
+    if result.errors:
+        raise typer.Exit(1)
+    if not result.applied:
+        typer.echo("Nothing applied.")
+        raise typer.Exit(1)
+
+    if old_status != new_status:
+        typer.echo(f"Applied {task_code} on {pub_id}: {old_status} → {new_status}")
+    else:
+        typer.echo(f"Applied {task_code} on {pub_id} (status unchanged: {old_status})")
+
+
+@app.command()
 def reopen(
     pub_id: str = typer.Argument(..., help="Publication ID to reopen"),
     reason: str = typer.Option(..., "--reason", help="Why the archive is being reopened (recorded in audit log)"),

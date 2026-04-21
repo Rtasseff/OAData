@@ -117,7 +117,7 @@ OPEN_INACTIVE  →  OPEN_ACTIVE  →  OPEN_READY_FOR_ZENODO_DRAFT
 | `CLOSED_PUBLICATION_ONLY` | Closed because the publication has no data to deposit (policy decision) |
 | `CLOSED_EXCEPTION` | Closed as an exception (note strongly encouraged — e.g. non-compliance, skipped by directive, archived externally) |
 
-Any OPEN status can be closed directly as `CLOSED_PUBLICATION_ONLY` or `CLOSED_EXCEPTION` via the special actions in §7. A CLOSED archive can be reopened via the `oa reopen` command (see §8.5).
+Any OPEN status can be closed directly as `CLOSED_PUBLICATION_ONLY` or `CLOSED_EXCEPTION` via the special actions in §7. A CLOSED archive can be reopened via the `oa reopen` command (see §8.6).
 
 ## 7. Action Sheet Task Code Reference
 
@@ -254,7 +254,40 @@ Steps 1–4 are regeneration; steps 5–7 are the real weekly work.
 
 When an archive has reached `reminder_count = max_reminders - 1`, the next `oa sheet` run replaces its `remind_sent` row with a `contact_pi_manual` row and `oa emails` **does not** generate a draft for it. At this point the operator must contact the PI directly (personal email, phone, in-person) rather than send another template. Once contact has been made, apply one of the outcomes described in §7 under "Final reminder: manual PI contact."
 
-### 8.5 Reopening a closed archive
+### 8.5 Mid-week single-archive changes (`oa action`)
+
+Most operator work flows through the weekly action sheet, but occasionally a single archive needs attention outside that cadence — a PI emails in response to a reminder and says "what's there is as good as it'll get, accept it," or a specific archive needs to be closed as an exception immediately without waiting for the next sheet regeneration. Use:
+
+```bash
+oa action <pub_id> <task_code> [--done 1|2] [--pid ...] [--url ...] [--note "..."]
+```
+
+The semantics match a single row on the action sheet:
+
+* Runs through the same validation, fast-track, and full-closure logic as `oa apply`.
+* Defaults to `--done 1` (apply the named task). Use `--done 2` for the full-closure shortcut.
+* Supplying `--pid` or `--url` triggers the fast-track to `OPEN_ZENODO_PUBLISHED` (except for `remind_sent` and `qa_hold`), exactly as on the sheet.
+* Logs an event to the audit table with `source="cli"` so the origin is clear.
+
+Examples:
+
+```bash
+# PI confirmed mid-week that what's uploaded is final; accept it.
+oa action 3249 qa_pass --note "PI confirmed; accepting as-is"
+
+# Close an archive as an exception by directive.
+oa action 3105 close_exception --note "Skipped per leadership directive"
+
+# PI delivered data externally; record the PID and fast-track.
+oa action 3097 qa_pass --pid 10.5281/zenodo.42 --url https://zenodo.org/records/42
+
+# Already fully done including folder removal.
+oa action 3086 qa_pass --done 2 --pid 10.5281/zenodo.99
+```
+
+`oa action` does **not** modify `action_sheet.tsv` (it's a side-channel). If the archive has a pending row on the sheet, that row will simply be skipped on the next `oa apply` because the transition no longer applies, or it will be regenerated correctly on the next `oa sheet`.
+
+### 8.6 Reopening a closed archive
 
 Rarely, a `CLOSED_*` archive needs to come back to life — e.g. the PI finally delivered data after a `CLOSED_EXCEPTION`. This is handled by a dedicated CLI command, **not** via the action sheet:
 

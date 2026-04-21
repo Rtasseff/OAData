@@ -76,6 +76,7 @@ All paths are resolved relative to the project root unless absolute.
 | `oa report` | Generate `weekly_report.md` |
 | `oa emails` | Generate email drafts (reminders + completion notices) |
 | `oa status [PUB_ID]` | Show status of one or all archives |
+| `oa action <PUB_ID> <TASK> [...]` | Apply a single task to one archive without editing the sheet |
 | `oa reopen <PUB_ID> --reason "..."` | Reopen a CLOSED archive back to an OPEN status |
 
 All commands accept `--config` / `-c` and `--db` overrides.
