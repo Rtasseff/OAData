@@ -360,6 +360,111 @@ def test_done2_without_pid_closes_exception(test_config):
         assert archive["status"] == CLOSED_EXCEPTION
 
 
+def test_contact_pi_manual_no_pid_closes_exception_default_note(test_config):
+    """contact_pi_manual + done=1 with no PID and no note → CLOSED_EXCEPTION with default note."""
+    _insert_active_archive(test_config.database, "PUB001", "OPEN_INACTIVE")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": "OPEN_INACTIVE",
+        "task_code": "contact_pi_manual",
+        "task_text": "MAX reminder reached; manually contact PI",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "2026-01-19T00:00:00",
+        "reminder_count": "3",
+        "done": "1",
+        "pid": "",
+        "url": "",
+        "note": "",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+    assert result.errors == []
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == CLOSED_EXCEPTION
+        assert "non-compliant" in (archive["notes"] or "")
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+        evt = next(e for e in events if e["action_code"] == "contact_pi_manual")
+        assert evt["new_status"] == CLOSED_EXCEPTION
+        assert "non-compliant" in (evt["note"] or "")
+
+
+def test_contact_pi_manual_no_pid_uses_operator_note(test_config):
+    """If operator provides a note, it is used instead of the default."""
+    _insert_active_archive(test_config.database, "PUB001", "OPEN_INACTIVE")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": "OPEN_INACTIVE",
+        "task_code": "contact_pi_manual",
+        "task_text": "MAX reminder reached; manually contact PI",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "2026-01-19T00:00:00",
+        "reminder_count": "3",
+        "done": "1",
+        "pid": "",
+        "url": "",
+        "note": "PI on sabbatical, will revisit in Q3.",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == CLOSED_EXCEPTION
+        assert "sabbatical" in (archive["notes"] or "")
+        assert "non-compliant" not in (archive["notes"] or "")
+
+
+def test_contact_pi_manual_with_pid_fast_tracks(test_config):
+    """contact_pi_manual + done=1 with PID should hit the fast-track path (OPEN_ZENODO_PUBLISHED)."""
+    _insert_active_archive(test_config.database, "PUB001", "OPEN_INACTIVE")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": "OPEN_INACTIVE",
+        "task_code": "contact_pi_manual",
+        "task_text": "MAX reminder reached; manually contact PI",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "2026-01-19T00:00:00",
+        "reminder_count": "3",
+        "done": "1",
+        "pid": "10.5281/zenodo.42",
+        "url": "",
+        "note": "Data finally arrived.",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == OPEN_ZENODO_PUBLISHED
+        assert archive["final_pid"] == "10.5281/zenodo.42"
+
+
+def test_contact_pi_manual_done2_full_closure(test_config):
+    """contact_pi_manual + done=2 with PID → CLOSED_DATA_ARCHIVED via full-closure shortcut."""
+    _insert_active_archive(test_config.database, "PUB001", "OPEN_INACTIVE")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": "OPEN_INACTIVE",
+        "task_code": "contact_pi_manual",
+        "task_text": "MAX reminder reached; manually contact PI",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "2026-01-19T00:00:00",
+        "reminder_count": "3",
+        "done": "2",
+        "pid": "10.5281/zenodo.77",
+        "url": "",
+        "note": "",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == CLOSED_DATA_ARCHIVED
+
+
 def test_done2_uses_existing_pid_from_db(test_config):
     """done=2 with no PID in the row but a PID already in the DB should close normally."""
     _insert_active_archive(test_config.database, "PUB001", "OPEN_ZENODO_PUBLISHED")

@@ -113,6 +113,77 @@ def emails(
 
 
 @app.command()
+def reopen(
+    pub_id: str = typer.Argument(..., help="Publication ID to reopen"),
+    reason: str = typer.Option(..., "--reason", help="Why the archive is being reopened (recorded in audit log)"),
+    to: Optional[str] = typer.Option(None, "--to", help="Target OPEN status (default: auto-detect from folder state)"),
+    config: Optional[str] = ConfigOption,
+    db: Optional[str] = DbOption,
+):
+    """Reopen a CLOSED archive back to an OPEN status.
+
+    Use this when a previously-closed archive needs to be worked again —
+    e.g. the PI finally responded with data after a CLOSED_EXCEPTION.
+    The reason is recorded in the audit log; reminder counters are reset.
+    """
+    from datetime import datetime, timedelta
+    from oa_tracker import status as st
+    from oa_tracker.db import (
+        get_archive,
+        get_connection,
+        insert_event,
+        upsert_archive,
+    )
+
+    cfg = _get_config(config, db)
+
+    with get_connection(cfg.database) as conn:
+        archive = get_archive(conn, pub_id)
+        if archive is None:
+            typer.echo(f"No archive found for {pub_id!r}")
+            raise typer.Exit(1)
+
+        old_status = archive["status"]
+        if old_status not in st.CLOSED_STATUSES:
+            typer.echo(f"Archive {pub_id} is {old_status}, not CLOSED — nothing to reopen.")
+            raise typer.Exit(1)
+
+        if to is not None:
+            if to not in st.OPEN_STATUSES:
+                typer.echo(f"--to {to!r} is not an OPEN status. Valid: {sorted(st.OPEN_STATUSES)}")
+                raise typer.Exit(2)
+            new_status = to
+        else:
+            folder = Path(archive["folder_path"])
+            has_files = folder.is_dir() and any(p.is_file() for p in folder.rglob("*"))
+            new_status = st.OPEN_ACTIVE if has_files else st.OPEN_INACTIVE
+
+        now = datetime.now().isoformat(timespec="seconds")
+        updates: dict = {
+            "publication_id": pub_id,
+            "status": new_status,
+            "reminder_count": 0,
+            "last_notified_at": None,
+            "next_reminder_at": None,
+        }
+        if new_status == st.OPEN_ACTIVE:
+            updates["became_active_at"] = now
+            updates["last_changed_at"] = now
+            updates["next_reminder_at"] = (
+                datetime.now() + timedelta(days=cfg.reminders.first_reminder_days)
+            ).isoformat(timespec="seconds")
+
+        upsert_archive(conn, **updates)
+        insert_event(
+            conn, pub_id, "reopened", old_status, new_status, "cli",
+            note=reason,
+        )
+
+    typer.echo(f"Reopened {pub_id}: {old_status} → {new_status}")
+    typer.echo(f"Reason: {reason}")
+
+
+@app.command()
 def status(
     pub_id: Optional[str] = typer.Argument(None, help="Publication ID to look up"),
     config: Optional[str] = ConfigOption,

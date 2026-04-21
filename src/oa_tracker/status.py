@@ -50,6 +50,10 @@ TASK_CODES = {
         "description": "Send reminder email to data contact",
         "changes_status": False,
     },
+    "contact_pi_manual": {
+        "description": "MAX reminder reached; manually contact PI",
+        "changes_status": False,
+    },
     "qa_pass": {
         "description": "Review uploaded data and approve QA",
         "changes_status": True,
@@ -119,8 +123,11 @@ def validate_transition(current_status: str, task_code: str) -> str:
     if task_code not in TASK_CODES:
         raise ValueError(f"Unknown task code: {task_code!r}")
 
-    # remind_sent and qa_hold don't change status
-    if task_code in ("remind_sent", "qa_hold"):
+    # remind_sent, qa_hold, and contact_pi_manual don't change status
+    # via the standard transition path. (contact_pi_manual is handled
+    # specially in apply_actions when done=1 without a PID, which
+    # short-circuits into CLOSED_EXCEPTION.)
+    if task_code in ("remind_sent", "qa_hold", "contact_pi_manual"):
         return current_status
 
     # Check wildcard tasks (any OPEN → CLOSED)

@@ -89,23 +89,35 @@ Out of scope:
 
 ## 6. Status model
 
-Main/sub statuses in SQLite:
+Every archive has exactly one status at a time. Statuses begin with `OPEN_*` (work in progress) or `CLOSED_*` (terminal).
 
-OPEN:
+### OPEN statuses (linear pipeline)
 
-* `OPEN_INACTIVE`
-* `OPEN_ACTIVE`
-* `OPEN_READY_FOR_ZENODO_DRAFT`
-* `OPEN_ZENODO_DRAFT_CREATED`
-* `OPEN_ZENODO_DRAFT_VALIDATED`
-* `OPEN_ZENODO_PUBLISHED`
-* `OPEN_DB_UPDATED` (temporary)
+```
+OPEN_INACTIVE  →  OPEN_ACTIVE  →  OPEN_READY_FOR_ZENODO_DRAFT
+    →  OPEN_ZENODO_DRAFT_CREATED  →  OPEN_ZENODO_DRAFT_VALIDATED
+    →  OPEN_ZENODO_PUBLISHED  →  OPEN_DB_UPDATED  →  CLOSED_DATA_ARCHIVED
+```
 
-CLOSED:
+| Status | Meaning |
+|---|---|
+| `OPEN_INACTIVE` | Folder exists but is empty — data contact has not yet uploaded anything |
+| `OPEN_ACTIVE` | Folder contains files — ready for QA review |
+| `OPEN_READY_FOR_ZENODO_DRAFT` | QA passed — ready to create a Zenodo draft |
+| `OPEN_ZENODO_DRAFT_CREATED` | Draft deposit exists on Zenodo — ready to validate |
+| `OPEN_ZENODO_DRAFT_VALIDATED` | Draft validated — ready to publish |
+| `OPEN_ZENODO_PUBLISHED` | Published on Zenodo (PID and URL recorded) — ready to update internal DB |
+| `OPEN_DB_UPDATED` | Internal publication DB updated with DOI — ready for folder cleanup |
 
-* `CLOSED_DATA_ARCHIVED` (PID expected)
-* `CLOSED_PUBLICATION_ONLY`
-* `CLOSED_EXCEPTION` (note strongly encouraged)
+### CLOSED statuses (terminal)
+
+| Status | Meaning |
+|---|---|
+| `CLOSED_DATA_ARCHIVED` | Normal successful closure — PID is on record |
+| `CLOSED_PUBLICATION_ONLY` | Closed because the publication has no data to deposit (policy decision) |
+| `CLOSED_EXCEPTION` | Closed as an exception (note strongly encouraged — e.g. non-compliance, skipped by directive, archived externally) |
+
+Any OPEN status can be closed directly as `CLOSED_PUBLICATION_ONLY` or `CLOSED_EXCEPTION` via the special actions in §7. A CLOSED archive can be reopened via the `oa reopen` command (see §8.5).
 
 ## 7. Action Sheet Task Code Reference
 
@@ -128,8 +140,19 @@ The `task_code` column in `action_sheet.tsv` identifies the **action you are bei
 | task_code | task_text | resulting status |
 |---|---|---|
 | `remind_sent` | Send reminder email to data contact | *(no status change; updates reminder count)* |
+| `contact_pi_manual` | MAX reminder reached; manually contact PI | *(see "Final reminder" below)* |
 | `close_publication_only` | Close as publication-only (no data deposit needed) | `CLOSED_PUBLICATION_ONLY` |
 | `close_exception` | Close with exception (add note explaining why) | `CLOSED_EXCEPTION` |
+
+### Final reminder: manual PI contact
+
+The tool sends `max_reminders - 1` automated reminder emails. Once an archive has reached that count (i.e. one slot remains), the next sheet generation replaces the usual `remind_sent` row with a **`contact_pi_manual`** row and **no automated email draft is produced**. This is deliberate: at this stage the operator should step in personally — direct email from their own account, a phone call, or an in-person conversation with the PI — rather than send yet another template reminder.
+
+Three outcomes are possible once the manual contact has been made:
+
+- **PI responds with data + PID:** Set `done=2` on the row, paste the Zenodo DOI into `pid` (and URL if available). Closes as `CLOSED_DATA_ARCHIVED`. Same behavior as the generic full-closure shortcut.
+- **PI responds but there will be no deposit:** Set `done=1` with no PID or URL. The archive closes as `CLOSED_EXCEPTION`. If `note` is filled in, your note is recorded; if left blank, the system records the default note *"No response after max reminders and manual PI contact; closed as non-compliant with OA policy."*
+- **No response yet:** Leave `done=0`. The row stays and regenerates on the next sheet run until you act.
 
 ### How to edit the action sheet
 
@@ -189,40 +212,64 @@ Use `done=2` when you want to close out an archive in a single action without st
 
 ## 8. Procedure
 
+All operations are driven by the `oa` CLI. Run `oa --help` for the full command list. Every command accepts `--config PATH` and `--db PATH` overrides.
+
 ### 8.1 Regular scanning (daily or as-needed)
 
-1. Run `scan_folders`.
-2. Script updates SQLite:
+```bash
+oa scan
+```
 
-   * New folder → `OPEN_INACTIVE`
-   * Empty→non-empty transition → `OPEN_ACTIVE` and sets `became_active_at`
-   * Folder missing while status OPEN → flags integrity warning
+Updates SQLite based on the current SharePoint folder tree:
+
+* New folder → `OPEN_INACTIVE`
+* Empty → non-empty transition → `OPEN_ACTIVE` and sets `became_active_at`
+* Folder missing while status is still `OPEN_*` → flags integrity warning (see §9)
+
+The scanner is read-only against the folder tree — it observes, never modifies.
 
 ### 8.2 Weekly operations (recommended cadence)
 
-1. Run `make_weekly_report`:
-
-   * New items, stuck items, reminders due, ready queue, integrity warnings.
-2. Run `generate_action_sheet`:
-
-   * Produces `action_sheet.tsv` containing tasks for you to act on this week.
-3. Perform manual actions:
-
-   * QA review for OPEN_ACTIVE changes
-   * Zenodo draft creation/validation/publish
+1. **`oa scan`** — pick up folder activity since the last run.
+2. **`oa report`** — review `output/weekly_report.md`: new items, stuck items, reminders due, ready queue, integrity warnings.
+3. **`oa sheet`** — regenerate `output/action_sheet.tsv` with the current pending tasks.
+4. **`oa emails`** — generate reminder and completion email drafts into `output/email_drafts/`. Review, copy into your mail client, and send manually. (Archives at the manual-contact stage are deliberately *not* drafted here — see §8.4.)
+5. **Perform the manual work** for tasks on the sheet:
+   * QA review for `OPEN_ACTIVE` archives
+   * Zenodo draft creation, validation, publish
    * Internal publication DB updates
-   * SharePoint folder removal when complete
-4. As you complete actions, update `action_sheet.tsv` (set `done=1`, add note/PID/URL).
-5. Run `apply_actions`:
+   * SharePoint folder removal when complete (operator does this directly in SharePoint)
+6. **Edit `action_sheet.tsv`** to record what you did — see §7 for the rules (set `done` to `1` or `2`, fill in `pid`/`url`/`note` where relevant, change `task_code` for branching decisions).
+7. **`oa apply output/action_sheet.tsv`** — writes your changes to SQLite, appends audit events, and moves applied rows to `output/action_history.tsv`.
 
-   * Updates SQLite statuses + timestamps
-   * Appends to audit log
-   * Regenerates any newly-available email drafts (e.g., completion email once DOI is entered)
+Steps 1–4 are regeneration; steps 5–7 are the real weekly work.
 
 ### 8.3 Email handling
 
-* Reminder and completion emails are generated as drafts.
-* Sending remains manual (copy/paste), but `apply_actions` records `remind_sent` or `completion_sent` when you mark them.
+* `oa emails` produces reminder drafts (from `templates/reminder.txt`) for every archive whose `next_reminder_at` is due **and** whose `reminder_count` is still below the manual-contact threshold — and completion drafts (from `templates/completion.txt`) for every archive at `OPEN_ZENODO_PUBLISHED`.
+* Sending remains manual — `oa` never touches email directly.
+* After sending, record each sent email on the next action sheet by setting `done=1` on its `remind_sent` row.
+
+### 8.4 Final reminder: manual PI contact
+
+When an archive has reached `reminder_count = max_reminders - 1`, the next `oa sheet` run replaces its `remind_sent` row with a `contact_pi_manual` row and `oa emails` **does not** generate a draft for it. At this point the operator must contact the PI directly (personal email, phone, in-person) rather than send another template. Once contact has been made, apply one of the outcomes described in §7 under "Final reminder: manual PI contact."
+
+### 8.5 Reopening a closed archive
+
+Rarely, a `CLOSED_*` archive needs to come back to life — e.g. the PI finally delivered data after a `CLOSED_EXCEPTION`. This is handled by a dedicated CLI command, **not** via the action sheet:
+
+```bash
+oa reopen <pub_id> --reason "<why>" [--to OPEN_ACTIVE|OPEN_INACTIVE]
+```
+
+The command:
+
+* Transitions the archive back to an OPEN status. By default it auto-detects: `OPEN_ACTIVE` if the SharePoint folder currently contains files, `OPEN_INACTIVE` otherwise. Pass `--to` to override.
+* Resets `reminder_count` to 0 and clears `last_notified_at` / `next_reminder_at`. For `OPEN_ACTIVE`, a fresh `next_reminder_at` is scheduled using `first_reminder_days`.
+* Records a `reopened` event in the audit log with `--reason` as the note.
+* Leaves any recorded `final_pid` / `final_url` intact — they remain part of the archive's history.
+
+Reopens are rare and consequential, so they're deliberately kept off the action sheet and require an explicit `--reason`.
 
 ## 9. Integrity controls
 

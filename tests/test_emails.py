@@ -31,6 +31,26 @@ def test_reminder_email_generated(test_config):
     assert "OPEN_ACTIVE" in content
 
 
+def test_no_reminder_email_at_manual_contact_stage(test_config):
+    """At reminder_count >= max_reminders - 1, no automated reminder draft is generated."""
+    max_rem = test_config.reminders.max_reminders
+    with get_connection(test_config.database) as conn:
+        upsert_archive(
+            conn,
+            publication_id="PUB001",
+            folder_path="/tmp/pub001",
+            first_seen_at="2026-01-01T00:00:00",
+            last_seen_at="2026-01-15T00:00:00",
+            became_active_at="2026-01-05T00:00:00",
+            status=OPEN_ACTIVE,
+            next_reminder_at="2020-01-01T00:00:00",  # due
+            reminder_count=max_rem - 1,
+        )
+
+    paths = generate_emails(test_config)
+    assert paths == []
+
+
 def test_completion_email_generated(test_config):
     with get_connection(test_config.database) as conn:
         upsert_archive(

@@ -140,6 +140,34 @@ def apply_actions(sheet_path: Path, config: Config) -> ApplyResult:
                 applied_indices.append(i)
                 continue
 
+            # ── done=1 on contact_pi_manual (no PID/URL): close as exception ──
+            # With a PID or URL present, the fast-track block above already
+            # promoted the archive to OPEN_ZENODO_PUBLISHED. Without one, the
+            # operator's manual PI contact did not yield a deposit, so we
+            # close as non-compliant. Use the operator's note when supplied;
+            # otherwise a standard note makes the closure reason explicit in
+            # the audit log.
+            if task_code == "contact_pi_manual":
+                close_note = note or (
+                    "No response after max reminders and manual PI contact; "
+                    "closed as non-compliant with OA policy."
+                )
+                extra_fields = {}
+                existing_notes = archive.get("notes") or ""
+                separator = "\n" if existing_notes else ""
+                extra_fields["notes"] = f"{existing_notes}{separator}[{now}] {close_note}"
+
+                db.update_archive_status(
+                    conn, pub_id, st.CLOSED_EXCEPTION, **extra_fields
+                )
+                db.insert_event(
+                    conn, pub_id, "contact_pi_manual", old_status,
+                    st.CLOSED_EXCEPTION, "action_sheet", note=close_note,
+                )
+                result.applied += 1
+                applied_indices.append(i)
+                continue
+
             # ── done=1 standard flow ──────────────────────────────────
 
             # Validate transition

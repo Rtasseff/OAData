@@ -45,13 +45,20 @@ def generate_sheet(config: Config) -> Path:
             next_rem = archive.get("next_reminder_at") or ""
             rem_count = str(archive.get("reminder_count") or 0)
 
-            # Add reminder task if due
+            # Add reminder task if due. At the final slot (reminder_count
+            # has already reached max - 1, so the next reminder would be the
+            # last one) the tool stops prompting for an automated email and
+            # instead asks the operator to contact the PI directly.
             if pub_id in reminders_due:
+                reached_max = (
+                    archive.get("reminder_count") or 0
+                ) >= config.reminders.max_reminders - 1
+                task = "contact_pi_manual" if reached_max else "remind_sent"
                 rows.append({
                     "publication_id": pub_id,
                     "current_status": cur_status,
-                    "task_code": "remind_sent",
-                    "task_text": st.TASK_CODES["remind_sent"]["description"],
+                    "task_code": task,
+                    "task_text": st.TASK_CODES[task]["description"],
                     "first_seen_at": first_seen,
                     "next_reminder_at": next_rem,
                     "reminder_count": rem_count,

@@ -25,9 +25,15 @@ def generate_emails(config: Config) -> list[Path]:
     completion_tpl = _load_template(config.template_dir, "completion.txt")
 
     with db.get_connection(config.database) as conn:
-        # Reminder emails for archives with reminders due
+        # Reminder emails for archives with reminders due.
+        # Skip archives that have hit the manual-contact stage — those get
+        # a sheet row prompting the operator to contact the PI directly,
+        # not another automated reminder email.
         reminders_due = db.get_reminders_due(conn)
+        max_rem = config.reminders.max_reminders
         for archive in reminders_due:
+            if (archive.get("reminder_count") or 0) >= max_rem - 1:
+                continue
             pub_id = archive["publication_id"]
             n = archive["reminder_count"] + 1
             draft_path = drafts_dir / f"reminder_{pub_id}_{n}.txt"

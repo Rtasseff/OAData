@@ -77,6 +77,36 @@ def test_generates_correct_tasks_per_status(test_config):
         assert task_codes[pub_id] == expected_task, f"{pub_id} expected {expected_task}, got {task_codes.get(pub_id)}"
 
 
+def test_final_slot_generates_contact_pi_manual(test_config):
+    """At reminder_count == max_reminders - 1, the row should be contact_pi_manual, not remind_sent."""
+    max_rem = test_config.reminders.max_reminders
+    _insert(
+        test_config.database, "PUB001", OPEN_INACTIVE,
+        next_reminder_at="2020-01-01T00:00:00",  # due
+        reminder_count=max_rem - 1,
+    )
+    path = generate_sheet(test_config)
+    rows = _read_sheet(path)
+    reminder_rows = [r for r in rows if r["publication_id"] == "PUB001"]
+    assert len(reminder_rows) == 1
+    assert reminder_rows[0]["task_code"] == "contact_pi_manual"
+    assert "manually contact PI" in reminder_rows[0]["task_text"]
+
+
+def test_below_final_slot_still_generates_remind_sent(test_config):
+    max_rem = test_config.reminders.max_reminders
+    _insert(
+        test_config.database, "PUB001", OPEN_INACTIVE,
+        next_reminder_at="2020-01-01T00:00:00",
+        reminder_count=max_rem - 2,  # one slot short of manual
+    )
+    path = generate_sheet(test_config)
+    rows = _read_sheet(path)
+    reminder_rows = [r for r in rows if r["publication_id"] == "PUB001"]
+    assert len(reminder_rows) == 1
+    assert reminder_rows[0]["task_code"] == "remind_sent"
+
+
 def test_generates_reminder_task_when_due(test_config):
     _insert(
         test_config.database, "PUB001", OPEN_ACTIVE,

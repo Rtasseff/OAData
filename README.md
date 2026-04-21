@@ -76,20 +76,21 @@ All paths are resolved relative to the project root unless absolute.
 | `oa report` | Generate `weekly_report.md` |
 | `oa emails` | Generate email drafts (reminders + completion notices) |
 | `oa status [PUB_ID]` | Show status of one or all archives |
+| `oa reopen <PUB_ID> --reason "..."` | Reopen a CLOSED archive back to an OPEN status |
 
 All commands accept `--config` / `-c` and `--db` overrides.
 
-## Weekly Workflow
+## Documentation
 
-1. **`oa scan`** — pick up new folders and folder activity changes.
-2. **`oa report`** — review `output/weekly_report.md` for new items, stuck archives, reminders due, and integrity warnings.
-3. **`oa sheet`** — generate `output/action_sheet.tsv`.
-4. **Do manual work** — QA review, Zenodo draft/publish, internal DB update, folder removal.
-5. **Edit the TSV** — set `done=1` on completed rows, paste PID/URL if relevant, add optional notes.
-6. **`oa apply output/action_sheet.tsv`** — updates the database, logs events, moves applied rows to `action_history.tsv`.
-7. **`oa emails`** — generate reminder and completion email drafts in `output/email_drafts/`.
+This README is a high-level orientation. The canonical reference for how to operate the tool — status model, task codes, weekly procedure, final-reminder handling, reopening a closed archive — is [`docs/sop.md`](docs/sop.md).
 
-## Status Pipeline
+| File | What's in it | Read when |
+|------|--------------|-----------|
+| [`docs/sop.md`](docs/sop.md) | Standard operating procedure — status model, task code reference, weekly workflow, final-reminder handling, reopening closed archives. **Start here for day-to-day operation.** | You're running the tool and want the full walkthrough. |
+| [`docs/techSpec.md`](docs/techSpec.md) | Technical specification — database schema, status values, task codes, transition rules, and the reasoning behind them. | You're modifying the code, the schema, or the status pipeline. |
+| [`docs/summary.md`](docs/summary.md) | Project context and motivation — why this tool exists, who uses it, and the non-technical background. | You're new to the project or need to explain it to someone else. |
+
+At a glance, the OPEN → CLOSED pipeline is:
 
 ```
 OPEN_INACTIVE  →  OPEN_ACTIVE  →  OPEN_READY_FOR_ZENODO_DRAFT
@@ -97,9 +98,7 @@ OPEN_INACTIVE  →  OPEN_ACTIVE  →  OPEN_READY_FOR_ZENODO_DRAFT
   →  OPEN_ZENODO_PUBLISHED  →  OPEN_DB_UPDATED  →  CLOSED_DATA_ARCHIVED
 ```
 
-Special closures from any OPEN status: `CLOSED_PUBLICATION_ONLY`, `CLOSED_EXCEPTION`.
-
-See `docs/sop.md` for the full operating procedure and `docs/techSpec.md` for the technical specification.
+Wildcard closures from any OPEN status: `CLOSED_PUBLICATION_ONLY`, `CLOSED_EXCEPTION`. See [`docs/sop.md`](docs/sop.md) §6 for what each status means and §7 for how to move between them.
 
 ## Testing
 
