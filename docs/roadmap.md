@@ -33,7 +33,7 @@ publication DB or the Zenodo API.
 
 ### Stage 2 — Read internal publication database
 
-**Status:** not started; depends on IT access.
+**Status:** in progress — connectivity testing; **blocked on IT host-grant** (as of 2026-05-05).
 
 **Goal:** enrich and de-risk operations, without waiting on write access.
 Sequenced ahead of Zenodo automation because article-level metadata (PI,
@@ -43,6 +43,48 @@ and to check whether a record already exists for a publication.
 - Pull PI / data-contact details, publication DOI, metadata.
 - Use DB info to improve reminder targeting and email-template filling.
 - Cross-check expected folders vs observed folders.
+
+#### Progress log
+
+**2026-05-05 — Initial connectivity test**
+
+Confirmed:
+- IT granted read access via phpMyAdmin at
+  `https://intranet.cicbiomagune.es/phpmyadmin/` (user-issued credentials).
+- DB host/port reachable from the WSL workstation:
+  `nc -vz intranet.cicbiomagune.es 3306` succeeded
+  (resolves to `10.10.3.230`, port 3306 / native MySQL protocol).
+- Local tooling installed: `mariadb-client` (system), `pymysql 1.1.3` in
+  `.venv/`. PyMySQL chosen for its pure-Python, zero-system-deps fit with the
+  project's lightweight ethos. Neither is committed to `pyproject.toml` yet —
+  they're throwaway test deps until Stage 2 design begins.
+- `~/.my.cnf` (mode 600) created on the workstation with the IT-issued user
+  and password. Not in the repo.
+
+Blocked:
+- `mysql -e "SELECT VERSION();"` returns
+  `ERROR 1045 (28000): Access denied for user 'rtasseff'@'bmg-rtasseff.cicbiomagune.int' (using password: YES)`.
+- Credentials confirmed correct (same pair works via phpMyAdmin).
+- Diagnosis: MySQL **host-grant restriction**. The user account is granted
+  only from the phpMyAdmin host, not from the WSL workstation. Same root
+  cause as the classic "phpMyAdmin works but direct mysql doesn't" gotcha.
+
+Next action:
+- Email IT requesting a grant for the same user from the workstation host
+  (`'rtasseff'@'bmg-rtasseff.cicbiomagune.int'`) or, if hostname-based grants
+  are awkward, the internal subnet (`'rtasseff'@'10.10.%'`). Same SELECT-only
+  privilege scope as today.
+- Once the grant is in place: re-run the `mysql` smoke test, then run the
+  PyMySQL test against the same credentials. After both pass, capture
+  schema (database name, relevant tables, `DESCRIBE` of each) into a scratch
+  note and start the Stage 2 design plan (config schema, `pub_db.py` module,
+  credential handling, dep promotion to `pyproject.toml`).
+
+Fallback if IT cannot widen the grant:
+- SSH tunnel from the workstation to a whitelisted host, connect to MySQL
+  via the tunnel so the connection appears to originate from the allowed
+  source. Adds a separate access ask (SSH on the intermediate host) and
+  is less convenient for daily use; raise direct-grant first.
 
 ### Stage 3 — Zenodo automation (start with uploads)
 
