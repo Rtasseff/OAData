@@ -25,11 +25,9 @@ A lightweight automation system that:
 * End-to-end automation isn’t realistic right now: authors upload inconsistently, QA is manual, and access to the internal publication database is controlled by IT.
 * The folder system is the most reliable operational signal today; the registry prevents “lost history” once folders are removed after Zenodo publication.
 
-### Future stages (once MVP works)
+### Future stages
 
-2. Automate Zenodo via API (especially **large-file uploads**, which are slow/error-prone via UI).
-3. Read internal publication database for richer metadata and better email templates.
-4. Write back to the internal DB automatically (if IT allows).
+Subsequent stages (internal-DB read, Zenodo API automation, internal-DB write-back) are tracked in [roadmap.md](roadmap.md).
 
 ### Key policy/technical constraint
 

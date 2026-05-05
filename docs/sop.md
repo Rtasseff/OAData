@@ -1,38 +1,6 @@
-# Revised Plan (with Operator Action Sheet)
-
-## Stage 1 (now): Tracking + reminders + operator action sheet
-
-**Inputs:** Synced SharePoint folder tree only.
-
-**Outputs:**
-
-1. **Weekly report**: What’s new / stuck / reminders / ready / integrity warnings.
-2. **Operator Action Sheet** (`action_sheet.tsv`): a text list of tasks you can tick off quickly.
-3. **Email drafts**: reminder + completion messages generated from templates.
-
-**Operator flow (no direct SQLite edits):**
-
-* You do manual actions (QA review, Zenodo draft, publish, DB update).
-* You record the action by editing the sheet (set `done=1`, paste DOI/URL if relevant, add an optional note).
-* Run `apply_actions` to update SQLite.
-
-## Stage 2: Zenodo upload automation (still driven by the same action sheet)
-
-Add optional “automation hooks” per action:
-
-* When you mark `zenodo_upload_start`, script can do the upload (or prepare commands).
-* When you mark `zenodo_draft_created`, script can validate DOI policy fields, etc.
-
-## Stage 3–4: DB read/write (optional; depends on IT)
-
-Same model:
-
-* DB read enriches the sheet (auto-fills data contact, etc.).
-* DB write becomes another action (`db_updated`) that can be automated later.
-
----
-
 # SOP: Open Access Archive Tracker (Ryan-side)
+
+> Staged automation plan: see [roadmap.md](roadmap.md).
 
 ## 1. Purpose
 
