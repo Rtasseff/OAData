@@ -135,6 +135,33 @@ Suggested Spanish text:
 Asking for `@'10.10.%'` (internal subnet) rather than `@'%'` (anywhere) is
 more likely to be approved on security grounds.
 
+**2026-05-05 — Reproduction in PHP/mysqli (IT's own toolchain)**
+
+IT's response framed PHP + 3 params as the canonical way to connect, so a
+diagnostic in *that* toolchain carries weight that a native-client failure
+might not. Installed `php-cli` + `php-mysql` on the workstation and ran:
+
+```php
+$db = new mysqli("intranet.cicbiomagune.es", "rtassef", $pass, "publications");
+```
+
+(Password supplied via env var, both `rtassef` and `rtasseff` username
+spellings tested.)
+
+Result — identical to the native `mysql` client failure:
+
+```
+mysqli_sql_exception: Access denied for user 'rtassef'@'bmg-rtasseff.cicbiomagune.int'
+                       (using password: YES)
+```
+
+This is significant because it eliminates "you're using a tool we don't
+support" as a possible IT response: PHP + `mysqli` is the same driver
+phpMyAdmin sits on top of, called with the exact 3 params IT recommended.
+The failure is reproducible in IT's preferred environment, with the source
+host identified explicitly in the error message — strong evidence for the
+host-grant diagnosis when re-engaging IT.
+
 Stage 2 work pauses here until the grant is updated. When it is, the
 remaining checklist is:
 
