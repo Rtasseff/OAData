@@ -207,20 +207,74 @@ relying on it. Until then, treat the current password as compromised
 relative to chat-transcript history (it is not in the repo or in any
 committed file).
 
-Remaining checklist (continues from above):
+**2026-05-05 — PyMySQL connectivity + initial schema discovery**
+
+PyMySQL connects against the live grant using
+`pymysql.connect(read_default_file=os.path.expanduser("~/.my.cnf"), user="rtasseff")`.
+Reading the option file means the password never lands in repo files or
+in shell history; `user=` is overridden explicitly because IT's email
+typoed the username.
+
+Initial schema landscape:
+
+- 550 tables in `publications` (IT was right — *muchas tablas*).
+- ~50 match publication / user / contact keywords.
+- Core tables identified for Stage 2 (full schemas in scratch file):
+  - `publication` (2418 rows) — main publication record. Includes
+    `id`, `accession_number`, `publi_datacode`, `doi`, `title`,
+    `author`, `id_journal`, `journal`, `year`, `oa_id_project`,
+    `goldOAfee`, `publi_datacode`, audit columns.
+  - `publicationRequest` (10 rows), `publicationRequestProject`,
+    `publicationRequestCostCenter` — looks like a request workflow,
+    very few rows; may be peripheral.
+  - `publication_task` (897 rows), `publication_task_status` (3),
+    `publication_task_type` (4) — *another workflow tracker inside
+    the publication DB itself*. Worth investigating: does this
+    overlap with our own OA workflow, or is it for a different purpose?
+  - `journal` (604), `journal2` (272), `scopus_journal_def` (31137) —
+    journal metadata incl. `open_access`, `embargo`, `repository`,
+    `embargoTime`. Useful for OA compliance checks.
+  - `mdm_personal` (1477 rows) — personnel master data: `id`, `name`,
+    `empleado`, `start_date`, `end_date`, `id_department`, etc. Likely
+    the canonical researcher/PI directory. `users` (only 2 rows) is
+    *not* it — that's an app-admin table.
+  - `copi_projects` (374), `project_pi` (0 rows — empty), `org_contact`
+    (1130) — relationship/contact tables.
+- Sensitive-data note: schema (column names + types) is captured to
+  `~/oa-stage2-notes.md` (outside the repo). No row data has been
+  pulled into chat or the scratch file beyond `COUNT(*)`. Sample-row
+  pulls are deferred until we agree on what's safe to surface (titles
+  and DOIs are public; some columns like `users.password` clearly are
+  not).
+
+Open questions before Stage 2 design begins:
+
+1. **Join key**: which column in `publication` matches the SharePoint
+   folder name (= our SQLite `publication_id`)? Candidates: `id`,
+   `accession_number`, `publi_datacode`. Need user to confirm — once
+   confirmed, all the lookups have a stable starting point.
+2. **PI / data-contact path**: there's no direct PI column in
+   `publication`. Likely route is `publication.oa_id_project` →
+   project tables → `mdm_personal`. Needs verification with one
+   sample lookup once we know the join key.
+3. **`publication_task*` overlap**: is this someone else's workflow
+   tracker (legacy or other team) or something we should reconcile
+   with our own task model? Worth answering before any design work.
+
+Remaining checklist:
 
 - [x] Confirm `mysql` CLI works after grant.
-- [ ] Run the PyMySQL throwaway script — confirms the project's chosen
-      driver works against the live grant.
-- [ ] Capture the full table list (`SHOW TABLES` output) and the
-      `DESCRIBE` output of the tables relevant to publications, PIs, and
-      data contacts. **Save outside the repo** (e.g., `~/oa-stage2-notes.md`)
-      until we know whether table or column names are sensitive to share.
-- [ ] Rotate the DB password with IT.
-- [ ] Open the Stage 2 design plan: config schema, credential handling
-      strategy, `src/oa_tracker/pub_db.py` module, dep promotion of
-      PyMySQL into `pyproject.toml`, test fixtures that mock the
-      connection (CI cannot reach this DB).
+- [x] Run the PyMySQL throwaway script — confirmed.
+- [x] Capture full table list and candidate-table schemas to scratch
+      file outside the repo (`~/oa-stage2-notes.md`).
+- [ ] Confirm join key (publication ID → folder name) with user.
+- [ ] Trace the PI/data-contact path with one sample lookup.
+- [ ] Decide whether to reconcile or ignore `publication_task*`.
+- [ ] Rotate the DB password with IT (transcript exposure).
+- [ ] Open the Stage 2 design plan: config schema, credential
+      handling, `src/oa_tracker/pub_db.py`, dep promotion of PyMySQL
+      into `pyproject.toml`, mocked-connection test fixtures (CI
+      cannot reach this DB).
 
 ### Stage 3 — Zenodo automation (start with uploads)
 
