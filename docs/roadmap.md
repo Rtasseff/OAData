@@ -247,19 +247,85 @@ Initial schema landscape:
   and DOIs are public; some columns like `users.password` clearly are
   not).
 
-Open questions before Stage 2 design begins:
+Open questions before Stage 2 design begins (answered/refined below):
 
-1. **Join key**: which column in `publication` matches the SharePoint
-   folder name (= our SQLite `publication_id`)? Candidates: `id`,
-   `accession_number`, `publi_datacode`. Need user to confirm — once
-   confirmed, all the lookups have a stable starting point.
-2. **PI / data-contact path**: there's no direct PI column in
-   `publication`. Likely route is `publication.oa_id_project` →
-   project tables → `mdm_personal`. Needs verification with one
-   sample lookup once we know the join key.
-3. **`publication_task*` overlap**: is this someone else's workflow
-   tracker (legacy or other team) or something we should reconcile
-   with our own task model? Worth answering before any design work.
+1. ~~**Join key**~~ — confirmed: `publication.id` matches the SharePoint
+   folder name (verified with publication 3097).
+2. **PI / data-contact path** — refined: `project_publis` (4136 rows)
+   is the real M:N publication↔project link, not `oa_id_project` (NULL
+   for ~52% of rows). PI on the project is `project.id_pi` (probably
+   `mdm_personal.id`).
+3. **Parallel task systems**: there are *two* publication task tables
+   (`publi_task` 635 rows, `publication_task` 897 rows) and a central
+   `publi_email` log (232 rows) and a central `repo_publis` (1988 rows
+   with repository deposit + open-access + embargo info). The
+   project-office system has substantial functional overlap with our
+   tracker but isn't 1:1. Decision deferred until design phase: do we
+   read these tables as ground-truth signals, ignore them, or
+   eventually consolidate?
+
+**2026-05-05 — IT lifecycle explanation + verified join path + data-quality reality check**
+
+IT provided a written explanation of the project lifecycle (full Spanish
+original captured in `~/oa-stage2-notes.md`). Key conceptual model:
+
+> `funding_agency` → `cff_funding` (call for funding) → `cff_oaMandate`
+> (the OA requirement attached to the call) → projects request funding;
+> the project inherits the call's OA mandate; publications are linked to
+> projects, and so the OA requirement for a publication is *derived* from
+> its project's funding source.
+
+The 5 OA mandates are (confirmed from `cff_oaMandate`):
+
+| id | type | implication for our work |
+|---|---|---|
+| 1 | `Yes OA: 0 months, DATA` | data archiving required at publication |
+| 2 | `Yes OA: 6 months, DATA` | data archiving required, ≤6mo embargo |
+| 3 | `Yes OA: 6 months` | only the article, ≤6mo embargo — *no data deposit required* |
+| 4 | `No OA` | nothing required — *should this even be in our tracker?* |
+| 5 | `Yes OA: 0 months, DATA, OA Journal Cost` | strictest: + only OA journals |
+
+That's a substantial design input — Stage 2 can derive **per-publication
+whether data archiving is even required, and the maximum embargo
+period**, instead of treating every publication as needing data deposit.
+
+Verified join path (using publication 3097 as a real test case):
+
+```
+publication.id → project_publis.id_publi → project_publis.id_project →
+  project.id → project.id_funding → cff_funding.id →
+    cff_funding.id_oa_mandate → cff_oaMandate.type
+```
+
+**Real-world data quality is messy** — Stage 2 must handle gracefully:
+
+- Some `cff_funding` rows have `id_oa_mandate = NULL` (publication 3097's
+  Merck call has no mandate set).
+- Some `project.id_funding` values point to non-existent `cff_funding`
+  rows (orphaned FK; pub 3097's project 1424 has `id_funding=98` which
+  doesn't exist).
+- Free-text `project.funding_agency` can disagree with the joined
+  `cff_funding.funding_agency` (pub 3097's project 351 says "AXA
+  Foundation" but joined cff_funding 103 says "Merck"). Trust the FK,
+  not the free text.
+- One publication can map to multiple projects (pub 3097 has 2). Each
+  project may have a different mandate, or a missing mandate. Need a
+  policy: probably "use the strictest mandate found across all linked
+  projects; fall back to OPEN_INACTIVE behavior if none can be derived".
+
+Tables IT named that don't exist with those names: `call_type`,
+`proposal`, `reports`. May be in another DB or have different names.
+Need to confirm with IT before relying on any of them.
+
+Other parallel-tracker tables found (functional overlap with our SQLite
+tracker — to be evaluated in Stage 2 design, not now):
+
+- `publi_email` (232 rows) — central email log with `sentDate, sentBy`.
+- `repo_publis` (1988 rows) — central repository-deposit tracking with
+  `repository_code, open_access, embargo_time`.
+- `publication_task` (897 rows) and `publi_task` (635 rows) — *two*
+  central task systems for the same domain.
+- `publi_corr_auth` / `publi_first_auth` — authoritative author links.
 
 Remaining checklist:
 
@@ -267,14 +333,28 @@ Remaining checklist:
 - [x] Run the PyMySQL throwaway script — confirmed.
 - [x] Capture full table list and candidate-table schemas to scratch
       file outside the repo (`~/oa-stage2-notes.md`).
-- [ ] Confirm join key (publication ID → folder name) with user.
-- [ ] Trace the PI/data-contact path with one sample lookup.
-- [ ] Decide whether to reconcile or ignore `publication_task*`.
-- [ ] Rotate the DB password with IT (transcript exposure).
-- [ ] Open the Stage 2 design plan: config schema, credential
-      handling, `src/oa_tracker/pub_db.py`, dep promotion of PyMySQL
-      into `pyproject.toml`, mocked-connection test fixtures (CI
-      cannot reach this DB).
+- [x] Confirm join key — `publication.id`.
+- [x] Trace the PI/data-contact path with one sample lookup —
+      `project_publis` is the M:N link; `project.id_pi` and
+      `project.id_user` reach personnel via (presumably) `mdm_personal`.
+- [x] Capture IT's lifecycle explanation and the 5 OA mandate values.
+- [ ] Verify `mdm_personal.id` is what `project.id_pi` references (one
+      sample lookup) — needed before we read names/emails from the DB.
+- [ ] Confirm with IT what `proposal`/`reports`/`call_type` are (or
+      ignore them as Stage-2-out-of-scope).
+- [ ] Rotate the DB password with IT (transcript exposure earlier).
+- [ ] **Open the Stage 2 design plan** with these inputs:
+  - config schema for credentials (read from `~/.my.cnf` style file
+    outside the repo, *not* in `config.toml`);
+  - `src/oa_tracker/pub_db.py` with helpers like
+    `lookup_publication(pub_id)`, `derive_oa_mandate(pub_id)` that
+    handle NULL mandates and orphaned FKs;
+  - dep promotion of PyMySQL into `pyproject.toml`;
+  - mocked-connection test fixtures (CI cannot reach this DB);
+  - explicit policy for: multi-project publications, missing mandates,
+    `No OA` mandate publications, and how to surface the
+    central-tracker overlap (`publi_email`, `repo_publis`, both task
+    tables) without duplicating their work.
 
 ### Stage 3 — Zenodo automation (start with uploads)
 
