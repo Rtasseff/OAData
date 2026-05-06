@@ -33,7 +33,7 @@ publication DB or the Zenodo API.
 
 ### Stage 2 — Read internal publication database
 
-**Status:** in progress — connectivity testing; **blocked on IT host-grant** (as of 2026-05-05).
+**Status:** unblocked 2026-05-05 — host-grant added; ready for schema discovery and design.
 
 **Goal:** enrich and de-risk operations, without waiting on write access.
 Sequenced ahead of Zenodo automation because article-level metadata (PI,
@@ -171,6 +171,56 @@ remaining checklist is:
    `DESCRIBE` of each) into a scratch note.
 4. Open the Stage 2 design plan: config schema for credentials, a
    `pub_db.py` module, dep promotion of PyMySQL into `pyproject.toml`.
+
+**2026-05-05 — Unblocked: IT confirmed and added the host grant**
+
+IT reproduced the failure on their side, confirmed the host-grant theory,
+and added a grant for the user from `bmg-rtasseff.cicbiomagune.int`. The
+PHP-toolchain reproduction was decisive — once IT could see the same
+failure with `mysqli`, they took the diagnosis seriously.
+
+Confirmed working:
+
+```
+mysql -h intranet.cicbiomagune.es -u rtasseff -p publications -e "SELECT VERSION(); SHOW TABLES;"
+```
+
+Returns rows. Server version: `5.5.68-MariaDB`. Database name confirmed:
+`publications`. Many tables visible (`OldNews_*`, `RIAP_*`, …) — full list
+to be captured in the schema-discovery step.
+
+Username clarification: the real account is `rtasseff` (matching the Linux
+account name). IT's original email had a typo (`rtassef`, one `f`); their
+host-grant fix was applied to the correct `rtasseff` account.
+
+Server version note for design: MariaDB 5.5 is end-of-life; auth plugin is
+`mysql_native_password` (the only option in 5.5, so no negotiation
+concerns); default charset is utf8 (3-byte), not utf8mb4. PyMySQL handles
+all of this without special configuration. SQL feature limits (no CTEs,
+no window functions, no JSON functions) don't affect the simple SELECTs
+Stage 2 will need.
+
+**Action item — rotate the DB password.** During the troubleshooting
+sequence the password was pasted into the assistant transcript once.
+Coordinate with IT to issue a new one before the project module starts
+relying on it. Until then, treat the current password as compromised
+relative to chat-transcript history (it is not in the repo or in any
+committed file).
+
+Remaining checklist (continues from above):
+
+- [x] Confirm `mysql` CLI works after grant.
+- [ ] Run the PyMySQL throwaway script — confirms the project's chosen
+      driver works against the live grant.
+- [ ] Capture the full table list (`SHOW TABLES` output) and the
+      `DESCRIBE` output of the tables relevant to publications, PIs, and
+      data contacts. **Save outside the repo** (e.g., `~/oa-stage2-notes.md`)
+      until we know whether table or column names are sensitive to share.
+- [ ] Rotate the DB password with IT.
+- [ ] Open the Stage 2 design plan: config schema, credential handling
+      strategy, `src/oa_tracker/pub_db.py` module, dep promotion of
+      PyMySQL into `pyproject.toml`, test fixtures that mock the
+      connection (CI cannot reach this DB).
 
 ### Stage 3 — Zenodo automation (start with uploads)
 
