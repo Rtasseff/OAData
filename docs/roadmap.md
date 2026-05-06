@@ -86,6 +86,65 @@ Fallback if IT cannot widen the grant:
   source. Adds a separate access ask (SSH on the intermediate host) and
   is less convenient for daily use; raise direct-grant first.
 
+**2026-05-05 — Follow-up: IT replied with DB-selection advice; tests confirm host-grant restriction**
+
+IT response (translated): the user `rtassef` only has access to the
+`publications` database; specify it explicitly when connecting (database +
+username + password are the 3 params their PHP code uses).
+
+That advice doesn't actually address the failure: in MySQL, **authentication
+runs before database selection**, so a missing `database=` parameter cannot
+itself produce error 1045. We tested IT's advice anyway and ran broader
+diagnostics — none changed the result:
+
+- Added `database=publications` to `~/.my.cnf` → same 1045.
+- Tried both username spellings (`rtassef` per IT's email, `rtasseff` per
+  the Linux account) → same 1045, same source host in the error message.
+- `mysql -h 10.10.3.230 --protocol=TCP -u rtassef -p publications -e "SELECT VERSION();"`
+  (IP-direct, explicit TCP, password prompted interactively to bypass any
+  `.my.cnf` quoting issue) → same 1045.
+- `mysql --default-auth=mysql_native_password ...` → same 1045 (rules out
+  auth-plugin negotiation between MariaDB client and the server).
+- Client confirmed: `mysql Ver 15.1 Distrib 10.11.14-MariaDB` — modern
+  enough to support both `mysql_native_password` and `caching_sha2_password`.
+- Password independently verified working via phpMyAdmin with the same
+  username.
+
+With password and username both verified, and TCP / DNS / auth-plugin /
+DB-selection all ruled out, the only remaining cause is a **host-grant
+restriction**: MySQL grants are per `(user, source-host)` pair, and the
+account on the server is granted only from a different source (almost
+certainly the phpMyAdmin server's host) — no grant matches connections
+originating from `bmg-rtasseff.cicbiomagune.int`.
+
+Next action — email IT with technical wording so the ask is unambiguous.
+Suggested Spanish text:
+
+> *Confirmé que la contraseña y el usuario son correctos (las mismas
+> credenciales funcionan vía phpMyAdmin). El parámetro `database` no
+> resuelve el problema porque la autenticación de MySQL ocurre antes de
+> la selección de base de datos — por eso el error `1045` aparece
+> independientemente del valor de `database`. El error indica la fuente
+> como `'rtassef'@'bmg-rtasseff.cicbiomagune.int'`, lo que sugiere que el
+> grant actual del usuario no incluye mi estación de trabajo como host
+> de origen. ¿Podrían añadir un grant para `'rtassef'@'10.10.%'` (sólo
+> con los mismos permisos SELECT que ya tengo en la base `publications`)?
+> Eso me permitiría conectarme con el cliente MySQL nativo desde mi PC,
+> en paralelo al acceso por phpMyAdmin que ya funciona.*
+
+Asking for `@'10.10.%'` (internal subnet) rather than `@'%'` (anywhere) is
+more likely to be approved on security grounds.
+
+Stage 2 work pauses here until the grant is updated. When it is, the
+remaining checklist is:
+
+1. Re-run `mysql -e "SELECT VERSION(); SHOW TABLES;"` — confirm grant works.
+2. Run the PyMySQL throwaway script — confirm the lib choice.
+3. Capture schema (database name confirmed: `publications`; tables and
+   `DESCRIBE` of each) into a scratch note.
+4. Open the Stage 2 design plan: config schema for credentials, a
+   `pub_db.py` module, dep promotion of PyMySQL into `pyproject.toml`.
+
 ### Stage 3 — Zenodo automation (start with uploads)
 
 **Status:** not started.
