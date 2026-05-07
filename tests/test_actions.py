@@ -3,7 +3,10 @@
 import csv
 from pathlib import Path
 
-from oa_tracker.actions import apply_actions
+from oa_tracker.actions import (
+    apply_actions, reset_data_contact, reset_zenodo_code,
+    set_data_contact, set_zenodo_code,
+)
 from oa_tracker.db import get_archive, get_connection, upsert_archive, get_recent_events
 from oa_tracker.status import (
     OPEN_ACTIVE, OPEN_READY_FOR_ZENODO_DRAFT, OPEN_ZENODO_PUBLISHED,
@@ -490,3 +493,125 @@ def test_done2_uses_existing_pid_from_db(test_config):
     with get_connection(test_config.database) as conn:
         archive = get_archive(conn, "PUB001")
         assert archive["status"] == CLOSED_DATA_ARCHIVED
+
+
+
+# ── Stage 2: mandate_missing acknowledgment ──────────────────────────
+
+
+def test_apply_mandate_missing_is_event_only_no_status_change(test_config):
+    _insert_active_archive(test_config.database, "PUB300", OPEN_ACTIVE)
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB300",
+        "current_status": OPEN_ACTIVE,
+        "task_code": "mandate_missing",
+        "task_text": "Confirm with PO/IT",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "1",
+        "pid": "",
+        "url": "",
+        "note": "asked Nerea",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+    assert result.errors == []
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB300")
+        assert archive["status"] == OPEN_ACTIVE
+        assert "asked Nerea" in (archive["notes"] or "")
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+        assert any(e["action_code"] == "mandate_missing" for e in events)
+
+
+# ── Stage 2: data-contact / zenodo-code overrides ───────────────────
+
+
+def test_set_data_contact_marks_overridden(test_config):
+    _insert_active_archive(test_config.database, "PUB400")
+    result = set_data_contact(
+        test_config, "PUB400", email="ops@example.org", name="Ops Name",
+    )
+    assert result.applied == 1
+    assert result.errors == []
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB400")
+    assert a["data_contact_email"] == "ops@example.org"
+    assert a["data_contact_name"] == "Ops Name"
+    assert a["data_contact_overridden"] == 1
+
+
+def test_set_data_contact_requires_email(test_config):
+    _insert_active_archive(test_config.database, "PUB401")
+    result = set_data_contact(test_config, "PUB401", email="")
+    assert result.applied == 0
+    assert any("email" in e for e in result.errors)
+
+
+def test_reset_data_contact_clears_override(test_config):
+    _insert_active_archive(test_config.database, "PUB402")
+    set_data_contact(test_config, "PUB402", email="ops@example.org")
+    result = reset_data_contact(test_config, "PUB402")
+    assert result.applied == 1
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB402")
+    assert a["data_contact_overridden"] == 0
+    # Email value remains until next scan re-seeds; only the flag changes.
+    assert a["data_contact_email"] == "ops@example.org"
+
+
+def test_set_zenodo_code_marks_overridden(test_config):
+    _insert_active_archive(test_config.database, "PUB403")
+    result = set_zenodo_code(test_config, "PUB403", code="12345")
+    assert result.applied == 1
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB403")
+    assert a["zenodo_code"] == "12345"
+    assert a["zenodo_code_overridden"] == 1
+
+
+def test_set_zenodo_code_requires_code(test_config):
+    _insert_active_archive(test_config.database, "PUB404")
+    result = set_zenodo_code(test_config, "PUB404", code="")
+    assert result.applied == 0
+    assert any("code" in e for e in result.errors)
+
+
+def test_reset_zenodo_code_clears_override(test_config):
+    _insert_active_archive(test_config.database, "PUB405")
+    set_zenodo_code(test_config, "PUB405", code="abc")
+    result = reset_zenodo_code(test_config, "PUB405")
+    assert result.applied == 1
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB405")
+    assert a["zenodo_code_overridden"] == 0
+    assert a["zenodo_code"] == "abc"
+
+
+def test_overrides_unknown_publication_errors_cleanly(test_config):
+    """No archive in DB → error, applied stays 0."""
+    result = set_data_contact(test_config, "GHOST", email="x@y")
+    assert result.applied == 0
+    assert any("not in database" in e for e in result.errors)
+
+    result = set_zenodo_code(test_config, "GHOST", code="9")
+    assert result.applied == 0
+    assert any("not in database" in e for e in result.errors)
+
+
+def test_set_data_contact_logs_audit_event(test_config):
+    _insert_active_archive(test_config.database, "PUB406")
+    set_data_contact(test_config, "PUB406", email="x@y", name="N")
+
+    with get_connection(test_config.database) as conn:
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+    relevant = [e for e in events if e["action_code"] == "set_data_contact"]
+    assert len(relevant) == 1
+    assert relevant[0]["source"] == "cli"
+    assert "x@y" in relevant[0]["note"]

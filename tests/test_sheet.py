@@ -123,3 +123,108 @@ def test_generates_reminder_task_when_due(test_config):
     assert remind_row["first_seen_at"] == "2026-01-01T00:00:00"
     assert remind_row["next_reminder_at"] == "2020-01-01T00:00:00"
     assert remind_row["reminder_count"] == "2"
+
+
+# ── Stage 2: mandate-aware sheet generation ──────────────────────────
+
+
+def _enriched_insert(db_path, pub_id, status, **enrichment):
+    """Insert an archive with pub_db_last_refreshed_at set so it counts as classified."""
+    enrichment.setdefault("pub_db_last_refreshed_at", "2026-05-07T00:00:00")
+    _insert(db_path, pub_id, status, **enrichment)
+
+
+def test_mandate_missing_archive_emits_only_mandate_missing_row(test_config):
+    _enriched_insert(
+        test_config.database, "PUB200", OPEN_ACTIVE,
+        oa_mandate_missing=1, oa_data_required=None, oa_paper_required=None,
+        next_reminder_at="2020-01-01T00:00:00",  # would be due — but suppressed
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["task_code"] == "mandate_missing"
+    assert "investigate before closing" in r["note"]
+    # No qa_pass or remind_sent rows
+    assert all(rr["task_code"] == "mandate_missing" for rr in rows)
+
+
+def test_no_oa_archive_emits_close_publication_only_row(test_config):
+    _enriched_insert(
+        test_config.database, "PUB201", OPEN_ACTIVE,
+        oa_mandate_missing=0, oa_data_required=0, oa_paper_required=0,
+        next_reminder_at="2020-01-01T00:00:00",  # suppressed for no-OA
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["task_code"] == "close_publication_only"
+    assert "No OA mandate" in r["note"]
+
+
+def test_paper_only_archive_keeps_pipeline_with_note(test_config):
+    _enriched_insert(
+        test_config.database, "PUB202", OPEN_ACTIVE,
+        oa_mandate_missing=0, oa_data_required=0, oa_paper_required=1,
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    # qa_pass row still emitted (OPEN_ACTIVE → qa_pass), with paper-only note
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["task_code"] == "qa_pass"
+    assert "PAPER ONLY" in r["note"]
+
+
+def test_paper_only_with_unknown_signals_treated_as_paper_only(test_config):
+    """data_req=NULL + paper_req=1 (paper-only with some unknowns)."""
+    _enriched_insert(
+        test_config.database, "PUB203", OPEN_ACTIVE,
+        oa_mandate_missing=0, oa_data_required=None, oa_paper_required=1,
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    assert len(rows) == 1
+    assert rows[0]["task_code"] == "qa_pass"
+    assert "PAPER ONLY" in rows[0]["note"]
+
+
+def test_paper_only_archive_suppresses_reminders(test_config):
+    _enriched_insert(
+        test_config.database, "PUB204", OPEN_ACTIVE,
+        oa_mandate_missing=0, oa_data_required=0, oa_paper_required=1,
+        next_reminder_at="2020-01-01T00:00:00",  # would normally be due
+        reminder_count=0,
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    task_codes = [r["task_code"] for r in rows]
+    assert "remind_sent" not in task_codes
+    assert "qa_pass" in task_codes  # pipeline still emitted
+
+
+def test_data_required_archive_emits_standard_workflow(test_config):
+    _enriched_insert(
+        test_config.database, "PUB205", OPEN_ACTIVE,
+        oa_mandate_missing=0, oa_data_required=1, oa_paper_required=1,
+        next_reminder_at="2020-01-01T00:00:00",
+        reminder_count=1,
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    task_codes = [r["task_code"] for r in rows]
+    assert "remind_sent" in task_codes
+    assert "qa_pass" in task_codes
+    qa_row = [r for r in rows if r["task_code"] == "qa_pass"][0]
+    assert qa_row["note"] == ""  # no auto-note for plain data-required
+
+
+def test_unclassified_archive_uses_legacy_behavior(test_config):
+    """Archives without pub_db_last_refreshed_at (no enrichment ever) keep old flow."""
+    # Note: _insert (not _enriched_insert) — no refreshed timestamp
+    _insert(
+        test_config.database, "PUB206", OPEN_ACTIVE,
+        next_reminder_at="2020-01-01T00:00:00",
+        reminder_count=0,
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    task_codes = [r["task_code"] for r in rows]
+    # Both reminder and pipeline rows emitted (legacy behavior)
+    assert "remind_sent" in task_codes
+    assert "qa_pass" in task_codes

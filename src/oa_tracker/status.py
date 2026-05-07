@@ -91,7 +91,37 @@ TASK_CODES = {
         "description": "Close with exception (add note explaining why)",
         "changes_status": True,
     },
+    "mandate_missing": {
+        "description": "Confirm with PO/IT: OA mandate could not be derived",
+        "changes_status": False,
+    },
+    # Operator-managed override commands. CLI-only (not emitted on the
+    # action sheet); each writes an event for the audit log without
+    # changing archive status.
+    "set_data_contact": {
+        "description": "Set the data-contact name/email and mark it as operator-managed",
+        "changes_status": False,
+    },
+    "reset_data_contact": {
+        "description": "Clear the data-contact override; auto-seed from corresponding author next scan",
+        "changes_status": False,
+    },
+    "set_zenodo_code": {
+        "description": "Set the Zenodo record code and mark it as operator-managed",
+        "changes_status": False,
+    },
+    "reset_zenodo_code": {
+        "description": "Clear the Zenodo-code override; auto-seed from central repository next scan",
+        "changes_status": False,
+    },
 }
+
+# Override commands handled via dedicated paths in actions.py — they do
+# not flow through _apply_row / validate_transition.
+OVERRIDE_TASK_CODES = frozenset({
+    "set_data_contact", "reset_data_contact",
+    "set_zenodo_code", "reset_zenodo_code",
+})
 
 # ── Transitions ───────────────────────────────────────────────────────
 # Mapping: (current_status, task_code) → new_status
@@ -123,11 +153,14 @@ def validate_transition(current_status: str, task_code: str) -> str:
     if task_code not in TASK_CODES:
         raise ValueError(f"Unknown task code: {task_code!r}")
 
-    # remind_sent, qa_hold, and contact_pi_manual don't change status
-    # via the standard transition path. (contact_pi_manual is handled
-    # specially in apply_actions when done=1 without a PID, which
-    # short-circuits into CLOSED_EXCEPTION.)
-    if task_code in ("remind_sent", "qa_hold", "contact_pi_manual"):
+    # remind_sent, qa_hold, contact_pi_manual, and mandate_missing don't
+    # change status via the standard transition path. (contact_pi_manual
+    # is handled specially in apply_actions when done=1 without a PID,
+    # which short-circuits into CLOSED_EXCEPTION.) mandate_missing is an
+    # acknowledgment-only task; the row regenerates next scan unless the
+    # underlying issue is fixed upstream or the operator changes the
+    # task_code to an explicit closure.
+    if task_code in ("remind_sent", "qa_hold", "contact_pi_manual", "mandate_missing"):
         return current_status
 
     # Check wildcard tasks (any OPEN → CLOSED)

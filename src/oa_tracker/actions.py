@@ -208,14 +208,18 @@ def _apply_row(
         result.applied += 1
         return (True, old_status, old_status)
 
-    # Handle qa_hold (no status change, just note)
-    if task_code == "qa_hold":
+    # Handle qa_hold and mandate_missing (no status change, optional note).
+    # mandate_missing is acknowledgment-only: the row regenerates on the
+    # next scan unless the upstream mandate becomes derivable or the
+    # operator changes the task_code to an explicit closure.
+    if task_code in ("qa_hold", "mandate_missing"):
         extra: dict[str, Any] = {}
         if note:
             existing_notes = archive.get("notes") or ""
             separator = "\n" if existing_notes else ""
             extra["notes"] = f"{existing_notes}{separator}[{now}] {note}"
-        db.upsert_archive(conn, publication_id=pub_id, **extra)
+        if extra:
+            db.upsert_archive(conn, publication_id=pub_id, **extra)
         db.insert_event(
             conn, pub_id, task_code, old_status, old_status, source,
             note=note or None,
@@ -290,6 +294,114 @@ def apply_actions(sheet_path: Path, config: Config) -> ApplyResult:
         writer.writeheader()
         writer.writerows(remaining)
 
+    return result
+
+
+def _archive_or_error(conn: sqlite3.Connection, pub_id: str, result: ApplyResult) -> dict | None:
+    archive = db.get_archive(conn, pub_id)
+    if archive is None:
+        result.errors.append(f"Action: publication {pub_id!r} not in database")
+    return archive
+
+
+def set_data_contact(
+    config: Config, pub_id: str, email: str, name: str | None = None
+) -> ApplyResult:
+    """Override the data-contact name/email and mark it as operator-managed.
+
+    Subsequent scans preserve these values until ``reset_data_contact`` is
+    called (which clears the override flag, letting the next scan re-seed
+    from the central corresponding-author lookup).
+    """
+    result = ApplyResult()
+    if not email:
+        result.errors.append("set_data_contact requires --email")
+        return result
+    with db.get_connection(config.database) as conn:
+        archive = _archive_or_error(conn, pub_id, result)
+        if archive is None:
+            return result
+        updates = {
+            "publication_id": pub_id,
+            "data_contact_email": email,
+            "data_contact_overridden": 1,
+        }
+        if name is not None:
+            updates["data_contact_name"] = name
+        db.upsert_archive(conn, **updates)
+        db.insert_event(
+            conn, pub_id, "set_data_contact",
+            archive["status"], archive["status"], "cli",
+            note=f"data_contact set to {name or '?'} <{email}>",
+        )
+        result.applied += 1
+    return result
+
+
+def reset_data_contact(config: Config, pub_id: str) -> ApplyResult:
+    """Clear the data-contact override; the next scan re-seeds from the central DB."""
+    result = ApplyResult()
+    with db.get_connection(config.database) as conn:
+        archive = _archive_or_error(conn, pub_id, result)
+        if archive is None:
+            return result
+        db.upsert_archive(
+            conn,
+            publication_id=pub_id,
+            data_contact_overridden=0,
+        )
+        db.insert_event(
+            conn, pub_id, "reset_data_contact",
+            archive["status"], archive["status"], "cli",
+            note="data_contact override cleared",
+        )
+        result.applied += 1
+    return result
+
+
+def set_zenodo_code(config: Config, pub_id: str, code: str) -> ApplyResult:
+    """Override the Zenodo record code (operator-managed, preserved across scans)."""
+    result = ApplyResult()
+    if not code:
+        result.errors.append("set_zenodo_code requires --code")
+        return result
+    with db.get_connection(config.database) as conn:
+        archive = _archive_or_error(conn, pub_id, result)
+        if archive is None:
+            return result
+        db.upsert_archive(
+            conn,
+            publication_id=pub_id,
+            zenodo_code=code,
+            zenodo_code_overridden=1,
+        )
+        db.insert_event(
+            conn, pub_id, "set_zenodo_code",
+            archive["status"], archive["status"], "cli",
+            note=f"zenodo_code set to {code}",
+        )
+        result.applied += 1
+    return result
+
+
+def reset_zenodo_code(config: Config, pub_id: str) -> ApplyResult:
+    """Clear the Zenodo-code override; the next scan re-seeds from the central DB."""
+    result = ApplyResult()
+    with db.get_connection(config.database) as conn:
+        archive = _archive_or_error(conn, pub_id, result)
+        if archive is None:
+            return result
+        db.upsert_archive(
+            conn,
+            publication_id=pub_id,
+            zenodo_code_overridden=0,
+        )
+        db.insert_event(
+            conn, pub_id, "reset_zenodo_code",
+            archive["status"], archive["status"], "cli",
+            note="zenodo_code override cleared",
+        )
+        result.applied += 1
     return result
 
 

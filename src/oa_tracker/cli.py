@@ -115,11 +115,14 @@ def emails(
 @app.command()
 def action(
     pub_id: str = typer.Argument(..., help="Publication ID to act on"),
-    task_code: str = typer.Argument(..., help="Task code (e.g. qa_pass, qa_hold, close_exception, zenodo_published)"),
+    task_code: str = typer.Argument(..., help="Task code (e.g. qa_pass, qa_hold, close_exception, zenodo_published, set_data_contact)"),
     done: int = typer.Option(1, "--done", help="1 = apply the task; 2 = full closure"),
     pid: str = typer.Option("", "--pid", help="Dataset PID / DOI"),
     url: str = typer.Option("", "--url", help="Dataset URL"),
     note: str = typer.Option("", "--note", help="Free-text note, recorded in the audit log"),
+    email: str = typer.Option("", "--email", help="Email for set_data_contact"),
+    name: str = typer.Option("", "--name", help="Name for set_data_contact"),
+    code: str = typer.Option("", "--code", help="Code for set_zenodo_code"),
     config: Optional[str] = ConfigOption,
     db: Optional[str] = DbOption,
 ):
@@ -129,10 +132,18 @@ def action(
     archive forward or close it out. The semantics match what a single
     row on the action sheet would do (validate_transition, fast-track
     when a PID is supplied, done=2 full closure, qa_hold / remind_sent
-    / contact_pi_manual special handling).
+    / contact_pi_manual / mandate_missing special handling).
+
+    Operator-override task codes (``set_data_contact``,
+    ``reset_data_contact``, ``set_zenodo_code``, ``reset_zenodo_code``)
+    are dispatched to dedicated handlers — they don't appear on the
+    action sheet but they reuse the same audit-log pattern.
     """
     from oa_tracker import status as st
-    from oa_tracker.actions import apply_single
+    from oa_tracker.actions import (
+        apply_single, set_data_contact, reset_data_contact,
+        set_zenodo_code, reset_zenodo_code,
+    )
 
     if done not in (1, 2):
         typer.echo(f"--done must be 1 or 2 (got {done})")
@@ -145,6 +156,32 @@ def action(
         raise typer.Exit(2)
 
     cfg = _get_config(config, db)
+
+    # Dispatch operator-override task codes to their dedicated handlers.
+    if task_code in st.OVERRIDE_TASK_CODES:
+        if task_code == "set_data_contact":
+            result = set_data_contact(cfg, pub_id, email=email, name=(name or None))
+            ok_msg = f"Set data_contact on {pub_id}: {name or '?'} <{email}>"
+        elif task_code == "reset_data_contact":
+            result = reset_data_contact(cfg, pub_id)
+            ok_msg = f"Reset data_contact override on {pub_id}; next scan will re-seed from the central DB."
+        elif task_code == "set_zenodo_code":
+            result = set_zenodo_code(cfg, pub_id, code=code)
+            ok_msg = f"Set zenodo_code on {pub_id}: {code}"
+        else:  # reset_zenodo_code
+            result = reset_zenodo_code(cfg, pub_id)
+            ok_msg = f"Reset zenodo_code override on {pub_id}; next scan will re-seed from the central DB."
+
+        for e in result.errors:
+            typer.echo(f"Error: {e}")
+        if result.errors:
+            raise typer.Exit(1)
+        if not result.applied:
+            typer.echo("Nothing applied.")
+            raise typer.Exit(1)
+        typer.echo(ok_msg)
+        return
+
     result, old_status, new_status = apply_single(
         cfg, pub_id, task_code, done=done, pid=pid, url=url, note=note,
     )

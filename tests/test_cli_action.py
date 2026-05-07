@@ -191,3 +191,99 @@ def test_action_rejects_invalid_done_value(test_config, tmp_path):
     )
     assert result.exit_code != 0
     assert "--done must be 1 or 2" in result.stdout
+
+
+# ── Stage 2: override task codes via `oa action` ─────────────────────
+
+
+def test_action_set_data_contact_via_cli(test_config, tmp_path):
+    _insert(test_config.database, "PUB500", OPEN_ACTIVE)
+    cfg_file = _write_config(tmp_path, test_config)
+
+    result = runner.invoke(
+        app,
+        ["action", "PUB500", "set_data_contact",
+         "--email", "ops@example.org", "--name", "Ops Team",
+         "--config", str(cfg_file)],
+    )
+    assert result.exit_code == 0, result.stdout
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB500")
+    assert a["data_contact_email"] == "ops@example.org"
+    assert a["data_contact_name"] == "Ops Team"
+    assert a["data_contact_overridden"] == 1
+
+
+def test_action_reset_data_contact_via_cli(test_config, tmp_path):
+    _insert(test_config.database, "PUB501", OPEN_ACTIVE,
+            data_contact_email="x@y", data_contact_overridden=1)
+    cfg_file = _write_config(tmp_path, test_config)
+
+    result = runner.invoke(
+        app,
+        ["action", "PUB501", "reset_data_contact", "--config", str(cfg_file)],
+    )
+    assert result.exit_code == 0, result.stdout
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB501")
+    assert a["data_contact_overridden"] == 0
+
+
+def test_action_set_zenodo_code_via_cli(test_config, tmp_path):
+    _insert(test_config.database, "PUB502", OPEN_ACTIVE)
+    cfg_file = _write_config(tmp_path, test_config)
+
+    result = runner.invoke(
+        app,
+        ["action", "PUB502", "set_zenodo_code",
+         "--code", "98765", "--config", str(cfg_file)],
+    )
+    assert result.exit_code == 0, result.stdout
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB502")
+    assert a["zenodo_code"] == "98765"
+    assert a["zenodo_code_overridden"] == 1
+
+
+def test_action_reset_zenodo_code_via_cli(test_config, tmp_path):
+    _insert(test_config.database, "PUB503", OPEN_ACTIVE,
+            zenodo_code="abc", zenodo_code_overridden=1)
+    cfg_file = _write_config(tmp_path, test_config)
+
+    result = runner.invoke(
+        app,
+        ["action", "PUB503", "reset_zenodo_code", "--config", str(cfg_file)],
+    )
+    assert result.exit_code == 0, result.stdout
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB503")
+    assert a["zenodo_code_overridden"] == 0
+
+
+def test_action_set_data_contact_missing_email_errors(test_config, tmp_path):
+    _insert(test_config.database, "PUB504", OPEN_ACTIVE)
+    cfg_file = _write_config(tmp_path, test_config)
+
+    result = runner.invoke(
+        app,
+        ["action", "PUB504", "set_data_contact", "--config", str(cfg_file)],
+    )
+    assert result.exit_code != 0
+    assert "email" in result.stdout.lower()
+
+
+def test_action_mandate_missing_acknowledges_with_note(test_config, tmp_path):
+    _insert(test_config.database, "PUB505", OPEN_ACTIVE)
+    cfg_file = _write_config(tmp_path, test_config)
+
+    result = runner.invoke(
+        app,
+        ["action", "PUB505", "mandate_missing",
+         "--note", "investigated, will close next week",
+         "--config", str(cfg_file)],
+    )
+    assert result.exit_code == 0, result.stdout
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB505")
+    assert a["status"] == OPEN_ACTIVE  # unchanged
+    assert "investigated" in (a["notes"] or "")

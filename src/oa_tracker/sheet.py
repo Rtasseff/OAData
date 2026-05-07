@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from oa_tracker import db, status as st
 from oa_tracker.config import Config
@@ -24,6 +25,75 @@ SHEET_COLUMNS = [
 ]
 
 
+def _mandate_classification(archive: dict[str, Any]) -> tuple[str, str]:
+    """Derive the action-sheet treatment for an archive from its cached
+    pub-DB flags.
+
+    Returns ``(category, auto_note)``. Categories:
+
+    - ``"mandate_missing"`` — no rule applied; emit a single
+      ``mandate_missing`` row asking the operator to confirm with
+      PO/IT before doing anything else.
+    - ``"close_no_oa"`` — explicit No-OA (paper and data both not
+      required); emit a single ``close_publication_only`` row.
+    - ``"paper_only"`` — paper required but no data; the standard
+      pipeline rows still emit (operator decides QA/close), with a
+      note flagging the paper-only nature.
+    - ``"data_required"`` — standard flow, no auto-note.
+    - ``"unclassified"`` — pub-DB has never enriched this archive
+      (e.g., never reached, or this is a legacy v1 row pre-migration).
+      Treat as standard flow so the tracker still works.
+    """
+    refreshed = archive.get("pub_db_last_refreshed_at")
+    if not refreshed:
+        return ("unclassified", "")
+
+    if archive.get("oa_mandate_missing") == 1:
+        return (
+            "mandate_missing",
+            "No mandate found in cff_oaMandate or AEI rule — "
+            "investigate before closing.",
+        )
+
+    data_req = archive.get("oa_data_required")
+    paper_req = archive.get("oa_paper_required")
+
+    if data_req == 0 and paper_req == 0:
+        return (
+            "close_no_oa",
+            "No OA mandate on linked project(s); no data archiving required.",
+        )
+
+    if data_req != 1 and paper_req == 1:
+        # data_req is 0 (paper-only on every project) or NULL with a
+        # paper-only signal — treated identically: workflow continues
+        # but the operator should know data isn't actually mandated.
+        return (
+            "paper_only",
+            "PAPER ONLY: data not required by mandate; "
+            "processing as if data were required.",
+        )
+
+    return ("data_required", "")
+
+
+def _row(archive: dict[str, Any], task_code: str, task_text: str, note: str = "") -> dict[str, str]:
+    """Build a sheet row dict with the standard column population."""
+    return {
+        "publication_id": archive["publication_id"],
+        "current_status": archive["status"],
+        "task_code": task_code,
+        "task_text": task_text,
+        "first_seen_at": archive.get("first_seen_at") or "",
+        "next_reminder_at": archive.get("next_reminder_at") or "",
+        "reminder_count": str(archive.get("reminder_count") or 0),
+        "done": "0",
+        "pid": "",
+        "url": "",
+        "note": note,
+    }
+
+
 def generate_sheet(config: Config) -> Path:
     """Generate action_sheet.tsv for all OPEN archives and return the file path."""
     config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -41,50 +111,48 @@ def generate_sheet(config: Config) -> Path:
         for archive in open_archives:
             pub_id = archive["publication_id"]
             cur_status = archive["status"]
-            first_seen = archive.get("first_seen_at") or ""
-            next_rem = archive.get("next_reminder_at") or ""
-            rem_count = str(archive.get("reminder_count") or 0)
+            category, auto_note = _mandate_classification(archive)
 
-            # Add reminder task if due. At the final slot (reminder_count
-            # has already reached max - 1, so the next reminder would be the
-            # last one) the tool stops prompting for an automated email and
-            # instead asks the operator to contact the PI directly.
-            if pub_id in reminders_due:
+            # Mandate-missing and explicit no-OA archives produce a single
+            # actionable row each — nothing else (no pipeline progression,
+            # no reminders) until the operator addresses the situation.
+            if category == "mandate_missing":
+                rows.append(_row(
+                    archive,
+                    "mandate_missing",
+                    st.TASK_CODES["mandate_missing"]["description"],
+                    note=auto_note,
+                ))
+                continue
+
+            if category == "close_no_oa":
+                rows.append(_row(
+                    archive,
+                    "close_publication_only",
+                    st.TASK_CODES["close_publication_only"]["description"],
+                    note=auto_note,
+                ))
+                continue
+
+            # Reminders fire only when data is actually required by mandate
+            # (or when we don't have classification info — legacy rows
+            # behave as before so existing flows aren't broken).
+            allow_reminders = category in ("data_required", "unclassified")
+            if pub_id in reminders_due and allow_reminders:
                 reached_max = (
                     archive.get("reminder_count") or 0
                 ) >= config.reminders.max_reminders - 1
                 task = "contact_pi_manual" if reached_max else "remind_sent"
-                rows.append({
-                    "publication_id": pub_id,
-                    "current_status": cur_status,
-                    "task_code": task,
-                    "task_text": st.TASK_CODES[task]["description"],
-                    "first_seen_at": first_seen,
-                    "next_reminder_at": next_rem,
-                    "reminder_count": rem_count,
-                    "done": "0",
-                    "pid": "",
-                    "url": "",
-                    "note": "",
-                })
+                rows.append(_row(
+                    archive, task, st.TASK_CODES[task]["description"],
+                ))
 
-            # Add the next pipeline task
             next_task = st.next_task_for_status(cur_status)
             if next_task:
                 meta = st.TASK_CODES[next_task]
-                rows.append({
-                    "publication_id": pub_id,
-                    "current_status": cur_status,
-                    "task_code": next_task,
-                    "task_text": meta["description"],
-                    "first_seen_at": first_seen,
-                    "next_reminder_at": next_rem,
-                    "reminder_count": rem_count,
-                    "done": "0",
-                    "pid": "",
-                    "url": "",
-                    "note": "",
-                })
+                rows.append(_row(
+                    archive, next_task, meta["description"], note=auto_note,
+                ))
 
     with open(sheet_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=SHEET_COLUMNS, delimiter="\t")
