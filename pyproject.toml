@@ -7,7 +7,7 @@ name = "oa-tracker"
 version = "0.1.0"
 description = "CLI tool for tracking Open Access publication data archiving workflows"
 requires-python = ">=3.12"
-dependencies = ["typer>=0.9"]
+dependencies = ["typer>=0.9", "pymysql>=1.1"]
 
 [project.scripts]
 oa = "oa_tracker.cli:app"

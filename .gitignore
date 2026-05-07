@@ -24,3 +24,7 @@ env/
 output/
 email_drafts/
 action_history.tsv
+
+# Scratch debugging artifacts (Stage 2 webpage source dumps, etc.)
+tmp_*.html
+tmp_*.txt
