@@ -1,6 +1,7 @@
 """Tests for db module."""
 
 from oa_tracker.db import (
+    _SCHEMA_VERSION,
     get_all_archives,
     get_archive,
     get_connection,
@@ -26,8 +27,8 @@ def test_init_creates_tables(tmp_db):
 
 def test_schema_version(tmp_db):
     with get_connection(tmp_db) as conn:
-        row = conn.execute("SELECT version FROM schema_version").fetchone()
-        assert row["version"] == 1
+        row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
+        assert row["v"] == _SCHEMA_VERSION
 
 
 def test_upsert_insert_and_get(tmp_db):

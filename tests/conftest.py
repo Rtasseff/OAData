@@ -2,9 +2,45 @@
 
 import pytest
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from oa_tracker.config import Config, ReminderSettings
 from oa_tracker.db import init_db
+
+
+@pytest.fixture(autouse=True)
+def stub_pub_db(request, monkeypatch):
+    """Default: pub_db never talks to a real MySQL during tests.
+
+    ``get_connection`` returns a MagicMock so callers can pass the
+    "connection" without exploding; ``enrich_archive`` returns a
+    deterministic empty ``CachedPubFields``. Tests that need specific
+    enrichment data should re-monkeypatch ``enrich_archive`` themselves.
+
+    Skips itself for ``test_pub_db.py`` — those tests are exercising
+    the real pub_db code paths against mocked PyMySQL connections.
+    """
+    if request.node.path.name == "test_pub_db.py":
+        return
+
+    from oa_tracker import pub_db
+
+    def _stub_connection():
+        return MagicMock()
+
+    def _empty_enrich(_conn, _pub_id):
+        return pub_db.CachedPubFields(
+            pub_title=None, pub_doi=None, pub_journal=None, pub_year=None,
+            oa_paper_required=None, oa_data_required=None,
+            max_embargo_months=None, oa_mandate_source=None,
+            oa_mandate_missing=False,
+            corresponding_author_name=None, corresponding_author_email=None,
+            central_repository=None, central_repository_code=None,
+            auto_zenodo_code=None,
+        )
+
+    monkeypatch.setattr(pub_db, "get_connection", _stub_connection)
+    monkeypatch.setattr(pub_db, "enrich_archive", _empty_enrich)
 
 
 @pytest.fixture

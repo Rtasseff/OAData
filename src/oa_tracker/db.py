@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -30,7 +30,28 @@ CREATE TABLE IF NOT EXISTS archives (
     reminder_count          INTEGER NOT NULL DEFAULT 0,
     next_reminder_at        TEXT,
     unexpected_missing_folder INTEGER NOT NULL DEFAULT 0,
-    missing_folder_detected_at TEXT
+    missing_folder_detected_at TEXT,
+    -- v2: pub-DB cached fields (auto-refreshed every scan)
+    pub_title                TEXT,
+    pub_doi                  TEXT,
+    pub_journal              TEXT,
+    pub_year                 INTEGER,
+    oa_paper_required        INTEGER,
+    oa_data_required         INTEGER,
+    max_embargo_months       INTEGER,
+    oa_mandate_source        TEXT,
+    oa_mandate_missing       INTEGER,
+    corresponding_author_name  TEXT,
+    corresponding_author_email TEXT,
+    central_repository       TEXT,
+    central_repository_code  TEXT,
+    pub_db_last_refreshed_at TEXT,
+    -- v2: operator-managed fields (preserved across scans when *_overridden=1)
+    data_contact_name        TEXT,
+    data_contact_email       TEXT,
+    data_contact_overridden  INTEGER NOT NULL DEFAULT 0,
+    zenodo_code              TEXT,
+    zenodo_code_overridden   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -47,16 +68,52 @@ CREATE TABLE IF NOT EXISTS events (
 );
 """
 
+# v1 → v2: ALTER TABLE adds for existing databases. Order matches the
+# CREATE TABLE block above so the column list stays consistent.
+_V1_TO_V2_ALTERS = [
+    "ALTER TABLE archives ADD COLUMN pub_title TEXT",
+    "ALTER TABLE archives ADD COLUMN pub_doi TEXT",
+    "ALTER TABLE archives ADD COLUMN pub_journal TEXT",
+    "ALTER TABLE archives ADD COLUMN pub_year INTEGER",
+    "ALTER TABLE archives ADD COLUMN oa_paper_required INTEGER",
+    "ALTER TABLE archives ADD COLUMN oa_data_required INTEGER",
+    "ALTER TABLE archives ADD COLUMN max_embargo_months INTEGER",
+    "ALTER TABLE archives ADD COLUMN oa_mandate_source TEXT",
+    "ALTER TABLE archives ADD COLUMN oa_mandate_missing INTEGER",
+    "ALTER TABLE archives ADD COLUMN corresponding_author_name TEXT",
+    "ALTER TABLE archives ADD COLUMN corresponding_author_email TEXT",
+    "ALTER TABLE archives ADD COLUMN central_repository TEXT",
+    "ALTER TABLE archives ADD COLUMN central_repository_code TEXT",
+    "ALTER TABLE archives ADD COLUMN pub_db_last_refreshed_at TEXT",
+    "ALTER TABLE archives ADD COLUMN data_contact_name TEXT",
+    "ALTER TABLE archives ADD COLUMN data_contact_email TEXT",
+    "ALTER TABLE archives ADD COLUMN data_contact_overridden INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE archives ADD COLUMN zenodo_code TEXT",
+    "ALTER TABLE archives ADD COLUMN zenodo_code_overridden INTEGER NOT NULL DEFAULT 0",
+]
+
 
 def init_db(path: Path) -> None:
-    """Create the database and tables if they don't exist."""
+    """Create the database and tables; run any pending migrations."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with get_connection(path) as conn:
         conn.executescript(_SCHEMA_SQL)
-        # Set schema version if empty
-        row = conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()
-        if row[0] == 0:
+        row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+        current = row[0] if row and row[0] is not None else 0
+        if current == 0:
+            # Fresh database — CREATE TABLE already produced v2 schema.
             conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
+            return
+        if current < _SCHEMA_VERSION:
+            _migrate(conn, current)
+
+
+def _migrate(conn: sqlite3.Connection, from_version: int) -> None:
+    """Apply migrations from ``from_version`` up to ``_SCHEMA_VERSION``."""
+    if from_version < 2:
+        for stmt in _V1_TO_V2_ALTERS:
+            conn.execute(stmt)
+    conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
 
 
 @contextmanager
