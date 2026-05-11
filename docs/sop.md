@@ -111,6 +111,52 @@ The `task_code` column in `action_sheet.tsv` identifies the **action you are bei
 | `contact_pi_manual` | MAX reminder reached; manually contact PI | *(see "Final reminder" below)* |
 | `close_publication_only` | Close as publication-only (no data deposit needed) | `CLOSED_PUBLICATION_ONLY` |
 | `close_exception` | Close with exception (add note explaining why) | `CLOSED_EXCEPTION` |
+| `mandate_missing` | Confirm with PO/IT — mandate could not be derived | *(no status change; see §8.7)* |
+
+### Stage-2 mandate-aware behavior
+
+After connectivity to the central publication DB (Stage 2), each scan
+caches per-archive OA-mandate flags on the `archives` row. The sheet
+adapts its output based on the cached classification:
+
+- **Data required** (any linked project signals data via `cff_oaMandate`
+  type 1/2/5 or matches the Spanish AEI 2022+ pattern): the usual
+  pipeline row appears, reminders are emitted when due. No special note.
+- **Paper-only** (paper required but no data): the pipeline row still
+  appears with an auto-populated note *"PAPER ONLY: data not required
+  by mandate; processing as if data were required."* Reminders are
+  suppressed (we don't pester data contacts for data the mandate
+  doesn't require).
+- **No OA** (mandate explicitly says nothing required): a
+  `close_publication_only` row appears with an auto-note *"No OA
+  mandate on linked project(s); no data archiving required."* No
+  reminders.
+- **Mandate missing** (we couldn't derive anything from the central
+  DB): a `mandate_missing` row appears, asking you to confirm with
+  PO/IT. No pipeline progression, no reminders.
+
+Nothing closes automatically — every transition still goes through
+your hand. The cache is just there to pre-populate the right row and
+note, so the operator sheet is mandate-aware without removing the
+operator from the loop.
+
+### Stage-2 operator overrides (CLI-only)
+
+Four override commands manage the operator-managed fields (separate
+from the auto-refreshed cache). All are invoked via `oa action`:
+
+```bash
+oa action <pub_id> set_data_contact --email "x@y.org" [--name "Foo Bar"]
+oa action <pub_id> reset_data_contact
+oa action <pub_id> set_zenodo_code --code "12345"
+oa action <pub_id> reset_zenodo_code
+```
+
+`set_*` marks the field as operator-managed; the next scan does not
+overwrite it. `reset_*` clears that flag so the next scan re-seeds
+from the central DB (corresponding author for the data contact, or
+the Zenodo record code if the central DB lists Zenodo as the
+repository). Each writes an event to the audit log with `source="cli"`.
 
 ### Final reminder: manual PI contact
 
@@ -196,6 +242,14 @@ Updates SQLite based on the current SharePoint folder tree:
 
 The scanner is read-only against the folder tree — it observes, never modifies.
 
+Each scan also enriches every active archive from the central publication
+DB (Stage 2): pulls title/DOI/journal, derives the OA-mandate flags
+(`oa_data_required`, `oa_paper_required`, embargo, mandate trace, plus
+a `mandate_missing` flag when no rule applies), and refreshes the
+corresponding-author and central-repository fields. If the central DB
+is unreachable the scan logs an error and continues with the previously
+cached values — folder detection still works.
+
 ### 8.2 Weekly operations (recommended cadence)
 
 1. **`oa scan`** — pick up folder activity since the last run.
@@ -212,11 +266,13 @@ The scanner is read-only against the folder tree — it observes, never modifies
 
 Steps 1–4 are regeneration; steps 5–7 are the real weekly work.
 
-### 8.3 Email handling
+### 8.3 Email handling and Zenodo cheat sheets
 
 * `oa emails` produces reminder drafts (from `templates/reminder.txt`) for every archive whose `next_reminder_at` is due **and** whose `reminder_count` is still below the manual-contact threshold — and completion drafts (from `templates/completion.txt`) for every archive at `OPEN_ZENODO_PUBLISHED`.
+* Reminders are suppressed for archives whose central mandate is paper-only, no-OA, or missing (the operator sheet still flags those — we just don't pester data contacts for data the mandate doesn't require).
 * Sending remains manual — `oa` never touches email directly.
 * After sending, record each sent email on the next action sheet by setting `done=1` on its `remind_sent` row.
+* `oa emails` also writes a **Zenodo cheat sheet** to `output/zenodo_cheat/<pub_id>.txt` for every archive in `OPEN_READY_FOR_ZENODO_DRAFT`, `OPEN_ZENODO_DRAFT_CREATED`, or `OPEN_ZENODO_DRAFT_VALIDATED`. The cheat sheet consolidates publication metadata, OA-mandate flags, data-contact info, the central DB's existing repository reference, and the operator-managed Zenodo code — everything needed to create a Zenodo deposit by hand. (Future Stage 2.5 will automate the Zenodo creation itself; the cheat sheet is the manual interim.)
 
 ### 8.4 Final reminder: manual PI contact
 
@@ -251,6 +307,15 @@ oa action 3097 qa_pass --pid 10.5281/zenodo.42 --url https://zenodo.org/records/
 
 # Already fully done including folder removal.
 oa action 3086 qa_pass --done 2 --pid 10.5281/zenodo.99
+
+# Stage-2 overrides for the operator-managed fields:
+oa action 3092 set_data_contact --email "real.contact@example.org" --name "Real Contact"
+oa action 3092 reset_data_contact                           # let next scan re-seed
+oa action 3092 set_zenodo_code --code "10298471"            # record the Zenodo record id we created
+oa action 3092 reset_zenodo_code                            # clear override
+
+# Acknowledge a mandate_missing row after asking the project office:
+oa action 3092 mandate_missing --note "Confirmed with Nerea — really has no mandate"
 ```
 
 `oa action` does **not** modify `action_sheet.tsv` (it's a side-channel). If the archive has a pending row on the sheet, that row will simply be skipped on the next `oa apply` because the transition no longer applies, or it will be regenerated correctly on the next `oa sheet`.
@@ -271,6 +336,30 @@ The command:
 * Leaves any recorded `final_pid` / `final_url` intact — they remain part of the archive's history.
 
 Reopens are rare and consequential, so they're deliberately kept off the action sheet and require an explicit `--reason`.
+
+### 8.7 Mandate-missing investigation
+
+When the scanner cannot derive any OA mandate for an archive's linked
+projects (no `cff_oaMandate` row populated and no project_code matching
+the Spanish AEI 2022+ pattern), `oa sheet` emits a single
+`mandate_missing` row for that archive and `oa emails` does not draft a
+reminder. The archive is also listed under "Mandate Issues — confirm
+with PO/IT" in the weekly report.
+
+This isn't a bug — it usually means the publication shouldn't have
+ended up in our system at all (upstream data quality issue). Three
+operator responses:
+
+- **Leave `done=0`** on the row. The row regenerates next scan; if the
+  upstream DB gets fixed and a mandate becomes derivable, the row
+  disappears on its own.
+- **`oa action <pub_id> mandate_missing --note "..."`** records an audit
+  entry that you investigated; the row will still regenerate next scan
+  until the situation actually changes. Useful for tracking your own
+  follow-ups with PO/IT.
+- **Change `task_code` to `close_exception` with a note**, then
+  `done=1`. The archive closes as `CLOSED_EXCEPTION` and the row
+  doesn't come back.
 
 ## 9. Integrity controls
 

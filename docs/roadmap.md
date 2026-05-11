@@ -33,7 +33,10 @@ publication DB or the Zenodo API.
 
 ### Stage 2 — Read internal publication database
 
-**Status:** unblocked 2026-05-05 — host-grant added; ready for schema discovery and design.
+**Status:** **shipped 2026-05-11**, in active use. See `docs/sop.md` for
+operator procedure; the full implementation log (connectivity, schema
+discovery, design refinements, and the five rollout phases A–E) is
+preserved below for audit.
 
 **Goal:** enrich and de-risk operations, without waiting on write access.
 Sequenced ahead of Zenodo automation because article-level metadata (PI,
@@ -356,16 +359,31 @@ Remaining checklist:
     central-tracker overlap (`publi_email`, `repo_publis`, both task
     tables) without duplicating their work.
 
-### Stage 3 — Zenodo automation (start with uploads)
+### Stage 2.5 — Automate Zenodo repo creation (interim, before uploads)
+
+**Status:** not started.
+
+**Goal:** automate creation of empty Zenodo draft records (metadata only,
+no large-file upload yet). Stage 2 currently produces a "Zenodo cheat
+sheet" (`output/zenodo_cheat/<pub_id>.txt`) the operator copies into
+the Zenodo UI by hand; Stage 2.5 calls the Zenodo API with the same
+consolidated metadata and records the returned record id into
+`zenodo_code` automatically.
+
+This is split out from Stage 3 so the higher-risk file-upload work
+(slow, large, error-prone) can ship later. Creating an empty record
+is cheap and reversible.
+
+### Stage 3 — Zenodo automation: uploads
 
 **Status:** not started.
 
 **Goal:** remove the most painful manual step (large-file drag/drop and Zenodo
-UI errors). Builds on Stage 2 — uses publication metadata to populate Zenodo
-record fields and detect pre-existing records.
+UI errors). Builds on Stages 2 and 2.5 — uses publication metadata to
+populate Zenodo record fields and pushes the actual data files.
 
-- Automate uploads via the Zenodo API first (highest ROI).
-- Later expand to create/edit draft records via API.
+- Automate uploads via the Zenodo API.
+- Allow re-uploads / partial uploads / resume.
 - **Enforce the DOI/PID rule:** the dataset must get a Zenodo-minted DOI; the
   paper DOI may only be linked as a related identifier in Zenodo metadata.
 
@@ -404,3 +422,23 @@ reflects reality:
   OPEN state when a PI finally responds.
 - Manual-contact final-reminder flow — replaces the last templated reminder
   with a `contact_pi_manual` row (no draft generated).
+
+Stage 2 shipped (2026-05-11):
+
+- `pub_db.py` reads the central MariaDB publication DB on every scan,
+  derives `oa_paper_required` / `oa_data_required` / `max_embargo_months`
+  via `cff_oaMandate` ∪ Spanish AEI 2022+ project_code pattern.
+- 19 new columns on `archives` cache the derived flags plus
+  operator-managed `data_contact_*` and `zenodo_code` fields.
+- Action sheet emits mandate-aware rows: `mandate_missing`,
+  `close_publication_only` with auto-note (No-OA), paper-only auto-note
+  on standard rows; reminders suppressed when data isn't required.
+- Reminder + completion templates updated with `${publication_title}`,
+  `${oa_status}`, `${flags}`, `${data_contact_email}`, etc.
+- New `oa emails`-generated Zenodo cheat sheet
+  (`output/zenodo_cheat/<pub_id>.txt`) for archives at any
+  Zenodo-draft status.
+- New CLI overrides: `oa action <pub> set_data_contact/reset_data_contact/
+  set_zenodo_code/reset_zenodo_code`.
+- New weekly-report section: "Mandate Issues — confirm with PO/IT"
+  plus inline mandate labels on per-archive entries.
