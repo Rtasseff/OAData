@@ -1,11 +1,14 @@
-Subject: Data deposit complete for publication {publication_id}
+Subject: Data deposit complete for publication ${publication_id}
 
-Dear {data_contact_name},
+Dear ${data_contact_name},
 
-The Open Access data deposit for publication {publication_id} ({publication_name}) has been successfully published on Zenodo.
+The Open Access data deposit for publication ${publication_id} ("${publication_title}") has been successfully published on Zenodo.
 
-Dataset DOI: {final_pid}
-Dataset URL: {final_url}
+Dataset DOI: ${final_pid}
+Dataset URL: ${final_url}
+
+Current status in our system: ${oa_status}
+Open Access requirements: ${flags}
 
 The dataset DOI has been linked to your publication record. No further action is required on your part.
 
@@ -13,5 +16,5 @@ Thank you for your contribution to Open Access research data!
 
 Best regards,
 Ryan Tasseff
-Data Officer
+Data Quality Officer
 CIC biomaGUNE

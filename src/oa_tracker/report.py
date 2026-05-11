@@ -5,9 +5,27 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from oa_tracker import db, status as st
 from oa_tracker.config import Config
+
+
+def _mandate_label(archive: dict[str, Any]) -> str:
+    """Short mandate label for inline annotation."""
+    if not archive.get("pub_db_last_refreshed_at"):
+        return "mandate: not yet derived"
+    if archive.get("oa_mandate_missing") == 1:
+        return "mandate: MISSING"
+    data_req = archive.get("oa_data_required")
+    paper_req = archive.get("oa_paper_required")
+    if data_req == 1:
+        return "mandate: Open Data Required"
+    if data_req == 0 and paper_req == 0:
+        return "mandate: No OA"
+    if paper_req == 1:
+        return "mandate: paper-only"
+    return "mandate: ambiguous"
 
 
 def _now() -> datetime:
@@ -56,6 +74,13 @@ def generate_report(config: Config) -> Path:
         # Integrity warnings
         missing_folder = [a for a in open_archives if a["unexpected_missing_folder"]]
 
+        # Mandate issues: every OPEN archive whose pub-DB classification
+        # came back missing. The operator should confirm with PO/IT
+        # before closing or pursuing.
+        mandate_issues = [
+            a for a in open_archives if a.get("oa_mandate_missing") == 1
+        ]
+
         # Recently closed
         recent_events = db.get_recent_events(conn, week_ago)
         recently_closed_ids = {
@@ -73,7 +98,10 @@ def generate_report(config: Config) -> Path:
     lines.append("## New This Week")
     if new_this_week:
         for a in new_this_week:
-            lines.append(f"- **{a['publication_id']}** — {a['status']} (seen {a['first_seen_at']})")
+            lines.append(
+                f"- **{a['publication_id']}** — {a['status']} (seen {a['first_seen_at']})"
+            )
+            lines.append(f"    - {_mandate_label(a)}")
     else:
         lines.append("_None_")
     lines.append("")
@@ -83,6 +111,7 @@ def generate_report(config: Config) -> Path:
     if newly_active:
         for a in newly_active:
             lines.append(f"- **{a['publication_id']}** — active since {a['became_active_at']}")
+            lines.append(f"    - {_mandate_label(a)}")
     else:
         lines.append("_None_")
     lines.append("")
@@ -93,6 +122,7 @@ def generate_report(config: Config) -> Path:
         for a in stuck:
             days = (now - datetime.fromisoformat(a["became_active_at"])).days
             lines.append(f"- **{a['publication_id']}** — active for {days} days")
+            lines.append(f"    - {_mandate_label(a)}")
     else:
         lines.append("_None_")
     lines.append("")
@@ -124,6 +154,22 @@ def generate_report(config: Config) -> Path:
                 f"- **{a['publication_id']}** — folder missing since "
                 f"{a.get('missing_folder_detected_at', 'unknown')}, status: {a['status']}"
             )
+    else:
+        lines.append("_None_")
+    lines.append("")
+
+    # 7. Mandate issues — confirm with PO/IT
+    lines.append("## Mandate Issues — confirm with PO/IT")
+    if mandate_issues:
+        for a in mandate_issues:
+            lines.append(
+                f"- **{a['publication_id']}** — {a['status']}; "
+                f"no mandate derivable (refreshed "
+                f"{a.get('pub_db_last_refreshed_at') or 'unknown'})"
+            )
+            trace = a.get("oa_mandate_source")
+            if trace:
+                lines.append(f"    - trace: `{trace}`")
     else:
         lines.append("_None_")
     lines.append("")

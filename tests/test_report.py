@@ -130,3 +130,63 @@ def test_report_pipeline_view(test_config):
     path = generate_report(test_config)
     content = path.read_text()
     assert "OPEN_ACTIVE: 3" in content
+
+
+# ── Stage 2: Mandate Issues section ───────────────────────────────────
+
+
+def _enriched(db_path, pub_id, status, **enrichment):
+    enrichment.setdefault("pub_db_last_refreshed_at", "2026-05-07T00:00:00")
+    enrichment.setdefault("first_seen_at", "2026-01-01T00:00:00")
+    enrichment.setdefault("last_seen_at", "2026-01-15T00:00:00")
+    from oa_tracker.db import upsert_archive
+    with get_connection(db_path) as conn:
+        upsert_archive(
+            conn,
+            publication_id=pub_id,
+            folder_path=f"/tmp/{pub_id}",
+            status=status,
+            **enrichment,
+        )
+
+
+def test_report_includes_mandate_issues_section_with_missing(test_config):
+    from oa_tracker.status import OPEN_ACTIVE
+    _enriched(
+        test_config.database, "MAND1", OPEN_ACTIVE,
+        oa_mandate_missing=1, oa_data_required=None, oa_paper_required=None,
+        oa_mandate_source="proj=505:unknown",
+    )
+    path = generate_report(test_config)
+    content = path.read_text()
+    assert "## Mandate Issues" in content
+    assert "MAND1" in content
+    assert "no mandate derivable" in content
+    assert "proj=505:unknown" in content
+
+
+def test_report_mandate_issues_empty_when_no_missing(test_config):
+    from oa_tracker.status import OPEN_ACTIVE
+    _enriched(
+        test_config.database, "OK1", OPEN_ACTIVE,
+        oa_mandate_missing=0, oa_data_required=1, oa_paper_required=1,
+    )
+    path = generate_report(test_config)
+    content = path.read_text()
+    # Section header present but empty
+    assert "## Mandate Issues" in content
+    issues_section = content.split("## Mandate Issues")[1].split("##")[0]
+    assert "_None_" in issues_section
+
+
+def test_report_inline_annotation_shows_mandate_label(test_config):
+    from oa_tracker.status import OPEN_ACTIVE
+    _enriched(
+        test_config.database, "ANN1", OPEN_ACTIVE,
+        first_seen_at=_now_iso(), became_active_at=_now_iso(),
+        oa_mandate_missing=0, oa_data_required=1, oa_paper_required=1,
+    )
+    path = generate_report(test_config)
+    content = path.read_text()
+    # Annotation appears under New This Week / Newly Active entries
+    assert "mandate: Open Data Required" in content

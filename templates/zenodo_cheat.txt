@@ -1,0 +1,30 @@
+Zenodo cheat sheet — Publication ${publication_id}
+==================================================
+
+Title:    ${publication_title}
+DOI:      ${publication_doi}
+Journal:  ${publication_journal} (${publication_year})
+
+Data contact: ${data_contact_email}  (${data_contact_name})
+
+OA requirements:
+  Paper required: ${oa_paper_required}
+  Data required:  ${oa_data_required}
+  Max embargo:    ${max_embargo_months} months
+  Mandate trace:  ${mandate_trace}
+
+Existing repository references:
+  Central DB:      ${central_repository_summary}
+  Our Zenodo code: ${zenodo_code}
+
+  Notes:
+  - "Central DB" reflects whatever repository the publication DB has on
+    file — could be Zenodo, could be GitHub/OSF/etc. Recorded verbatim.
+  - "Our Zenodo code" is what we track for the Zenodo deposit we
+    created (or that we detected was already on file centrally). Use
+    `oa action <pub_id> set_zenodo_code --code <id>` to override.
+
+OneDrive folder: ${folder_path}
+Protocol:        ${protocol_url}
+
+Generated: ${generated_at}

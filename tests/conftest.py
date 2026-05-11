@@ -65,11 +65,22 @@ def tmp_templates(tmp_path):
     tpl_dir = tmp_path / "templates"
     tpl_dir.mkdir()
     (tpl_dir / "reminder.txt").write_text(
-        "Reminder #${reminder_number} for ${publication_id}. "
-        "Status: ${current_status}. Active since: ${became_active_at}."
+        "Reminder #${reminder_number} for ${publication_id} (${publication_title}). "
+        "To: ${data_contact_name} <${data_contact_email}>. "
+        "Status: ${oa_status} (raw: ${current_status}). "
+        "Flags: ${flags}. Active since: ${became_active_at}."
     )
     (tpl_dir / "completion.txt").write_text(
-        "Completed: ${publication_id}. PID: ${final_pid}. URL: ${final_url}."
+        "Completed: ${publication_id} (${publication_title}). "
+        "PID: ${final_pid}. URL: ${final_url}. Status: ${oa_status}. Flags: ${flags}."
+    )
+    (tpl_dir / "zenodo_cheat.txt").write_text(
+        "Cheat for ${publication_id} (${publication_title}). "
+        "DOI: ${publication_doi}. Contact: ${data_contact_email}. "
+        "Paper: ${oa_paper_required}; Data: ${oa_data_required}; "
+        "Embargo: ${max_embargo_months}. "
+        "Central: ${central_repository_summary}. Zenodo: ${zenodo_code}. "
+        "Folder: ${folder_path}. Generated: ${generated_at}."
     )
     return tpl_dir
 
