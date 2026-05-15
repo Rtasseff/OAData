@@ -19,6 +19,7 @@ class ScanResult:
     changed: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
+    skipped_non_numeric: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -36,6 +37,12 @@ class ScanResult:
             parts.append(f"  Missing:        {len(self.missing)}")
         if self.unchanged:
             parts.append(f"  Unchanged:      {len(self.unchanged)}")
+        if self.skipped_non_numeric:
+            parts.append(
+                f"  Skipped (non-numeric folder names): {len(self.skipped_non_numeric)}"
+            )
+            for name in self.skipped_non_numeric:
+                parts.append(f"    - {name!r}")
         if self.errors:
             parts.append(f"  Errors:         {len(self.errors)}")
         return "\n".join(parts) if parts else "  No folders found."
@@ -147,6 +154,13 @@ def scan_folders(config: Config) -> ScanResult:
                     continue
 
                 pub_id = folder.name
+                # Publication IDs in the central DB are integer-valued.
+                # Anything that doesn't look like a publication ID (e.g.,
+                # the SharePoint "Attachments" system folder) is flagged
+                # for operator review rather than silently scanned.
+                if not pub_id.isdigit():
+                    result.skipped_non_numeric.append(pub_id)
+                    continue
                 found_ids.add(pub_id)
                 has_files = _folder_has_files(folder)
 

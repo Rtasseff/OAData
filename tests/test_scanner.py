@@ -15,52 +15,52 @@ def test_scan_empty_root(test_config):
 
 
 def test_scan_new_inactive_folder(test_config):
-    (test_config.sharepoint_root / "PUB001").mkdir()
+    (test_config.sharepoint_root / "1001").mkdir()
     result = scan_folders(test_config)
-    assert "PUB001" in result.new_inactive
+    assert "1001" in result.new_inactive
 
     with get_connection(test_config.database) as conn:
-        archive = get_archive(conn, "PUB001")
+        archive = get_archive(conn, "1001")
         assert archive["status"] == "OPEN_INACTIVE"
 
 
 def test_scan_new_active_folder(test_config):
-    pub_dir = test_config.sharepoint_root / "PUB002"
+    pub_dir = test_config.sharepoint_root / "1002"
     pub_dir.mkdir()
     (pub_dir / "data.zip").write_text("content")
 
     result = scan_folders(test_config)
-    assert "PUB002" in result.new_active
+    assert "1002" in result.new_active
 
     with get_connection(test_config.database) as conn:
-        archive = get_archive(conn, "PUB002")
+        archive = get_archive(conn, "1002")
         assert archive["status"] == "OPEN_ACTIVE"
         assert archive["became_active_at"] is not None
         assert archive["next_reminder_at"] is not None
 
 
 def test_scan_activation(test_config):
-    pub_dir = test_config.sharepoint_root / "PUB003"
+    pub_dir = test_config.sharepoint_root / "1003"
     pub_dir.mkdir()
 
     # First scan: inactive
     result = scan_folders(test_config)
-    assert "PUB003" in result.new_inactive
+    assert "1003" in result.new_inactive
 
     # Add a file
     (pub_dir / "readme.txt").write_text("hello")
 
     # Second scan: activated
     result = scan_folders(test_config)
-    assert "PUB003" in result.activated
+    assert "1003" in result.activated
 
     with get_connection(test_config.database) as conn:
-        archive = get_archive(conn, "PUB003")
+        archive = get_archive(conn, "1003")
         assert archive["status"] == "OPEN_ACTIVE"
 
 
 def test_scan_missing_folder(test_config):
-    pub_dir = test_config.sharepoint_root / "PUB004"
+    pub_dir = test_config.sharepoint_root / "1004"
     pub_dir.mkdir()
     (pub_dir / "data.txt").write_text("stuff")
 
@@ -71,16 +71,16 @@ def test_scan_missing_folder(test_config):
     pub_dir.rmdir()
 
     result = scan_folders(test_config)
-    assert "PUB004" in result.missing
+    assert "1004" in result.missing
 
     with get_connection(test_config.database) as conn:
-        archive = get_archive(conn, "PUB004")
+        archive = get_archive(conn, "1004")
         assert archive["unexpected_missing_folder"] == 1
         assert archive["missing_folder_detected_at"] is not None
 
 
 def test_scan_missing_folder_reappears(test_config):
-    pub_dir = test_config.sharepoint_root / "PUB005"
+    pub_dir = test_config.sharepoint_root / "1005"
     pub_dir.mkdir()
     (pub_dir / "data.txt").write_text("stuff")
     scan_folders(test_config)
@@ -96,7 +96,7 @@ def test_scan_missing_folder_reappears(test_config):
     scan_folders(test_config)
 
     with get_connection(test_config.database) as conn:
-        archive = get_archive(conn, "PUB005")
+        archive = get_archive(conn, "1005")
         assert archive["unexpected_missing_folder"] == 0
 
 
@@ -158,13 +158,13 @@ def test_scan_populates_cached_fields_for_new_archive(test_config, monkeypatch):
 
 def test_scan_seeds_data_contact_from_corresponding_author(test_config, monkeypatch):
     _enrich_with(monkeypatch, corresponding_author_name="Foo Bar")
-    pub_dir = test_config.sharepoint_root / "PUB100"
+    pub_dir = test_config.sharepoint_root / "1100"
     pub_dir.mkdir()
 
     scan_folders(test_config)
 
     with get_connection(test_config.database) as conn:
-        a = get_archive(conn, "PUB100")
+        a = get_archive(conn, "1100")
     # Name is seeded from the central DB; email is always TBD until operator sets.
     assert a["data_contact_name"] == "Foo Bar"
     assert a["data_contact_email"] == "TBD"
@@ -173,35 +173,35 @@ def test_scan_seeds_data_contact_from_corresponding_author(test_config, monkeypa
 
 def test_scan_data_contact_email_tbd_when_no_central_author(test_config, monkeypatch):
     _enrich_with(monkeypatch, corresponding_author_name=None)
-    pub_dir = test_config.sharepoint_root / "PUB101"
+    pub_dir = test_config.sharepoint_root / "1101"
     pub_dir.mkdir()
     (pub_dir / "x.txt").write_text("x")
 
     scan_folders(test_config)
 
     with get_connection(test_config.database) as conn:
-        a = get_archive(conn, "PUB101")
+        a = get_archive(conn, "1101")
     assert a["data_contact_name"] is None
     assert a["data_contact_email"] == "TBD"
 
 
 def test_scan_seeds_zenodo_code_only_when_central_repo_is_zenodo(test_config, monkeypatch):
     _enrich_with(monkeypatch, auto_zenodo_code="ABC")
-    pub_dir = test_config.sharepoint_root / "PUB102"
+    pub_dir = test_config.sharepoint_root / "1102"
     pub_dir.mkdir()
     (pub_dir / "y.txt").write_text("y")
 
     scan_folders(test_config)
 
     with get_connection(test_config.database) as conn:
-        a = get_archive(conn, "PUB102")
+        a = get_archive(conn, "1102")
     assert a["zenodo_code"] == "ABC"
 
 
 def test_scan_does_not_overwrite_overridden_data_contact(test_config, monkeypatch):
     """If operator has set data_contact_overridden=1, scan must not re-seed."""
     _enrich_with(monkeypatch, corresponding_author_name="Original Author")
-    pub_dir = test_config.sharepoint_root / "PUB103"
+    pub_dir = test_config.sharepoint_root / "1103"
     pub_dir.mkdir()
     scan_folders(test_config)
 
@@ -209,7 +209,7 @@ def test_scan_does_not_overwrite_overridden_data_contact(test_config, monkeypatc
     with get_connection(test_config.database) as conn:
         conn.execute(
             "UPDATE archives SET data_contact_name=?, data_contact_email=?, data_contact_overridden=1 "
-            "WHERE publication_id='PUB103'",
+            "WHERE publication_id='1103'",
             ("Operator Set", "ops@example.org"),
         )
 
@@ -218,7 +218,7 @@ def test_scan_does_not_overwrite_overridden_data_contact(test_config, monkeypatc
     scan_folders(test_config)
 
     with get_connection(test_config.database) as conn:
-        a = get_archive(conn, "PUB103")
+        a = get_archive(conn, "1103")
     assert a["data_contact_name"] == "Operator Set"
     assert a["data_contact_email"] == "ops@example.org"
     # Cache itself still refreshes — only the operator-managed copy is preserved
@@ -227,13 +227,13 @@ def test_scan_does_not_overwrite_overridden_data_contact(test_config, monkeypatc
 
 def test_scan_does_not_overwrite_overridden_zenodo_code(test_config, monkeypatch):
     _enrich_with(monkeypatch, auto_zenodo_code="111")
-    pub_dir = test_config.sharepoint_root / "PUB104"
+    pub_dir = test_config.sharepoint_root / "1104"
     pub_dir.mkdir()
     scan_folders(test_config)
 
     with get_connection(test_config.database) as conn:
         conn.execute(
-            "UPDATE archives SET zenodo_code=?, zenodo_code_overridden=1 WHERE publication_id='PUB104'",
+            "UPDATE archives SET zenodo_code=?, zenodo_code_overridden=1 WHERE publication_id='1104'",
             ("operator_override",),
         )
 
@@ -241,7 +241,7 @@ def test_scan_does_not_overwrite_overridden_zenodo_code(test_config, monkeypatch
     scan_folders(test_config)
 
     with get_connection(test_config.database) as conn:
-        a = get_archive(conn, "PUB104")
+        a = get_archive(conn, "1104")
     assert a["zenodo_code"] == "operator_override"
 
 
@@ -251,17 +251,17 @@ def test_scan_continues_when_pub_db_unreachable(test_config, monkeypatch):
         raise ConnectionError("simulated MySQL outage")
     monkeypatch.setattr(pub_db, "get_connection", _fail)
 
-    pub_dir = test_config.sharepoint_root / "PUB105"
+    pub_dir = test_config.sharepoint_root / "1105"
     pub_dir.mkdir()
     (pub_dir / "f.txt").write_text("f")
 
     result = scan_folders(test_config)
 
     assert any("pub-DB unreachable" in e for e in result.errors)
-    assert "PUB105" in result.new_active
+    assert "1105" in result.new_active
 
     with get_connection(test_config.database) as conn:
-        a = get_archive(conn, "PUB105")
+        a = get_archive(conn, "1105")
     # Cached fields stay NULL when pub-DB is down; archive still gets baseline defaults.
     assert a["status"] == "OPEN_ACTIVE"
     assert a["pub_title"] is None
@@ -276,7 +276,7 @@ def test_scan_per_pub_lookup_failure_does_not_stop_other_archives(test_config, m
 
     def _flaky(_conn, pub_id):
         calls["n"] += 1
-        if pub_id == "BAD":
+        if pub_id == "9001":
             raise RuntimeError("boom")
         return pub_db.CachedPubFields(
             pub_title=f"title-{pub_id}", pub_doi=None, pub_journal=None, pub_year=None,
@@ -289,18 +289,18 @@ def test_scan_per_pub_lookup_failure_does_not_stop_other_archives(test_config, m
         )
     monkeypatch.setattr(pub_db, "enrich_archive", _flaky)
 
-    (test_config.sharepoint_root / "BAD").mkdir()
-    (test_config.sharepoint_root / "GOOD").mkdir()
+    (test_config.sharepoint_root / "9001").mkdir()
+    (test_config.sharepoint_root / "9002").mkdir()
     result = scan_folders(test_config)
 
-    assert "BAD" in result.new_inactive
-    assert "GOOD" in result.new_inactive
-    assert any("BAD" in e for e in result.errors)
+    assert "9001" in result.new_inactive
+    assert "9002" in result.new_inactive
+    assert any("9001" in e for e in result.errors)
 
     with get_connection(test_config.database) as conn:
-        good = get_archive(conn, "GOOD")
-        bad = get_archive(conn, "BAD")
-    assert good["pub_title"] == "title-GOOD"
+        good = get_archive(conn, "9002")
+        bad = get_archive(conn, "9001")
+    assert good["pub_title"] == "title-9002"
     assert bad["pub_title"] is None  # enrichment failed but row still created
 
 
@@ -376,6 +376,32 @@ def test_migration_v1_to_v2_adds_columns(tmp_path):
         assert row["zenodo_code_overridden"] == 0
     finally:
         conn.close()
+
+
+def test_scan_skips_non_numeric_folder_with_warning(test_config):
+    """SharePoint system folders (e.g. 'Attachments') are not real
+    publication IDs; the scanner should skip them and surface them in
+    the result's skipped_non_numeric list so the operator sees them."""
+    (test_config.sharepoint_root / "Attachments").mkdir()
+    (test_config.sharepoint_root / "3092").mkdir()
+    (test_config.sharepoint_root / "PUB-WITH-DASH").mkdir()
+
+    result = scan_folders(test_config)
+
+    assert "Attachments" in result.skipped_non_numeric
+    assert "PUB-WITH-DASH" in result.skipped_non_numeric
+    assert "3092" not in result.skipped_non_numeric
+    assert "3092" in result.new_inactive  # numeric → still scanned
+
+    # Summary mentions the skipped folders so it lands on the terminal
+    assert "non-numeric" in result.summary.lower()
+    assert "Attachments" in result.summary
+
+    # No archive row was created for the skipped folder
+    with get_connection(test_config.database) as conn:
+        assert get_archive(conn, "Attachments") is None
+        assert get_archive(conn, "PUB-WITH-DASH") is None
+        assert get_archive(conn, "3092") is not None
 
 
 def test_init_db_is_idempotent(tmp_path):
