@@ -74,7 +74,18 @@ def _mandate_classification(archive: dict[str, Any]) -> tuple[str, str]:
             "processing as if data were required.",
         )
 
-    return ("data_required", "")
+    if data_req == 1:
+        return ("data_required", "")
+
+    # Anything else (mix of `no_oa` + `unknown` contributions, or any
+    # state where we can't conclude data_req=1 or data_req=0+paper_req=0
+    # or paper-only) is ambiguous. Surface it like a missing mandate so
+    # the operator can confirm with PO/IT before doing anything.
+    return (
+        "mandate_missing",
+        "Mandate signal ambiguous (mixed no-OA and unknown projects) — "
+        "confirm with PO/IT before closing or pursuing.",
+    )
 
 
 def _row(archive: dict[str, Any], task_code: str, task_text: str, note: str = "") -> dict[str, str]:

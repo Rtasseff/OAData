@@ -215,6 +215,19 @@ def test_data_required_archive_emits_standard_workflow(test_config):
     assert qa_row["note"] == ""  # no auto-note for plain data-required
 
 
+def test_ambiguous_mix_treated_as_mandate_missing(test_config):
+    """no_oa + unknown contributions → data_req=None, paper_req=None,
+    mandate_missing=0. Sheet should still surface as needs-confirmation."""
+    _enriched_insert(
+        test_config.database, "PUB207", OPEN_ACTIVE,
+        oa_mandate_missing=0, oa_data_required=None, oa_paper_required=None,
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    assert len(rows) == 1
+    assert rows[0]["task_code"] == "mandate_missing"
+    assert "ambiguous" in rows[0]["note"].lower()
+
+
 def test_unclassified_archive_uses_legacy_behavior(test_config):
     """Archives without pub_db_last_refreshed_at (no enrichment ever) keep old flow."""
     # Note: _insert (not _enriched_insert) — no refreshed timestamp
