@@ -51,14 +51,10 @@ _AEI_PATTERN = re.compile(r"^(PID|PDC|TED)\d{4}-")
 # corresponding author" (-1) or "no author info recorded" (0).
 _NO_AUTHOR_SENTINELS = {-1, 0}
 
-# How recent a mdm_personal snapshot must be to be trusted. The table is
-# a per-year snapshot — each employee gets a new row every cyear with a
-# new id — and publi_corr_auth.id_user frequently points at long-stale
-# snapshots (e.g. pub 3194 in 2025 points at CONDE's cyear=2017 row, an
-# employee who left in Feb 2017). Snapshots older than this cutoff are
-# treated as misattributions; the operator overrides via `oa action
-# <pub> set_data_contact`.
-_AUTHOR_SNAPSHOT_MAX_AGE_YEARS = 2
+# Institutional email convention. CIC biomaGUNE accounts follow the
+# pattern <center_user.username>@<domain>. Verified against multiple
+# users: alcortajarena, mliutkus, pblesio, mprato, scarregal, etc.
+_EMAIL_DOMAIN = "cicbiomagune.es"
 
 # Repository name used for auto-seeding the operator-managed
 # zenodo_code column. Other repository names are still recorded
@@ -226,22 +222,25 @@ def derive_oa_requirement(
 def lookup_corresponding_author(conn, pub_id: str) -> tuple[str | None, str | None]:
     """Return ``(name, email)`` of the corresponding author, or ``(None, None)``.
 
-    Note: ``mdm_personal`` has no email column in the central DB, and
-    no personnel-email table joins to it. Email is therefore always
-    ``None`` here; the operator manages ``data_contact_email`` directly
-    (defaulting to ``'TBD'`` until set).
+    ``publi_corr_auth.id_user`` joins to **``center_user.id_user``** —
+    NOT to ``mdm_personal.id``. The two tables happen to overlap by
+    coincidence (mdm_personal is a per-year snapshot whose row PK is
+    unrelated to ``center_user.id_user``), which caused months of
+    silently-wrong author lookups. ``center_user`` is the canonical
+    persistent personnel table, with one row per current person and a
+    stable ``id_user``. The intranet edit page itself does this same
+    join (visible in the page's ``arrayCorresponding`` JS).
 
-    A ``publi_corr_auth.id_user`` value of ``-1`` or ``0`` is the
-    sentinel for "no biomaGUNE author" — treated the same as no record.
+    Email is derived from ``center_user.username`` plus the institutional
+    domain (``alcortajarena → alcortajarena@cicbiomagune.es``).
 
-    Defensive filter: ``mdm_personal`` is a per-year snapshot table.
-    Many ``publi_corr_auth`` rows point at stale snapshots — e.g. pub
-    3194 points at CONDE's 2017 row even though the publication is from
-    2025 and the actual author is someone else entirely. We reject
-    snapshots older than ``_AUTHOR_SNAPSHOT_MAX_AGE_YEARS`` years and
-    return ``None`` so the operator overrides via
-    ``oa action <pub> set_data_contact`` rather than auto-emailing a
-    long-departed employee.
+    Sentinels: ``id_user`` of ``-1`` or ``0`` means "no biomaGUNE
+    corresponding author" — return ``(None, None)`` and let the operator
+    fill in via ``oa action <pub> set_data_contact``.
+
+    Departed staff: filtered out when ``center_user.endDate`` is in the
+    past. The publi_corr_auth row may still point at them, but for our
+    purposes they're no longer reachable; operator overrides.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -254,21 +253,27 @@ def lookup_corresponding_author(conn, pub_id: str) -> tuple[str | None, str | No
         uid = row["id_user"]
         if uid is None or uid in _NO_AUTHOR_SENTINELS:
             return (None, None)
-        cur.execute("SELECT name, cyear FROM mdm_personal WHERE id = %s", (uid,))
+        cur.execute(
+            "SELECT name, username, endDate FROM center_user WHERE id_user = %s",
+            (uid,),
+        )
         m = cur.fetchone()
         if not m:
-            return (None, None)  # dangling id_user (no matching row)
-        if m["cyear"] is not None:
-            # Reject snapshots that are too old relative to the latest
-            # snapshot in the table — not relative to today's year. The
-            # central DB lags by ~2 years (latest cyear is 2023 even in
-            # 2026), so a "today-relative" cutoff would discard every
-            # current person.
-            cur.execute("SELECT MAX(cyear) AS max_cyear FROM mdm_personal")
-            mx = cur.fetchone()["max_cyear"]
-            if mx is not None and m["cyear"] < mx - _AUTHOR_SNAPSHOT_MAX_AGE_YEARS:
-                return (None, None)
-        return (m["name"], None)
+            return (None, None)  # not in the personnel table
+        if m["endDate"]:
+            from datetime import date
+            if m["endDate"] < date.today():
+                return (None, None)  # departed
+        name = (m["name"] or None)
+        if name:
+            # The DB stores names with HTML entities (e.g. "Lara
+            # Rodr&iacute;guez Sánchez"). Decode for human-readable
+            # output in emails and the action sheet.
+            import html
+            name = html.unescape(name)
+        username = m["username"]
+        email = f"{username}@{_EMAIL_DOMAIN}" if username else None
+        return (name, email)
 
 
 def lookup_central_repositories(conn, pub_id: str) -> list[tuple[str, str]]:

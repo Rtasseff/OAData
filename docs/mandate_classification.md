@@ -194,6 +194,42 @@ If you find a publication where our `mandate_missing` disagrees with a
 red or blue label, capture the publication ID + the webpage source
 (view-source or save the HTML) and we can extend the rule.
 
+## Corresponding-author lookup (related, lives in the same module)
+
+`pub_db.lookup_corresponding_author(conn, pub_id)` resolves
+`publi_corr_auth.id_user` to a person's current name and email. Two
+critical points about the join, learned the hard way:
+
+1. **`publi_corr_auth.id_user` joins to `center_user.id_user`**, NOT to
+   `mdm_personal.id`. The two tables happen to share an `id`-space that
+   overlaps by coincidence; e.g. `publi_corr_auth.id_user = 91` correctly
+   resolves to *Aitziber López Cortajarena* (`center_user.id_user = 91`,
+   `center_user.id = 52`), but `mdm_personal[id=91]` is an entirely
+   unrelated person (CONDE 2017 snapshot). We were misjoining and got
+   wrong author names for months. The intranet edit page itself uses
+   `center_user.id_user` (see e.g. the `arrayCorresponding` JavaScript
+   variable in any `edit.php?id=<pub>` source).
+2. **`center_user.username + "@cicbiomagune.es"`** gives the institutional
+   email. The convention is consistent across all sampled accounts
+   (`alcortajarena`, `mliutkus`, `pblesio`, `mprato`, `scarregal`, etc.).
+
+Sentinels and special cases:
+
+- `id_user = -1` or `0` → "no biomaGUNE corresponding author" → return
+  `(None, None)`. Operator overrides per pub via
+  `oa action <pub> set_data_contact --email ... --name ...`.
+- `id_user` not present in `center_user` → return `(None, None)`.
+  Person isn't in the canonical personnel table.
+- `center_user.endDate < today` → person has departed → return
+  `(None, None)`.
+- `center_user.name` contains HTML entities (e.g. `Rodr&iacute;guez`).
+  We decode them with `html.unescape` for human-readable output.
+
+`mdm_personal` is NOT used for author resolution. It's a per-year
+snapshot table used elsewhere; its `id` is unstable across years and
+its name format is inconsistent (`empleado` formatting varies). Leave
+it alone.
+
 ## Historical notes
 
 - **First version (2026-05-07)** — regex was `^(PID|PDC)20(2[2-9]|[3-9]\d)-`
@@ -206,7 +242,19 @@ red or blue label, capture the publication ID + the webpage source
   `^(PID|PDC|TED)\d{4}-` after finding that pubs 3105/3195 (TED2021),
   3198 (PDC2021), 3204 (PID2020) were red on the webpage but missed
   by the previous regex (wrong prefix or pre-2022 year).
-- **Fourth version (2026-05-18, afternoon — current)** — switched the
+- **Fifth version (2026-05-18, evening — current)** — replaced the
+  corresponding-author lookup's table from `mdm_personal` to
+  `center_user`, after discovering via the pub 3194 webpage HTML that
+  `publi_corr_auth.id_user` actually FKs to `center_user.id_user`
+  (not `mdm_personal.id`). The two `id`-spaces happen to overlap by
+  coincidence and we were silently returning the wrong people for
+  months. New lookup also derives email from `center_user.username +
+  "@cicbiomagune.es"` (previously the field was always `None`). Live
+  effect: the 14 archives the operator flagged as having wrong
+  contact names now resolve correctly — Aitziber López Cortajarena,
+  Fernando López Gallego, Jesus Ruiz-Cabello, etc. with their
+  matching email addresses.
+- **Fourth version (2026-05-18, afternoon)** — switched the
   `cff_funding` JOIN from `project.id_funding` to `project.id_call`
   after finding that **`project.id_funding` is consistently wrong or
   orphaned** in this DB. Concrete trigger: pub 3259 (SPINETRACER)

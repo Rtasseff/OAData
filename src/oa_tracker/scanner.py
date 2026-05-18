@@ -112,8 +112,10 @@ def _enrichment_kwargs(
     data_contact_overridden = bool(existing and existing.get("data_contact_overridden"))
     if not data_contact_overridden:
         kw["data_contact_name"] = cached.corresponding_author_name
-        # email column is always None from the central DB (no source path),
-        # so default to literal 'TBD' until the operator overrides.
+        # Email is derived from center_user.username plus the
+        # institutional domain when the central DB resolves a current
+        # person; otherwise falls back to literal 'TBD' so the
+        # operator notices and can override.
         kw["data_contact_email"] = cached.corresponding_author_email or "TBD"
 
     zenodo_overridden = bool(existing and existing.get("zenodo_code_overridden"))

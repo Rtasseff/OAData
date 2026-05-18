@@ -231,20 +231,38 @@ def test_derive_unknown_with_paper_only_yields_unknown_data():
 # ── lookup_corresponding_author ──────────────────────────────────────
 
 def test_lookup_corresponding_author_real_user():
-    """publi_corr_auth.id_user → mdm_personal lookup. cyear matches the
-    table's current max cyear, so the snapshot is accepted."""
+    """publi_corr_auth.id_user → center_user.id_user resolves to the
+    person's current name and username-derived email."""
     conn = _conn_with([
-        (r"FROM publi_corr_auth", {"id_user": 84}),
-        (r"FROM mdm_personal WHERE id", {"name": "ALCALÁ CAFFARENA MARÍA", "cyear": 2023}),
-        (r"SELECT MAX\(cyear\)", {"max_cyear": 2023}),
+        (r"FROM publi_corr_auth", {"id_user": 91}),
+        (r"FROM center_user", {
+            "name": "Aitziber López Cortajarena",
+            "username": "alcortajarena",
+            "endDate": None,
+        }),
     ])
-    name, email = pub_db.lookup_corresponding_author(conn, 3097)
-    assert name == "ALCALÁ CAFFARENA MARÍA"
-    assert email is None  # no email column in this DB
+    name, email = pub_db.lookup_corresponding_author(conn, 3194)
+    assert name == "Aitziber López Cortajarena"
+    assert email == "alcortajarena@cicbiomagune.es"
+
+
+def test_lookup_corresponding_author_decodes_html_entities():
+    """Names in center_user.name use HTML entities (e.g. é -> &eacute;).
+    Decode for human-readable output."""
+    conn = _conn_with([
+        (r"FROM publi_corr_auth", {"id_user": 2311}),
+        (r"FROM center_user", {
+            "name": "Lara Rodr&iacute;guez S&aacute;nchez",
+            "username": "lrodriguez",
+            "endDate": None,
+        }),
+    ])
+    name, _ = pub_db.lookup_corresponding_author(conn, 3192)
+    assert name == "Lara Rodríguez Sánchez"
 
 
 def test_lookup_corresponding_author_external_sentinel():
-    """id_user=-1 = external corresponding author (e.g. pub 3092)."""
+    """id_user=-1 = external corresponding author."""
     conn = _conn_with([(r"FROM publi_corr_auth", {"id_user": -1})])
     assert pub_db.lookup_corresponding_author(conn, 3092) == (None, None)
 
@@ -265,49 +283,60 @@ def test_lookup_corresponding_author_user_id_null():
     assert pub_db.lookup_corresponding_author(conn, 1) == (None, None)
 
 
-def test_lookup_corresponding_author_dangling_id_user():
-    """publi_corr_auth points at an id_user that doesn't exist in
-    mdm_personal — observed in real data (e.g. pub 3192, 3241)."""
+def test_lookup_corresponding_author_not_in_center_user():
+    """publi_corr_auth points at an id_user that has no center_user row —
+    person was deleted from personnel or never indexed there."""
     conn = _conn_with([
-        (r"FROM publi_corr_auth", {"id_user": 2311}),
-        (r"FROM mdm_personal", None),
+        (r"FROM publi_corr_auth", {"id_user": 999999}),
+        (r"FROM center_user", None),
     ])
     assert pub_db.lookup_corresponding_author(conn, 1) == (None, None)
 
 
-def test_lookup_corresponding_author_rejects_stale_snapshot():
-    """mdm_personal is per-year; publi_corr_auth frequently points at
-    snapshots from departed employees (e.g. pub 3194 → CONDE cyear=2017
-    for a 2025 paper). We reject snapshots older than the cutoff
-    measured against the central DB's own latest cyear."""
+def test_lookup_corresponding_author_rejects_departed():
+    """center_user.endDate in the past means the person has left the
+    institute. Skip — operator overrides per pub if they have a
+    different contact for the publication."""
+    from datetime import date, timedelta
+    departed = date.today() - timedelta(days=30)
     conn = _conn_with([
-        (r"FROM publi_corr_auth", {"id_user": 91}),
-        (r"FROM mdm_personal WHERE id", {"name": "CONDE  MENDIZÁBAL EGOITZ", "cyear": 2017}),
-        (r"SELECT MAX\(cyear\)", {"max_cyear": 2023}),
+        (r"FROM publi_corr_auth", {"id_user": 100}),
+        (r"FROM center_user", {
+            "name": "Departed Person",
+            "username": "dperson",
+            "endDate": departed,
+        }),
     ])
-    assert pub_db.lookup_corresponding_author(conn, 3194) == (None, None)
+    assert pub_db.lookup_corresponding_author(conn, 1) == (None, None)
 
 
-def test_lookup_corresponding_author_accepts_edge_snapshot():
-    """Snapshot at exactly max_cyear - 2 is still accepted."""
+def test_lookup_corresponding_author_future_enddate_still_active():
+    """endDate set in the future means the person is still active
+    (contract running, etc.) — accept normally."""
+    from datetime import date, timedelta
+    future = date.today() + timedelta(days=180)
     conn = _conn_with([
-        (r"FROM publi_corr_auth", {"id_user": 1930}),
-        (r"FROM mdm_personal WHERE id", {"name": "LÓPEZ CORTAJARENA AITZIBER", "cyear": 2021}),
-        (r"SELECT MAX\(cyear\)", {"max_cyear": 2023}),
+        (r"FROM publi_corr_auth", {"id_user": 101}),
+        (r"FROM center_user", {
+            "name": "Active Person",
+            "username": "aperson",
+            "endDate": future,
+        }),
     ])
-    name, _ = pub_db.lookup_corresponding_author(conn, 1)
-    assert name == "LÓPEZ CORTAJARENA AITZIBER"
+    name, email = pub_db.lookup_corresponding_author(conn, 1)
+    assert name == "Active Person"
+    assert email == "aperson@cicbiomagune.es"
 
 
-def test_lookup_corresponding_author_null_cyear_accepted():
-    """A row with NULL cyear is unusual but shouldn't be rejected — we
-    only reject when we KNOW the snapshot is too old."""
+def test_lookup_corresponding_author_no_username():
+    """A center_user row with NULL username yields a name but no email."""
     conn = _conn_with([
         (r"FROM publi_corr_auth", {"id_user": 1}),
-        (r"FROM mdm_personal WHERE id", {"name": "Some Name", "cyear": None}),
+        (r"FROM center_user", {"name": "No Username", "username": None, "endDate": None}),
     ])
-    name, _ = pub_db.lookup_corresponding_author(conn, 1)
-    assert name == "Some Name"
+    name, email = pub_db.lookup_corresponding_author(conn, 1)
+    assert name == "No Username"
+    assert email is None
 
 
 # ── lookup_central_repositories ──────────────────────────────────────
@@ -383,7 +412,7 @@ def test_enrich_archive_with_zenodo_central():
             {"proj_id": 1, "project_code": None, "mandate_id": 1},
         ]),
         (r"FROM publi_corr_auth", {"id_user": 84}),
-        (r"FROM mdm_personal WHERE id", {"name": "Author Name", "cyear": None}),
+        (r"FROM center_user", {"name": "Author Name", "username": "anauthor", "endDate": None}),
         (r"FROM repo_publis", [{"name": "Zenodo", "code": "999"}]),
     ])
     fields = pub_db.enrich_archive(conn, 1)
