@@ -34,14 +34,28 @@ SELECT pp.id_project AS proj_id,
        cf.id_oa_mandate AS mandate_id
   FROM project_publis pp
   LEFT JOIN project p      ON p.id  = pp.id_project
-  LEFT JOIN cff_funding cf ON cf.id = p.id_funding
+  LEFT JOIN cff_funding cf ON cf.id = p.id_call
  WHERE pp.id_publi = %s
 ```
 
 `project_publis` is the many-to-many table that links a publication to
-its associated projects. The `LEFT JOIN`s mean an orphaned
-`project.id_funding` (no matching `cff_funding` row) doesn't drop the
-project — `mandate_id` just comes back NULL.
+its associated projects. We join `cff_funding` via `project.id_call`
+(the FK to the specific call the project applied to), **not** via
+`project.id_funding`. The `id_funding` column on the `project` table
+is empirically unreliable: it's often orphaned (no matching
+`cff_funding` row) or it points to a completely different funder than
+the call the project was actually awarded under.
+
+Concrete example: project `SPINETRACER` (id=1656) has
+`id_funding=250` (Michael J. Fox Foundation) and `id_call=2091`
+(ERC-2024-PoC2 Proof of Concept Grant, mandate=5). The Horizon
+Europe / ERC call is the right one, and the central edit page uses
+`id_call` for its label. We do the same.
+
+The `LEFT JOIN` means a missing `id_call` reference (e.g.,
+`project.id_call = 0` or pointing to a deleted row) doesn't drop the
+project — `mandate_id` just comes back NULL and the project
+contributes `"unknown"` unless Source B fires.
 
 ## Per-project signal (Source A and Source B)
 
@@ -187,15 +201,18 @@ red or blue label, capture the publication ID + the webpage source
 - **Second version (2026-05-15)** — added the "ambiguous mix" case
   (no_oa + unknown projects) as `mandate_missing` rather than
   silently falling through to `data_required`. Caught by pub 3271.
-- **Third version (2026-05-18 — current)** — broadened the regex to
-  `^(PID|PDC|TED)\d{4}-` after finding that:
-  1. The central DB's `cff_oaMandate.id_oa_mandate` is NULL for every
-     AEI grant we have, so the year cutoff wasn't actually filtering
-     anything useful.
-  2. `TED2021-` grants (PRTR-funded ecological transition) are
-     flagged red on the webpage but were missed by the original regex
-     (different prefix AND pre-2022 year).
-  3. `PID2020` and `PDC2021` grants are also flagged red on the
-     webpage despite being pre-2022.
-  Confirmed against pubs 3105/3195 (TED2021), 3198 (PDC2021), 3204
-  (PID2020).
+- **Third version (2026-05-18, morning)** — broadened the regex to
+  `^(PID|PDC|TED)\d{4}-` after finding that pubs 3105/3195 (TED2021),
+  3198 (PDC2021), 3204 (PID2020) were red on the webpage but missed
+  by the previous regex (wrong prefix or pre-2022 year).
+- **Fourth version (2026-05-18, afternoon — current)** — switched the
+  `cff_funding` JOIN from `project.id_funding` to `project.id_call`
+  after finding that **`project.id_funding` is consistently wrong or
+  orphaned** in this DB. Concrete trigger: pub 3259 (SPINETRACER)
+  showed a blue `label-primary` "Yes OA: 0 months, DATA, OA Journal
+  Cost" on the webpage, but our query returned `mandate_id=None`.
+  Direct query showed `project.id_funding=250` is Michael J. Fox
+  Foundation (NULL mandate) while `project.id_call=2091` is the
+  ERC-2024-PoC2 call (mandate=5). The webpage joins on `id_call`.
+  This single change recovered correct mandates for 12 of the 14
+  spurious `mandate_missing` archives on 2026-05-18.

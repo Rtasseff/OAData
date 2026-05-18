@@ -150,6 +150,15 @@ def derive_oa_requirement(
       contributions for the audit log.
     """
     with conn.cursor() as cur:
+        # JOIN cff_funding via project.id_call, NOT project.id_funding.
+        # project.id_funding is empirically unreliable in this DB —
+        # often orphaned (no matching cff_funding row) or pointing to
+        # the wrong call (e.g. project SPINETRACER has id_funding=250
+        # which is Michael J. Fox Foundation, but id_call=2091 which
+        # is ERC-2024-PoC2 with mandate=5 — and the central edit page
+        # uses the id_call value). This was the cause of 12 of 14
+        # spurious mandate_missing classifications in the 2026-05-18
+        # weekly run. See docs/mandate_classification.md for details.
         cur.execute(
             """
             SELECT pp.id_project AS proj_id,
@@ -157,7 +166,7 @@ def derive_oa_requirement(
                    cf.id_oa_mandate AS mandate_id
               FROM project_publis pp
               LEFT JOIN project p      ON p.id  = pp.id_project
-              LEFT JOIN cff_funding cf ON cf.id = p.id_funding
+              LEFT JOIN cff_funding cf ON cf.id = p.id_call
              WHERE pp.id_publi = %s
             """,
             (pub_id,),
