@@ -34,13 +34,18 @@ _MANDATE_EMBARGO_MONTHS: dict[int, int | None] = {
     1: 0, 2: 6, 3: 6, 4: None, 5: 0,
 }
 
-# Spanish AEI 2022+ pattern. Matches project_code starting with PID20XX-
-# or PDC20XX- where YY is 22-99 (i.e. 2022 onwards). AEI grants from
-# 2022 onwards mandate open access of articles AND data by Spanish law
-# (LCTI reform). Verified against pubs 3092 (PROTHER, ProIMAGE) and
-# 3097 (NEUROGEL); the central edit page renders red "Open Data
-# Required" labels driven by this same rule.
-_AEI_PATTERN = re.compile(r"^(PID|PDC)20(2[2-9]|[3-9]\d)-")
+# Spanish AEI / PRTR project-code pattern. Matches project_code starting
+# with one of the AEI program prefixes (PID = Plan Estatal Proyectos de
+# Investigación, PDC = Pruebas de Concepto, TED = Transición Ecológica
+# y Digital / Plan de Recuperación) followed by a 4-digit year and a
+# dash. The central DB has cff_funding.id_oa_mandate effectively
+# unpopulated for every AEI grant we've seen (PID2019…2024, PDC2021–22,
+# TED2021), so prefix-matching is the only working signal — which is
+# also what the intranet edit page itself does to render its red
+# "Open Data Required" labels. Verified against pubs 3092 (PROTHER,
+# ProIMAGE), 3097 (NEUROGEL), 3105/3195 (TED2021), 3198 (PDC2021),
+# and 3204 (PID2020).
+_AEI_PATTERN = re.compile(r"^(PID|PDC|TED)\d{4}-")
 
 # Sentinel id_user value in publi_corr_auth meaning "no biomaGUNE
 # corresponding author" (publication has only an external author).

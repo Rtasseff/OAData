@@ -1,6 +1,9 @@
 # Technical Spec: OA Tracker + Operator Action Sheet
 
 > Staged automation plan: see [roadmap.md](roadmap.md).
+>
+> Mandate classification (how we decide if a publication needs data
+> archiving): see [mandate_classification.md](mandate_classification.md).
 
 ## 1. Components
 

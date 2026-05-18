@@ -115,6 +115,11 @@ The `task_code` column in `action_sheet.tsv` identifies the **action you are bei
 
 ### Stage-2 mandate-aware behavior
 
+> Full classification rules — sources, queries, prefix list,
+> aggregation logic, and how to extend when the webpage disagrees:
+> see [mandate_classification.md](mandate_classification.md).
+
+
 After connectivity to the central publication DB (Stage 2), each scan
 caches per-archive OA-mandate flags on the `archives` row. The sheet
 adapts its output based on the cached classification:

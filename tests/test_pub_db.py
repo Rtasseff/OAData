@@ -70,16 +70,24 @@ def _conn_with(responses: list[tuple[str, list[dict] | dict | None]]):
         (3, None, "paper_only", 6),
         (4, None, "no_oa", None),
         (5, None, "data", 0),
-        # Source B — Spanish AEI 2022+ pattern
+        # Source B — Spanish AEI / PRTR codes (any year). Every PID/PDC/
+        # TED project we've seen in the live DB has cff_oaMandate=NULL,
+        # so prefix-matching is the only signal (matches what the
+        # intranet edit page does to render red labels).
         (None, "PID2022-137977OB-I00", "data", 0),
         (None, "PDC2022-133345-I00", "data", 0),
         (None, "PID2025-XXXXX", "data", 0),
         (None, "PID2099-XXXXX", "data", 0),
-        # Pre-2022 AEI does not match
-        (None, "PID2021-12345", "unknown", None),
-        (None, "PID2020-12345", "unknown", None),
+        # AEI grants from earlier years (PID2019/2020/2021, PDC2021,
+        # TED2021) confirmed data-required on the central webpage.
+        (None, "PID2020-117656RB-I00", "data", 0),
+        (None, "PID2019-111649RB-I00", "data", 0),
+        (None, "PDC2021-121696-I00", "data", 0),
+        (None, "TED2021-129852B-C21", "data", 0),
         # Non-AEI codes
         (None, "MDM-2017-0720", "unknown", None),
+        (None, "RYC2024-048755-I", "unknown", None),  # Ramón y Cajal fellowship
+        (None, "PRE2019-089068", "unknown", None),    # pre-doctoral fellowship
         (None, "100010434", "unknown", None),
         (None, "AXA Chair in Nanobiotechnology", "unknown", None),
         # AEI takes precedence even when cff_oaMandate disagrees
