@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from string import Template
 from typing import Any
 
 from oa_tracker import db, status as st
 from oa_tracker.config import Config
+
+
+# Window for re-generating completion drafts after closure. This catches
+# archives that used the done=2 shortcut and bypassed OPEN_ZENODO_PUBLISHED
+# entirely — the operator still needs a completion email to send to the
+# data contact, and the draft is regenerated each weekly run until the
+# closure ages past this window.
+_RECENT_CLOSURE_DAYS = 14
 
 
 _STATUS_FRIENDLY = {
@@ -185,8 +193,7 @@ def generate_emails(config: Config) -> list[Path]:
             draft_path.write_text(content)
             generated.append(draft_path)
 
-        published = db.get_all_archives(conn, status_filter=st.OPEN_ZENODO_PUBLISHED)
-        for archive in published:
+        def _write_completion_draft(archive: dict[str, Any]) -> None:
             pub_id = archive["publication_id"]
             draft_path = drafts_dir / f"completion_{pub_id}.txt"
             vars_ = _common_template_vars(archive)
@@ -195,6 +202,36 @@ def generate_emails(config: Config) -> list[Path]:
             content = completion_tpl.safe_substitute(**vars_)
             draft_path.write_text(content)
             generated.append(draft_path)
+
+        # 1) Archives published on Zenodo but not yet closed — operator
+        # is mid-flow and needs the email to send out.
+        for archive in db.get_all_archives(conn, status_filter=st.OPEN_ZENODO_PUBLISHED):
+            _write_completion_draft(archive)
+
+        # 2) Archives that were fully closed (CLOSED_DATA_ARCHIVED) in the
+        # recent window. Covers the done=2 shortcut path where the
+        # archive jumps straight to closed without going through
+        # OPEN_ZENODO_PUBLISHED. We use the events log to find the
+        # closure timestamp because `last_changed_at` isn't always
+        # updated on closure events (full_closure / folder_removed don't
+        # touch it). After _RECENT_CLOSURE_DAYS the draft stops
+        # regenerating; if the operator still needs it later they can
+        # craft the email by hand from the archive's recorded
+        # final_pid/final_url.
+        cutoff = (datetime.now() - timedelta(days=_RECENT_CLOSURE_DAYS)).isoformat(
+            timespec="seconds"
+        )
+        recent_close_events = db.get_recent_events(conn, cutoff)
+        recently_closed_pubs = {
+            e["publication_id"] for e in recent_close_events
+            if e["new_status"] == st.CLOSED_DATA_ARCHIVED
+        }
+        for archive in db.get_all_archives(conn, status_filter=st.CLOSED_DATA_ARCHIVED):
+            if archive["publication_id"] not in recently_closed_pubs:
+                continue
+            if not archive.get("final_pid"):
+                continue  # nothing to communicate to the data contact
+            _write_completion_draft(archive)
 
         # Zenodo cheat sheets — one per archive in any draft-stage status.
         if cheat_tpl is not None:

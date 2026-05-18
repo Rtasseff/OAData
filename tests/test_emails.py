@@ -214,3 +214,106 @@ def test_cheat_sheet_not_generated_for_other_statuses(test_config):
     _enriched_archive(test_config.database, "PUB701", OPEN_ACTIVE)
     paths = generate_emails(test_config)
     assert not any(p.parent.name == "zenodo_cheat" for p in paths)
+
+
+# ── Stage 2: completion drafts for done=2 / recently-closed archives ──
+
+
+def _insert_closed_archive(db_path, pub_id, final_pid, closed_at):
+    """Insert a CLOSED_DATA_ARCHIVED archive and a closure event."""
+    from oa_tracker.db import insert_event
+    from oa_tracker.status import CLOSED_DATA_ARCHIVED, OPEN_READY_FOR_ZENODO_DRAFT
+    with get_connection(db_path) as conn:
+        upsert_archive(
+            conn,
+            publication_id=pub_id,
+            folder_path=f"/tmp/{pub_id}",
+            first_seen_at="2026-01-01T00:00:00",
+            last_seen_at="2026-01-15T00:00:00",
+            became_active_at="2026-01-05T00:00:00",
+            status=CLOSED_DATA_ARCHIVED,
+            final_pid=final_pid,
+            final_url=f"https://zenodo.org/records/{final_pid.split('.')[-1]}",
+            pub_db_last_refreshed_at="2026-05-15T00:00:00",
+            data_contact_email="x@y",
+            data_contact_name="X",
+            pub_title="A real publication",
+        )
+        # The closure event drives the recent-window check.
+        conn.execute(
+            "INSERT INTO events (ts, publication_id, action_code, old_status, new_status, pid, source) "
+            "VALUES (?, ?, 'full_closure', ?, ?, ?, 'action_sheet')",
+            (closed_at, pub_id, OPEN_READY_FOR_ZENODO_DRAFT, CLOSED_DATA_ARCHIVED, final_pid),
+        )
+
+
+def test_completion_draft_generated_for_recently_closed_via_done2(test_config):
+    from datetime import datetime, timedelta
+    recent = (datetime.now() - timedelta(days=2)).isoformat(timespec="seconds")
+    _insert_closed_archive(test_config.database, "PUB800", "10.5281/zenodo.111", recent)
+
+    paths = generate_emails(test_config)
+    completion = [p for p in paths if p.name == "completion_PUB800.txt"]
+    assert len(completion) == 1
+    content = completion[0].read_text()
+    assert "PUB800" in content
+    assert "10.5281/zenodo.111" in content
+
+
+def test_completion_draft_not_generated_for_old_closure(test_config):
+    """Closure older than the recent window → no draft."""
+    from datetime import datetime, timedelta
+    old = (datetime.now() - timedelta(days=30)).isoformat(timespec="seconds")
+    _insert_closed_archive(test_config.database, "PUB801", "10.5281/zenodo.222", old)
+
+    paths = generate_emails(test_config)
+    assert not any(p.name == "completion_PUB801.txt" for p in paths)
+
+
+def test_completion_draft_not_generated_for_closed_without_pid(test_config):
+    """CLOSED_DATA_ARCHIVED is unusual without a PID, but defensively skip
+    if final_pid is missing — there's nothing to communicate."""
+    from datetime import datetime, timedelta
+    from oa_tracker.db import insert_event
+    from oa_tracker.status import CLOSED_DATA_ARCHIVED, OPEN_READY_FOR_ZENODO_DRAFT
+    recent = (datetime.now() - timedelta(days=1)).isoformat(timespec="seconds")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(
+            conn,
+            publication_id="PUB802",
+            folder_path="/tmp/PUB802",
+            first_seen_at="2026-01-01T00:00:00",
+            last_seen_at="2026-01-15T00:00:00",
+            status=CLOSED_DATA_ARCHIVED,
+            final_pid=None,
+        )
+        conn.execute(
+            "INSERT INTO events (ts, publication_id, action_code, old_status, new_status, source) "
+            "VALUES (?, 'PUB802', 'full_closure', ?, ?, 'action_sheet')",
+            (recent, OPEN_READY_FOR_ZENODO_DRAFT, CLOSED_DATA_ARCHIVED),
+        )
+    paths = generate_emails(test_config)
+    assert not any(p.name == "completion_PUB802.txt" for p in paths)
+
+
+def test_completion_draft_not_generated_for_closed_exception(test_config):
+    """CLOSED_EXCEPTION is a different kind of close; no completion email."""
+    from datetime import datetime, timedelta
+    from oa_tracker.status import CLOSED_EXCEPTION, OPEN_ACTIVE
+    recent = (datetime.now() - timedelta(days=1)).isoformat(timespec="seconds")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(
+            conn,
+            publication_id="PUB803",
+            folder_path="/tmp/PUB803",
+            first_seen_at="2026-01-01T00:00:00",
+            last_seen_at="2026-01-15T00:00:00",
+            status=CLOSED_EXCEPTION,
+        )
+        conn.execute(
+            "INSERT INTO events (ts, publication_id, action_code, old_status, new_status, source) "
+            "VALUES (?, 'PUB803', 'close_exception', ?, ?, 'action_sheet')",
+            (recent, OPEN_ACTIVE, CLOSED_EXCEPTION),
+        )
+    paths = generate_emails(test_config)
+    assert not any(p.name == "completion_PUB803.txt" for p in paths)
