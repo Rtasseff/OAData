@@ -160,8 +160,9 @@ all.
 |---|---|---|
 | `oa_data_required = 1` | Standard pipeline row (qa_pass, etc.) + reminders | (none) |
 | `oa_data_required = 0` AND `oa_paper_required = 0` | One `close_publication_only` row, no reminders | `"No OA mandate on linked project(s); no data archiving required."` |
-| `oa_data_required = 0` AND `oa_paper_required = 1` (paper-only) | Standard pipeline + reminders suppressed | `"PAPER ONLY: data not required by mandate; processing as if data were required."` |
-| `oa_data_required = NULL` AND `oa_paper_required = 1` (paper-only with some unknowns) | Same as paper-only | Same as above |
+| `oa_data_required = 0` AND `oa_paper_required = 1` (paper-only) AND status is `OPEN_INACTIVE` | One `close_publication_only` row | `"PAPER ONLY mandate: data not required and folder still empty — consider closing as publication-only."` |
+| `oa_data_required = 0` AND `oa_paper_required = 1` (paper-only) AND status is `OPEN_ACTIVE` or later | Standard pipeline + reminders suppressed | `"PAPER ONLY: data not required by mandate; processing as if data were required."` |
+| `oa_data_required = NULL` AND `oa_paper_required = 1` (paper-only with some unknowns) | Same as paper-only (above two rows by status) | Same as above |
 | `oa_mandate_missing = 1` | One `mandate_missing` row, no pipeline, no reminders | `"No mandate found in cff_oaMandate or AEI rule — investigate before closing."` |
 | `oa_data_required = NULL` AND `oa_paper_required = NULL` AND `oa_mandate_missing = 0` (ambiguous mix of no_oa and unknown projects) | `mandate_missing` row | `"Mandate signal ambiguous (mixed no-OA and unknown projects) — confirm with PO/IT before closing or pursuing."` |
 | No `pub_db_last_refreshed_at` (legacy / scan never reached pub-DB) | Legacy behavior — standard pipeline | (none) |

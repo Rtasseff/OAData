@@ -145,6 +145,25 @@ def generate_sheet(config: Config) -> Path:
                 ))
                 continue
 
+            # Paper-only archives that sit empty (OPEN_INACTIVE) have no
+            # natural next action — reminders are suppressed because the
+            # mandate doesn't require data, and there's no pipeline row
+            # to emit. Surface a close_publication_only row so the
+            # operator can choose to close (or leave done=0 to wait).
+            # Once the folder activates (OPEN_ACTIVE), we fall through
+            # to the normal pipeline path with the paper-only side note.
+            if category == "paper_only" and cur_status == st.OPEN_INACTIVE:
+                rows.append(_row(
+                    archive,
+                    "close_publication_only",
+                    st.TASK_CODES["close_publication_only"]["description"],
+                    note=(
+                        "PAPER ONLY mandate: data not required and folder still empty — "
+                        "consider closing as publication-only."
+                    ),
+                ))
+                continue
+
             # Reminders fire only when data is actually required by mandate
             # (or when we don't have classification info — legacy rows
             # behave as before so existing flows aren't broken).

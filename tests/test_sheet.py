@@ -175,6 +175,22 @@ def test_paper_only_archive_keeps_pipeline_with_note(test_config):
     assert "PAPER ONLY" in r["note"]
 
 
+def test_paper_only_inactive_emits_close_publication_only_row(test_config):
+    """OPEN_INACTIVE paper-only archives have no pipeline next-task and
+    suppressed reminders, so without an explicit close row they'd be
+    invisible on the sheet. Surface a close_publication_only row."""
+    _enriched_insert(
+        test_config.database, "PUB210", OPEN_INACTIVE,
+        oa_mandate_missing=0, oa_data_required=0, oa_paper_required=1,
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["task_code"] == "close_publication_only"
+    assert "PAPER ONLY" in r["note"]
+    assert "folder still empty" in r["note"]
+
+
 def test_paper_only_with_unknown_signals_treated_as_paper_only(test_config):
     """data_req=NULL + paper_req=1 (paper-only with some unknowns)."""
     _enriched_insert(
