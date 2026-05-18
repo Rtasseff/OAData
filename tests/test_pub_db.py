@@ -231,10 +231,12 @@ def test_derive_unknown_with_paper_only_yields_unknown_data():
 # ── lookup_corresponding_author ──────────────────────────────────────
 
 def test_lookup_corresponding_author_real_user():
-    """publi_corr_auth.id_user → mdm_personal lookup."""
+    """publi_corr_auth.id_user → mdm_personal lookup. cyear matches the
+    table's current max cyear, so the snapshot is accepted."""
     conn = _conn_with([
         (r"FROM publi_corr_auth", {"id_user": 84}),
-        (r"FROM mdm_personal", {"name": "ALCALÁ CAFFARENA MARÍA"}),
+        (r"FROM mdm_personal WHERE id", {"name": "ALCALÁ CAFFARENA MARÍA", "cyear": 2023}),
+        (r"SELECT MAX\(cyear\)", {"max_cyear": 2023}),
     ])
     name, email = pub_db.lookup_corresponding_author(conn, 3097)
     assert name == "ALCALÁ CAFFARENA MARÍA"
@@ -247,6 +249,12 @@ def test_lookup_corresponding_author_external_sentinel():
     assert pub_db.lookup_corresponding_author(conn, 3092) == (None, None)
 
 
+def test_lookup_corresponding_author_zero_sentinel():
+    """id_user=0 is also a sentinel (no author info recorded)."""
+    conn = _conn_with([(r"FROM publi_corr_auth", {"id_user": 0})])
+    assert pub_db.lookup_corresponding_author(conn, 1) == (None, None)
+
+
 def test_lookup_corresponding_author_no_row():
     conn = _conn_with([(r"FROM publi_corr_auth", None)])
     assert pub_db.lookup_corresponding_author(conn, 1) == (None, None)
@@ -255,6 +263,51 @@ def test_lookup_corresponding_author_no_row():
 def test_lookup_corresponding_author_user_id_null():
     conn = _conn_with([(r"FROM publi_corr_auth", {"id_user": None})])
     assert pub_db.lookup_corresponding_author(conn, 1) == (None, None)
+
+
+def test_lookup_corresponding_author_dangling_id_user():
+    """publi_corr_auth points at an id_user that doesn't exist in
+    mdm_personal — observed in real data (e.g. pub 3192, 3241)."""
+    conn = _conn_with([
+        (r"FROM publi_corr_auth", {"id_user": 2311}),
+        (r"FROM mdm_personal", None),
+    ])
+    assert pub_db.lookup_corresponding_author(conn, 1) == (None, None)
+
+
+def test_lookup_corresponding_author_rejects_stale_snapshot():
+    """mdm_personal is per-year; publi_corr_auth frequently points at
+    snapshots from departed employees (e.g. pub 3194 → CONDE cyear=2017
+    for a 2025 paper). We reject snapshots older than the cutoff
+    measured against the central DB's own latest cyear."""
+    conn = _conn_with([
+        (r"FROM publi_corr_auth", {"id_user": 91}),
+        (r"FROM mdm_personal WHERE id", {"name": "CONDE  MENDIZÁBAL EGOITZ", "cyear": 2017}),
+        (r"SELECT MAX\(cyear\)", {"max_cyear": 2023}),
+    ])
+    assert pub_db.lookup_corresponding_author(conn, 3194) == (None, None)
+
+
+def test_lookup_corresponding_author_accepts_edge_snapshot():
+    """Snapshot at exactly max_cyear - 2 is still accepted."""
+    conn = _conn_with([
+        (r"FROM publi_corr_auth", {"id_user": 1930}),
+        (r"FROM mdm_personal WHERE id", {"name": "LÓPEZ CORTAJARENA AITZIBER", "cyear": 2021}),
+        (r"SELECT MAX\(cyear\)", {"max_cyear": 2023}),
+    ])
+    name, _ = pub_db.lookup_corresponding_author(conn, 1)
+    assert name == "LÓPEZ CORTAJARENA AITZIBER"
+
+
+def test_lookup_corresponding_author_null_cyear_accepted():
+    """A row with NULL cyear is unusual but shouldn't be rejected — we
+    only reject when we KNOW the snapshot is too old."""
+    conn = _conn_with([
+        (r"FROM publi_corr_auth", {"id_user": 1}),
+        (r"FROM mdm_personal WHERE id", {"name": "Some Name", "cyear": None}),
+    ])
+    name, _ = pub_db.lookup_corresponding_author(conn, 1)
+    assert name == "Some Name"
 
 
 # ── lookup_central_repositories ──────────────────────────────────────
@@ -330,7 +383,7 @@ def test_enrich_archive_with_zenodo_central():
             {"proj_id": 1, "project_code": None, "mandate_id": 1},
         ]),
         (r"FROM publi_corr_auth", {"id_user": 84}),
-        (r"FROM mdm_personal", {"name": "Author Name"}),
+        (r"FROM mdm_personal WHERE id", {"name": "Author Name", "cyear": None}),
         (r"FROM repo_publis", [{"name": "Zenodo", "code": "999"}]),
     ])
     fields = pub_db.enrich_archive(conn, 1)

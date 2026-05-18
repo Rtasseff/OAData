@@ -47,9 +47,18 @@ _MANDATE_EMBARGO_MONTHS: dict[int, int | None] = {
 # and 3204 (PID2020).
 _AEI_PATTERN = re.compile(r"^(PID|PDC|TED)\d{4}-")
 
-# Sentinel id_user value in publi_corr_auth meaning "no biomaGUNE
-# corresponding author" (publication has only an external author).
-_NO_AUTHOR_SENTINEL = -1
+# Sentinel id_user values in publi_corr_auth meaning "no biomaGUNE
+# corresponding author" (-1) or "no author info recorded" (0).
+_NO_AUTHOR_SENTINELS = {-1, 0}
+
+# How recent a mdm_personal snapshot must be to be trusted. The table is
+# a per-year snapshot — each employee gets a new row every cyear with a
+# new id — and publi_corr_auth.id_user frequently points at long-stale
+# snapshots (e.g. pub 3194 in 2025 points at CONDE's cyear=2017 row, an
+# employee who left in Feb 2017). Snapshots older than this cutoff are
+# treated as misattributions; the operator overrides via `oa action
+# <pub> set_data_contact`.
+_AUTHOR_SNAPSHOT_MAX_AGE_YEARS = 2
 
 # Repository name used for auto-seeding the operator-managed
 # zenodo_code column. Other repository names are still recorded
@@ -222,9 +231,17 @@ def lookup_corresponding_author(conn, pub_id: str) -> tuple[str | None, str | No
     ``None`` here; the operator manages ``data_contact_email`` directly
     (defaulting to ``'TBD'`` until set).
 
-    A ``publi_corr_auth.id_user`` value of ``-1`` is the sentinel
-    meaning "external corresponding author, not in mdm_personal" —
-    treated the same as no record.
+    A ``publi_corr_auth.id_user`` value of ``-1`` or ``0`` is the
+    sentinel for "no biomaGUNE author" — treated the same as no record.
+
+    Defensive filter: ``mdm_personal`` is a per-year snapshot table.
+    Many ``publi_corr_auth`` rows point at stale snapshots — e.g. pub
+    3194 points at CONDE's 2017 row even though the publication is from
+    2025 and the actual author is someone else entirely. We reject
+    snapshots older than ``_AUTHOR_SNAPSHOT_MAX_AGE_YEARS`` years and
+    return ``None`` so the operator overrides via
+    ``oa action <pub> set_data_contact`` rather than auto-emailing a
+    long-departed employee.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -235,11 +252,23 @@ def lookup_corresponding_author(conn, pub_id: str) -> tuple[str | None, str | No
         if not row:
             return (None, None)
         uid = row["id_user"]
-        if uid == _NO_AUTHOR_SENTINEL or uid is None:
+        if uid is None or uid in _NO_AUTHOR_SENTINELS:
             return (None, None)
-        cur.execute("SELECT name FROM mdm_personal WHERE id = %s", (uid,))
+        cur.execute("SELECT name, cyear FROM mdm_personal WHERE id = %s", (uid,))
         m = cur.fetchone()
-        return (m["name"] if m else None, None)
+        if not m:
+            return (None, None)  # dangling id_user (no matching row)
+        if m["cyear"] is not None:
+            # Reject snapshots that are too old relative to the latest
+            # snapshot in the table — not relative to today's year. The
+            # central DB lags by ~2 years (latest cyear is 2023 even in
+            # 2026), so a "today-relative" cutoff would discard every
+            # current person.
+            cur.execute("SELECT MAX(cyear) AS max_cyear FROM mdm_personal")
+            mx = cur.fetchone()["max_cyear"]
+            if mx is not None and m["cyear"] < mx - _AUTHOR_SNAPSHOT_MAX_AGE_YEARS:
+                return (None, None)
+        return (m["name"], None)
 
 
 def lookup_central_repositories(conn, pub_id: str) -> list[tuple[str, str]]:
