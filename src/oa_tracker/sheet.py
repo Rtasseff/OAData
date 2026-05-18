@@ -164,6 +164,21 @@ def generate_sheet(config: Config) -> Path:
                 ))
                 continue
 
+            # Pipeline task goes FIRST so the operator (or eventual
+            # automation) considers it before a reminder. For OPEN_ACTIVE
+            # this means QA is decided first: if QA passes, status
+            # advances and any reminder row that follows is moot
+            # (apply_actions will skip it with a warning). If QA fails
+            # (operator switches task_code to qa_hold + done=1), status
+            # stays OPEN_ACTIVE and the reminder row is the right next
+            # step — exactly the "QA must precede reminder" rule.
+            next_task = st.next_task_for_status(cur_status)
+            if next_task:
+                meta = st.TASK_CODES[next_task]
+                rows.append(_row(
+                    archive, next_task, meta["description"], note=auto_note,
+                ))
+
             # Reminders fire only when data is actually required by mandate
             # (or when we don't have classification info — legacy rows
             # behave as before so existing flows aren't broken).
@@ -175,13 +190,6 @@ def generate_sheet(config: Config) -> Path:
                 task = "contact_pi_manual" if reached_max else "remind_sent"
                 rows.append(_row(
                     archive, task, st.TASK_CODES[task]["description"],
-                ))
-
-            next_task = st.next_task_for_status(cur_status)
-            if next_task:
-                meta = st.TASK_CODES[next_task]
-                rows.append(_row(
-                    archive, next_task, meta["description"], note=auto_note,
                 ))
 
     with open(sheet_path, "w", newline="") as f:

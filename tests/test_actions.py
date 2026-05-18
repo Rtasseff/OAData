@@ -615,3 +615,39 @@ def test_set_data_contact_logs_audit_event(test_config):
     assert len(relevant) == 1
     assert relevant[0]["source"] == "cli"
     assert "x@y" in relevant[0]["note"]
+
+
+def test_remind_sent_skipped_when_status_no_longer_waiting_for_data(test_config):
+    """If qa_pass moved an archive past OPEN_ACTIVE earlier in the
+    batch, a subsequent remind_sent on the same archive should be
+    skipped with a warning — we don't tick the reminder counter on an
+    archive that's no longer waiting for data."""
+    from oa_tracker.db import update_archive_status
+    _insert_active_archive(test_config.database, "PUB900")
+
+    # Simulate qa_pass having moved it to OPEN_READY_FOR_ZENODO_DRAFT.
+    with get_connection(test_config.database) as conn:
+        update_archive_status(conn, "PUB900", OPEN_READY_FOR_ZENODO_DRAFT)
+
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB900",
+        "current_status": OPEN_READY_FOR_ZENODO_DRAFT,
+        "task_code": "remind_sent",
+        "task_text": "Send reminder",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "1",
+        "done": "1",
+        "pid": "",
+        "url": "",
+        "note": "",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 0
+    assert result.skipped == 1
+    assert any("no longer waiting for data" in w for w in result.warnings)
+
+    # Reminder counter unchanged.
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB900")
+    assert a["reminder_count"] == 0

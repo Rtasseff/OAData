@@ -107,6 +107,23 @@ def test_below_final_slot_still_generates_remind_sent(test_config):
     assert reminder_rows[0]["task_code"] == "remind_sent"
 
 
+def test_pipeline_row_appears_before_reminder_for_same_archive(test_config):
+    """For OPEN_ACTIVE archives with reminders due, qa_pass must appear
+    before remind_sent so QA is considered first. An attentive operator
+    (or automated agent) reads top-down — if QA passes, the reminder
+    row below is moot."""
+    _insert(
+        test_config.database, "PUB210", OPEN_ACTIVE,
+        next_reminder_at="2020-01-01T00:00:00",  # in the past, due
+        reminder_count=1,
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    pub_rows = [r for r in rows if r["publication_id"] == "PUB210"]
+    assert len(pub_rows) == 2
+    assert pub_rows[0]["task_code"] == "qa_pass"
+    assert pub_rows[1]["task_code"] == "remind_sent"
+
+
 def test_generates_reminder_task_when_due(test_config):
     _insert(
         test_config.database, "PUB001", OPEN_ACTIVE,

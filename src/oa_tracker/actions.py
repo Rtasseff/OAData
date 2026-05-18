@@ -188,6 +188,19 @@ def _apply_row(
 
     # Handle remind_sent specially
     if task_code == "remind_sent":
+        # Safety net: if the archive's status has already advanced past
+        # the data-collection stage (e.g. qa_pass earlier in this same
+        # batch moved it to OPEN_READY_FOR_ZENODO_DRAFT), don't tick
+        # the reminder counter — the data is in and there's no one to
+        # remind. The action sheet emits qa_pass before remind_sent so
+        # this case happens naturally on the qa-passes-clean path.
+        if old_status not in (st.OPEN_INACTIVE, st.OPEN_ACTIVE):
+            result.warnings.append(
+                f"{row_label} ({pub_id}): skipping remind_sent — status is "
+                f"{old_status} (no longer waiting for data)"
+            )
+            result.skipped += 1
+            return (False, old_status, None)
         count = archive["reminder_count"] + 1
         next_reminder: str | None = None
         if count < config.reminders.max_reminders:

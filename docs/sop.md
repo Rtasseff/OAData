@@ -182,6 +182,26 @@ The sheet is generated with one row per archive showing the next expected action
 - **To add context:** Write in the `note` column. Notes are preserved in the audit log.
 - **To take an alternate action:** Change `task_code` (and optionally `task_text`) before setting `done=1`. This is mainly relevant at the QA step — see below.
 
+### Row ordering rule for OPEN_ACTIVE archives
+
+When an archive is `OPEN_ACTIVE` with a reminder due, the sheet emits
+**both** a `qa_pass` row and a `remind_sent` row — and they're emitted
+in that order on purpose. **QA is checked before any reminder fires.**
+
+- If QA passes (`qa_pass` with `done=1`), the archive advances to
+  `OPEN_READY_FOR_ZENODO_DRAFT` and the `remind_sent` row below
+  becomes moot. `oa apply` will detect that the status moved and
+  **skip the reminder with a warning** instead of incrementing the
+  reminder counter on an archive that's no longer waiting for data.
+- If QA fails (change `task_code` from `qa_pass` to `qa_hold` with
+  `done=1`), the archive stays `OPEN_ACTIVE` and the `remind_sent`
+  row applies normally on the next line — exactly the "QA failed,
+  data contact needs another nudge" pattern.
+
+This matters for eventual automation: a top-down read of the sheet
+encounters QA before the reminder, so the right decision (do QA
+first) is the obvious one.
+
 ### QA review: branching decision
 
 When an archive is `OPEN_ACTIVE`, the sheet pre-fills `task_code=qa_pass` (the optimistic path). After reviewing the uploaded data:
