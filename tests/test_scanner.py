@@ -378,6 +378,63 @@ def test_migration_v1_to_v2_adds_columns(tmp_path):
         conn.close()
 
 
+def test_scan_schedules_initial_reminder_for_new_inactive_folder(test_config):
+    """A newly-detected empty folder must get next_reminder_at set so it
+    actually shows up on the action sheet — otherwise it sits forever."""
+    (test_config.sharepoint_root / "1010").mkdir()
+    scan_folders(test_config)
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "1010")
+    assert a["status"] == "OPEN_INACTIVE"
+    assert a["next_reminder_at"] is not None  # scheduled, not NULL
+
+
+def test_scan_backfills_reminder_for_legacy_inactive(test_config):
+    """OPEN_INACTIVE archive with NULL next_reminder_at and reminder_count=0
+    (created before the fix) gets backfilled from first_seen_at on next scan."""
+    pub_dir = test_config.sharepoint_root / "1011"
+    pub_dir.mkdir()
+
+    # Insert directly to simulate a pre-fix archive with NULL next_reminder_at
+    with get_connection(test_config.database) as conn:
+        conn.execute("""
+            INSERT INTO archives (publication_id, folder_path, first_seen_at,
+                                  last_seen_at, status, reminder_count,
+                                  next_reminder_at)
+            VALUES (?, ?, ?, ?, ?, ?, NULL)
+        """, ("1011", str(pub_dir), "2026-01-01T00:00:00",
+              "2026-01-15T00:00:00", "OPEN_INACTIVE", 0))
+
+    scan_folders(test_config)
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "1011")
+    assert a["next_reminder_at"] is not None
+    # Backfilled from first_seen_at, not from now — should be old (due).
+    assert a["next_reminder_at"].startswith("2026-01-")
+
+
+def test_scan_does_not_backfill_reminder_when_count_is_nonzero(test_config):
+    """If reminder_count > 0, the archive is in manual-contact territory
+    or otherwise managed — don't backfill, leave next_reminder_at as-is."""
+    pub_dir = test_config.sharepoint_root / "1012"
+    pub_dir.mkdir()
+    with get_connection(test_config.database) as conn:
+        conn.execute("""
+            INSERT INTO archives (publication_id, folder_path, first_seen_at,
+                                  last_seen_at, status, reminder_count,
+                                  next_reminder_at)
+            VALUES (?, ?, ?, ?, ?, ?, NULL)
+        """, ("1012", str(pub_dir), "2026-01-01T00:00:00",
+              "2026-01-15T00:00:00", "OPEN_INACTIVE", 3))
+
+    scan_folders(test_config)
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "1012")
+    assert a["next_reminder_at"] is None  # left alone
+
+
 def test_scan_skips_non_numeric_folder_with_warning(test_config):
     """SharePoint system folders (e.g. 'Attachments') are not real
     publication IDs; the scanner should skip them and surface them in

@@ -60,12 +60,18 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _compute_next_reminder(config: Config, became_active_at: str | None) -> str | None:
-    """Compute the first reminder datetime based on when the folder became active."""
-    if not became_active_at:
+def _compute_next_reminder(config: Config, reference_time: str | None) -> str | None:
+    """Compute the first reminder datetime as ``reference_time + first_reminder_days``.
+
+    ``reference_time`` is the anchor — typically the folder's
+    ``became_active_at`` for archives that have content, or
+    ``first_seen_at`` for archives that have been empty since discovery
+    (OPEN_INACTIVE).
+    """
+    if not reference_time:
         return None
-    active_dt = datetime.fromisoformat(became_active_at)
-    return (active_dt + timedelta(days=config.reminders.first_reminder_days)).isoformat(timespec="seconds")
+    ref_dt = datetime.fromisoformat(reference_time)
+    return (ref_dt + timedelta(days=config.reminders.first_reminder_days)).isoformat(timespec="seconds")
 
 
 def _bool_to_int(b: bool | None) -> int | None:
@@ -199,6 +205,10 @@ def scan_folders(config: Config) -> ScanResult:
                         )
                         result.new_active.append(pub_id)
                     else:
+                        # Schedule the first reminder for the new empty
+                        # folder — the SOP says reminders fire after
+                        # first_reminder_days from discovery if the data
+                        # contact hasn't uploaded yet.
                         db.upsert_archive(
                             conn,
                             publication_id=pub_id,
@@ -206,6 +216,7 @@ def scan_folders(config: Config) -> ScanResult:
                             first_seen_at=now,
                             last_seen_at=now,
                             status=st.OPEN_INACTIVE,
+                            next_reminder_at=_compute_next_reminder(config, now),
                             **enriched,
                         )
                         db.insert_event(
@@ -220,6 +231,21 @@ def scan_folders(config: Config) -> ScanResult:
                     if existing["unexpected_missing_folder"]:
                         updates["unexpected_missing_folder"] = 0
                         updates["missing_folder_detected_at"] = None
+
+                    # Back-compat: archives created before the
+                    # "schedule reminder on first-detection" fix can
+                    # have next_reminder_at = NULL even though they're
+                    # OPEN_INACTIVE with reminder_count=0. Backfill the
+                    # initial reminder from first_seen_at + first_reminder_days
+                    # so they actually surface on the action sheet.
+                    if (
+                        existing["status"] == st.OPEN_INACTIVE
+                        and existing.get("next_reminder_at") is None
+                        and (existing.get("reminder_count") or 0) == 0
+                    ):
+                        updates["next_reminder_at"] = _compute_next_reminder(
+                            config, existing.get("first_seen_at")
+                        )
 
                     if existing["status"] == st.OPEN_INACTIVE and has_files:
                         updates["status"] = st.OPEN_ACTIVE
