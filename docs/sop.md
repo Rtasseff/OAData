@@ -279,6 +279,42 @@ Steps 1–4 are regeneration; steps 5–7 are the real weekly work.
 * After sending, record each sent email on the next action sheet by setting `done=1` on its `remind_sent` row.
 * `oa emails` also writes a **Zenodo cheat sheet** to `output/zenodo_cheat/<pub_id>.txt` for every archive in `OPEN_READY_FOR_ZENODO_DRAFT`, `OPEN_ZENODO_DRAFT_CREATED`, or `OPEN_ZENODO_DRAFT_VALIDATED`. The cheat sheet consolidates publication metadata, OA-mandate flags, data-contact info, the central DB's existing repository reference, and the operator-managed Zenodo code — everything needed to create a Zenodo deposit by hand. (Future Stage 2.5 will automate the Zenodo creation itself; the cheat sheet is the manual interim.)
 
+#### When you create the Zenodo draft
+
+After creating a Zenodo deposit by hand from a cheat sheet, **record
+the deposit's record id back on the archive immediately**, before (or
+together with) advancing the status. That's what makes the cheat sheet
+on the *next* `oa emails` run show your new code under "Our Zenodo
+code" — and what protects you from re-running `oa scan` and getting a
+stale value if the central DB ever records a non-Zenodo repository for
+the same publication.
+
+Two equivalent ways:
+
+```bash
+# (a) one-shot via CLI:
+oa action <pub_id> set_zenodo_code --code <numeric_record_id>
+oa action <pub_id> zenodo_draft_created               # advance status
+
+# (b) on the next weekly action sheet:
+#     - run `oa action <pub_id> set_zenodo_code --code <id>` once
+#       (the override flag persists across scans), then set done=1
+#       on the existing zenodo_draft_created row.
+```
+
+The `--code` is the **numeric Zenodo record id** (e.g. `20268493`), not
+the DOI. The DOI is `10.5281/zenodo.<code>` and is captured later via
+the `final_pid` field when you mark `zenodo_published`. The
+`zenodo_code` we track is set early so the operator-managed view of
+"which Zenodo record does this publication belong to" is correct from
+the moment the draft exists, not only after publication.
+
+If you've already done *everything* — created the deposit, validated,
+published, updated the internal DB, removed the folder — you can skip
+all the intermediate rows and use the full-closure shortcut: edit any
+row for the archive on the action sheet, set `done=2`, paste the
+Zenodo DOI into `pid`, and apply. See §7 "Shortcuts" for the details.
+
 ### 8.4 Final reminder: manual PI contact
 
 When an archive has reached `reminder_count = max_reminders - 1`, the next `oa sheet` run replaces its `remind_sent` row with a `contact_pi_manual` row and `oa emails` **does not** generate a draft for it. At this point the operator must contact the PI directly (personal email, phone, in-person) rather than send another template. Once contact has been made, apply one of the outcomes described in §7 under "Final reminder: manual PI contact."
@@ -316,7 +352,8 @@ oa action 3086 qa_pass --done 2 --pid 10.5281/zenodo.99
 # Stage-2 overrides for the operator-managed fields:
 oa action 3092 set_data_contact --email "real.contact@example.org" --name "Real Contact"
 oa action 3092 reset_data_contact                           # let next scan re-seed
-oa action 3092 set_zenodo_code --code "10298471"            # record the Zenodo record id we created
+oa action 3092 set_zenodo_code --code "10298471"            # record the Zenodo record id immediately
+                                                            # after creating the draft (see §8.3)
 oa action 3092 reset_zenodo_code                            # clear override
 
 # Acknowledge a mandate_missing row after asking the project office:
