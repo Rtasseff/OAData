@@ -81,6 +81,90 @@ All paths are resolved relative to the project root unless absolute.
 
 All commands accept `--config` / `-c` and `--db` overrides.
 
+### Single-archive actions (`oa action`)
+
+`oa action` applies one task to one archive without editing the action sheet — for mid-week one-offs (a PI calls, a single archive needs closure, etc.). It runs through the same validation and shortcut logic as `oa apply`.
+
+General form:
+
+```
+oa action <PUB_ID> <TASK> [--done 1|2] [--pid PID] [--url URL] [--note "..."]
+                          [--email ADDR] [--name NAME] [--code CODE]
+```
+
+Global flags:
+
+- `--done 1` (default) applies the task. `--done 2` is the full-closure shortcut (everything done including folder removal — closes as `CLOSED_DATA_ARCHIVED` if a PID is on record, else `CLOSED_EXCEPTION`).
+- Supplying `--pid` or `--url` on a pipeline task fast-tracks the archive to `OPEN_ZENODO_PUBLISHED` (except for `remind_sent` / `qa_hold`).
+
+**Pipeline tasks** (each requires the matching current status — see [`docs/sop.md`](docs/sop.md) §7):
+
+- `qa_pass` — approve QA on uploaded data → `OPEN_READY_FOR_ZENODO_DRAFT`
+  - `oa action <PUB_ID> qa_pass [--note "..."]`
+- `qa_hold` — flag a QA issue; stays `OPEN_ACTIVE`
+  - `oa action <PUB_ID> qa_hold --note "why it's on hold"`
+- `zenodo_draft_created` — mark Zenodo draft as created → `OPEN_ZENODO_DRAFT_CREATED`
+  - `oa action <PUB_ID> zenodo_draft_created [--note "..."]`
+- `zenodo_validated` — mark Zenodo draft as validated → `OPEN_ZENODO_DRAFT_VALIDATED`
+  - `oa action <PUB_ID> zenodo_validated [--note "..."]`
+- `zenodo_published` — publish Zenodo record → `OPEN_ZENODO_PUBLISHED`
+  - `oa action <PUB_ID> zenodo_published --pid PID [--url URL] [--note "..."]`
+- `db_updated` — internal publication DB updated → `OPEN_DB_UPDATED`
+  - `oa action <PUB_ID> db_updated [--note "..."]`
+- `folder_removed` — SharePoint folder removed; close → `CLOSED_DATA_ARCHIVED`
+  - `oa action <PUB_ID> folder_removed [--note "..."]`
+
+**Closures** (from any `OPEN_*` status):
+
+- `close_publication_only` — no data deposit needed by mandate → `CLOSED_PUBLICATION_ONLY`
+  - `oa action <PUB_ID> close_publication_only [--note "..."]`
+- `close_exception` — closed with exception → `CLOSED_EXCEPTION`
+  - `oa action <PUB_ID> close_exception --note "why this is an exception"`
+
+**No-status-change tasks** (logged to the audit trail; counters / acknowledgments only):
+
+- `remind_sent` — record that a reminder was sent (increments counter)
+  - `oa action <PUB_ID> remind_sent [--note "..."]`
+- `contact_pi_manual` — record the final manual PI contact
+  - `oa action <PUB_ID> contact_pi_manual [--note "..."]`
+- `mandate_missing` — acknowledge that the OA mandate could not be derived
+  - `oa action <PUB_ID> mandate_missing [--note "..."]`
+
+**Operator-managed overrides** (CLI-only; never appear on the action sheet):
+
+- `set_data_contact` — set the data contact; marks it operator-managed so scans won't overwrite
+  - `oa action <PUB_ID> set_data_contact --email ADDR [--name NAME]`
+- `reset_data_contact` — clear the override; next scan re-seeds from the central DB
+  - `oa action <PUB_ID> reset_data_contact`
+- `set_zenodo_code` — record the Zenodo record id (numeric, not the DOI)
+  - `oa action <PUB_ID> set_zenodo_code --code RECORD_ID`
+- `reset_zenodo_code` — clear the override; next scan re-seeds from the central DB
+  - `oa action <PUB_ID> reset_zenodo_code`
+
+Examples:
+
+```bash
+# PI confirmed mid-week; accept the uploaded data as-is
+oa action 3249 qa_pass --note "PI confirmed; accepting as-is"
+
+# Close as exception by directive
+oa action 3105 close_exception --note "Skipped per leadership directive"
+
+# PI delivered data externally; record the PID and fast-track to OPEN_ZENODO_PUBLISHED
+oa action 3097 qa_pass --pid 10.5281/zenodo.42 --url https://zenodo.org/records/42
+
+# Already fully done including folder removal
+oa action 3086 qa_pass --done 2 --pid 10.5281/zenodo.99
+
+# Set a non-default data contact
+oa action 3092 set_data_contact --email "real.contact@example.org" --name "Real Contact"
+
+# Record the Zenodo record id right after creating the draft
+oa action 3092 set_zenodo_code --code "10298471"
+```
+
+See [`docs/sop.md`](docs/sop.md) §7 for task-code semantics and §8.5 for the full `oa action` walkthrough.
+
 ## Documentation
 
 This README is a high-level orientation. The canonical reference for how to operate the tool — status model, task codes, weekly procedure, final-reminder handling, reopening a closed archive — is [`docs/sop.md`](docs/sop.md).
