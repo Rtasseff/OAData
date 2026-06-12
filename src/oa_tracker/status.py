@@ -114,6 +114,48 @@ TASK_CODES = {
         "description": "Clear the Zenodo-code override; auto-seed from central repository next scan",
         "changes_status": False,
     },
+    # ── Parallel track: SharePoint List signals ──────────────────────
+    # Emitted by `oa sharepoint sync` (the pull path) from user edits on
+    # the List. Per feedback_no_auto_state_changes.md they route through
+    # the action sheet first; promotion to auto-apply is per signal class.
+    # See docs/sharepoint_list_design.md § Action routing.
+    "propose_data_contact": {
+        "description": "User suggested a different data contact (review, then set)",
+        "changes_status": False,
+    },
+    "propose_exemption": {
+        "description": "User proposed an exemption (review; closure depends on category)",
+        "changes_status": False,
+    },
+    "propose_done": {
+        "description": "User believes the archive is done (verify before closing)",
+        "changes_status": False,
+    },
+    "user_note": {
+        "description": "User left a note on the List (awareness only — recorded, no action)",
+        "changes_status": False,
+    },
+    # "All data archived elsewhere" exemption: the data IS archived (just
+    # not via our Zenodo pipeline), so it closes as CLOSED_DATA_ARCHIVED
+    # with the EXTERNAL PID/URL recorded — counting in "data archived"
+    # totals rather than as an exception. Requires both a PID and a URL.
+    "close_archived_external": {
+        "description": "Close as archived elsewhere (record external PID + URL)",
+        "changes_status": True,
+        "requires_pid": True,
+    },
+    # CLI-only corresponding-author override (mirrors set/reset_data_contact).
+    # Lets the operator pin an "effective" corresponding author on rows
+    # whose real one is external/blank, so the row surfaces in that
+    # person's corresponding-author view on the List.
+    "set_corresponding_author": {
+        "description": "Set the corresponding-author name/email and mark it operator-managed",
+        "changes_status": False,
+    },
+    "reset_corresponding_author": {
+        "description": "Clear the corresponding-author override; auto-seed from the central DB next scan",
+        "changes_status": False,
+    },
 }
 
 # Override commands handled via dedicated paths in actions.py — they do
@@ -121,6 +163,7 @@ TASK_CODES = {
 OVERRIDE_TASK_CODES = frozenset({
     "set_data_contact", "reset_data_contact",
     "set_zenodo_code", "reset_zenodo_code",
+    "set_corresponding_author", "reset_corresponding_author",
 })
 
 # ── Transitions ───────────────────────────────────────────────────────
@@ -145,6 +188,9 @@ TRANSITIONS: dict[tuple[str, str], str] = {
 _WILDCARD_TASKS = {
     "close_publication_only": CLOSED_PUBLICATION_ONLY,
     "close_exception": CLOSED_EXCEPTION,
+    # Data archived in an external repository — closes as archived (the
+    # external PID/URL is required and recorded by actions._apply_row).
+    "close_archived_external": CLOSED_DATA_ARCHIVED,
 }
 
 
@@ -160,7 +206,14 @@ def validate_transition(current_status: str, task_code: str) -> str:
     # acknowledgment-only task; the row regenerates next scan unless the
     # underlying issue is fixed upstream or the operator changes the
     # task_code to an explicit closure.
-    if task_code in ("remind_sent", "qa_hold", "contact_pi_manual", "mandate_missing"):
+    # propose_* are parallel-track acknowledgment signals: they record an
+    # event/note for the operator but do not themselves move status.
+    # (propose_exemption's eventual closure is applied by re-routing to a
+    # concrete close_* code; the bare signal is a no-op until then.)
+    if task_code in (
+        "remind_sent", "qa_hold", "contact_pi_manual", "mandate_missing",
+        "propose_data_contact", "propose_exemption", "propose_done", "user_note",
+    ):
         return current_status
 
     # Check wildcard tasks (any OPEN → CLOSED)

@@ -181,8 +181,14 @@ def generate_sheet(config: Config) -> Path:
 
             # Reminders fire only when data is actually required by mandate
             # (or when we don't have classification info — legacy rows
-            # behave as before so existing flows aren't broken).
-            allow_reminders = category in ("data_required", "unclassified")
+            # behave as before so existing flows aren't broken) AND only
+            # while the work is still author-owned (OPEN_INACTIVE / OPEN_ACTIVE).
+            # Once QA passes the remaining steps are the operator's, so a
+            # reminder row would be noise — mirrors emails._REMINDER_STATUSES.
+            allow_reminders = (
+                category in ("data_required", "unclassified")
+                and cur_status in (st.OPEN_INACTIVE, st.OPEN_ACTIVE)
+            )
             if pub_id in reminders_due and allow_reminders:
                 reached_max = (
                     archive.get("reminder_count") or 0

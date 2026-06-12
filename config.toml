@@ -6,6 +6,39 @@ email_drafts_dir = "./output/email_drafts"
 template_dir = "./templates"
 
 [reminders]
+# Cadence loosened 2026-06-11 now that the OA Archive Tracker is a standing,
+# always-visible channel (and reminders that do go out point to it).
 first_reminder_days = 21      # days after became_active before first reminder
-reminder_interval_days = 14    # days between subsequent reminders
-max_reminders = 4
+reminder_interval_days = 21    # days between subsequent reminders
+max_reminders = 3
+
+[sharepoint]                  # parallel track — user-facing List (see docs/sharepoint_list_design.md)
+enabled = true
+tenant = "biomagune.onmicrosoft.com"
+client_id = "fbd87ebd-fd7e-4e4c-967a-9932bde32da1"   # OA Archive Tracker Entra app (verified 2026-06-02)
+site = "biomagune.sharepoint.com:/sites/PublicationsData"
+list_name = "OA Archive Tracker"
+# Protocol/SOP document — shown in the List's SOP column AND linked in email drafts.
+sop_url = "https://biomagune.sharepoint.com/:w:/s/ResearchDataManagement/IQBZr-ga4BCNQpXNesqWrKkIAbQ64o7l1RYH3iBm0fEgd-0?e=5IhaD6"
+# The List view users land on from email links (their own data-contact papers).
+tracker_url = "https://biomagune.sharepoint.com/sites/PublicationsData/Lists/OA%20Archive%20Tracker/My%20datacontact%20papers.aspx"
+# Links the Folder column to each publication's SharePoint folder ({pub_id} is filled per row).
+# Verified against pub 3117's folder URL (Shared Documents library on the PublicationsData site).
+folder_url_template = "https://biomagune.sharepoint.com/sites/PublicationsData/Shared%20Documents/Forms/Standard%20View.aspx?id=%2Fsites%2FPublicationsData%2FShared%20Documents%2F{pub_id}"
+# On close: false → relabel the row to the "Done"/closed status once, then remove it
+# on the next sync (lean list, stays under the 5000-per-view threshold); true → relabel
+# and keep closed rows on the list.
+sync_closed = false
+# MSAL refresh-token cache — OUTSIDE the repo (no secret in config; device-code uses the operator's identity)
+token_cache = "~/.oa_sharepoint_token.json"
+
+[email]                       # outbound email drafts produced by `oa emails`
+sender_name = "Ryan Tasseff"
+sender_title = "Data Quality Officer"
+sender_email = ""             # if set, used as the From header in .eml drafts
+# How `oa emails` writes drafts:
+#   "eml"  → .eml files: double-click opens a pre-addressed draft in Outlook (review, then Send).
+#   "txt"  → plain-text drafts (the original behavior).  *** ROLLBACK: set this to "txt" ***
+#   "both" → write both .txt and .eml for each email.
+# If .eml does not open well in Outlook, change the line below to: draft_format = "txt"
+draft_format = "eml"

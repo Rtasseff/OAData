@@ -102,12 +102,18 @@ def _enrichment_kwargs(
         "max_embargo_months": cached.max_embargo_months,
         "oa_mandate_source": cached.oa_mandate_source,
         "oa_mandate_missing": _bool_to_int(cached.oa_mandate_missing),
-        "corresponding_author_name": cached.corresponding_author_name,
-        "corresponding_author_email": cached.corresponding_author_email,
         "central_repository": cached.central_repository,
         "central_repository_code": cached.central_repository_code,
         "pub_db_last_refreshed_at": now,
     }
+
+    # Corresponding author is normally auto-refreshed, but the operator
+    # can pin an "effective" CA (set_corresponding_author) on rows whose
+    # real one is external/blank; honor that override like data_contact.
+    corr_author_overridden = bool(existing and existing.get("corresponding_author_overridden"))
+    if not corr_author_overridden:
+        kw["corresponding_author_name"] = cached.corresponding_author_name
+        kw["corresponding_author_email"] = cached.corresponding_author_email
 
     data_contact_overridden = bool(existing and existing.get("data_contact_overridden"))
     if not data_contact_overridden:
@@ -131,6 +137,7 @@ def _new_archive_defaults() -> dict[str, Any]:
         "data_contact_email": "TBD",
         "data_contact_overridden": 0,
         "zenodo_code_overridden": 0,
+        "corresponding_author_overridden": 0,
     }
 
 

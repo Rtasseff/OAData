@@ -6,11 +6,13 @@ from pathlib import Path
 from oa_tracker.actions import (
     apply_actions, reset_data_contact, reset_zenodo_code,
     set_data_contact, set_zenodo_code,
+    set_corresponding_author, reset_corresponding_author,
 )
 from oa_tracker.db import get_archive, get_connection, upsert_archive, get_recent_events
 from oa_tracker.status import (
     OPEN_ACTIVE, OPEN_READY_FOR_ZENODO_DRAFT, OPEN_ZENODO_PUBLISHED,
     CLOSED_DATA_ARCHIVED, CLOSED_EXCEPTION,
+    validate_transition,
 )
 
 
@@ -615,6 +617,217 @@ def test_set_data_contact_logs_audit_event(test_config):
     assert len(relevant) == 1
     assert relevant[0]["source"] == "cli"
     assert "x@y" in relevant[0]["note"]
+
+
+# ── Parallel track: close_archived_external ──────────────────────────
+
+
+def test_close_archived_external_closes_data_archived(test_config):
+    """The 'archived elsewhere' exemption closes as CLOSED_DATA_ARCHIVED
+    with the external PID/URL recorded — not as an exception."""
+    _insert_active_archive(test_config.database, "PUB500")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB500",
+        "current_status": OPEN_ACTIVE,
+        "task_code": "close_archived_external",
+        "task_text": "Archived elsewhere",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "1",
+        "pid": "10.5061/dryad.abc123",
+        "url": "https://datadryad.org/stash/dataset/doi:10.5061/dryad.abc123",
+        "note": "Archived by external collaborators",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+    assert result.errors == []
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB500")
+        assert a["status"] == CLOSED_DATA_ARCHIVED
+        assert a["final_pid"] == "10.5061/dryad.abc123"
+        assert a["final_url"].startswith("https://datadryad.org/")
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+        assert any(e["action_code"] == "close_archived_external" for e in events)
+
+
+def test_close_archived_external_requires_pid_and_url(test_config):
+    """Missing PID or URL is an error — we don't close 'archived' without evidence."""
+    _insert_active_archive(test_config.database, "PUB501")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB501",
+        "current_status": OPEN_ACTIVE,
+        "task_code": "close_archived_external",
+        "task_text": "Archived elsewhere",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "1",
+        "pid": "10.5061/dryad.abc123",
+        "url": "",
+        "note": "",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 0
+    assert any("requires both a PID and a URL" in e for e in result.errors)
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB501")
+        assert a["status"] == OPEN_ACTIVE  # unchanged
+
+
+def test_close_archived_external_rejects_closed_status(test_config):
+    """close_archived_external only applies to an OPEN archive."""
+    _insert_active_archive(test_config.database, "PUB502", CLOSED_EXCEPTION)
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB502",
+        "current_status": CLOSED_EXCEPTION,
+        "task_code": "close_archived_external",
+        "task_text": "Archived elsewhere",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "1",
+        "pid": "10.5061/dryad.x",
+        "url": "https://datadryad.org/x",
+        "note": "",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 0
+    assert any("OPEN" in e for e in result.errors)
+
+
+def test_close_archived_external_is_wildcard_transition():
+    """Any OPEN status maps to CLOSED_DATA_ARCHIVED via validate_transition."""
+    assert validate_transition(OPEN_ACTIVE, "close_archived_external") == CLOSED_DATA_ARCHIVED
+    assert validate_transition("OPEN_INACTIVE", "close_archived_external") == CLOSED_DATA_ARCHIVED
+
+
+# ── Parallel track: propose_* are acknowledgment-only for now ────────
+
+
+def test_propose_done_is_ack_only(test_config):
+    _insert_active_archive(test_config.database, "PUB510")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB510",
+        "current_status": OPEN_ACTIVE,
+        "task_code": "propose_done",
+        "task_text": "User thinks it's done",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "1",
+        "pid": "",
+        "url": "",
+        "note": "data contact says complete",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+    assert result.errors == []
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB510")
+        assert a["status"] == OPEN_ACTIVE  # no status change
+        assert "complete" in (a["notes"] or "")
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+        assert any(e["action_code"] == "propose_done" for e in events)
+
+
+def test_propose_exemption_and_data_contact_are_ack_only(test_config):
+    _insert_active_archive(test_config.database, "PUB511")
+    for code in ("propose_exemption", "propose_data_contact"):
+        sheet = _write_sheet(test_config.output_dir, [{
+            "publication_id": "PUB511",
+            "current_status": OPEN_ACTIVE,
+            "task_code": code,
+            "task_text": code,
+            "first_seen_at": "2026-01-01T00:00:00",
+            "next_reminder_at": "",
+            "reminder_count": "0",
+            "done": "1",
+            "pid": "",
+            "url": "",
+            "note": f"signal: {code}",
+        }])
+        result = apply_actions(sheet, test_config)
+        assert result.applied == 1, code
+        assert result.errors == [], code
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB511")
+        assert a["status"] == OPEN_ACTIVE
+
+
+def test_user_note_is_ack_only_and_records_note(test_config):
+    _insert_active_archive(test_config.database, "PUB512")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB512",
+        "current_status": OPEN_ACTIVE,
+        "task_code": "user_note",
+        "task_text": "User note (awareness only — no action needed)",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "1",
+        "pid": "",
+        "url": "",
+        "note": "out next week if you need me",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+    assert result.errors == []
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB512")
+        assert a["status"] == OPEN_ACTIVE                 # no status change
+        assert "out next week" in (a["notes"] or "")      # durably recorded
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+        assert any(e["action_code"] == "user_note" for e in events)
+
+
+# ── Parallel track: corresponding-author override ────────────────────
+
+
+def test_set_corresponding_author_marks_overridden(test_config):
+    _insert_active_archive(test_config.database, "PUB520")
+    result = set_corresponding_author(
+        test_config, "PUB520", email="pi@cicbiomagune.es", name="Effective PI",
+    )
+    assert result.applied == 1
+    assert result.errors == []
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB520")
+    assert a["corresponding_author_email"] == "pi@cicbiomagune.es"
+    assert a["corresponding_author_name"] == "Effective PI"
+    assert a["corresponding_author_overridden"] == 1
+
+
+def test_set_corresponding_author_requires_email(test_config):
+    _insert_active_archive(test_config.database, "PUB521")
+    result = set_corresponding_author(test_config, "PUB521", email="")
+    assert result.applied == 0
+    assert any("email" in e for e in result.errors)
+
+
+def test_reset_corresponding_author_clears_override(test_config):
+    _insert_active_archive(test_config.database, "PUB522")
+    set_corresponding_author(test_config, "PUB522", email="pi@cicbiomagune.es")
+    result = reset_corresponding_author(test_config, "PUB522")
+    assert result.applied == 1
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB522")
+    assert a["corresponding_author_overridden"] == 0
+    # Value remains until the next scan re-seeds; only the flag changes.
+    assert a["corresponding_author_email"] == "pi@cicbiomagune.es"
+
+
+def test_set_corresponding_author_unknown_pub_errors(test_config):
+    result = set_corresponding_author(test_config, "GHOST", email="x@y")
+    assert result.applied == 0
+    assert any("not in database" in e for e in result.errors)
 
 
 def test_remind_sent_skipped_when_status_no_longer_waiting_for_data(test_config):

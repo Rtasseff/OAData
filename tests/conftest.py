@@ -68,7 +68,8 @@ def tmp_templates(tmp_path):
         "Reminder #${reminder_number} for ${publication_id} (${publication_title}). "
         "To: ${data_contact_name} <${data_contact_email}>. "
         "Status: ${oa_status} (raw: ${current_status}). "
-        "Flags: ${flags}. Active since: ${became_active_at}."
+        "Flags: ${flags}. Active since: ${became_active_at}. "
+        "Note: ${status_note}"
     )
     (tpl_dir / "completion.txt").write_text(
         "Completed: ${publication_id} (${publication_title}). "
@@ -80,6 +81,7 @@ def tmp_templates(tmp_path):
         "Paper: ${oa_paper_required}; Data: ${oa_data_required}; "
         "Embargo: ${max_embargo_months}. "
         "Central: ${central_repository_summary}. Zenodo: ${zenodo_code}. "
+        "ZenodoDOI: ${zenodo_doi}. "
         "Folder: ${folder_path}. Generated: ${generated_at}."
     )
     return tpl_dir

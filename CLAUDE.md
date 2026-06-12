@@ -36,14 +36,18 @@ tests/
     conftest.py      — shared fixtures (tmp_db, tmp_sharepoint, test_config)
     test_*.py        — one test file per module
 docs/
-    summary.md       — project context and motivation
-    techSpec.md      — technical spec (schema, statuses, task codes, transitions)
-    sop.md           — standard operating procedure
+    summary.md            — project context and motivation
+    techSpec.md           — technical spec (schema, statuses, task codes, transitions)
+    sop.md                — standard operating procedure
+    roadmap.md            — single source of truth for the staged automation plan (Stages 1, 2, 2.5, 3, 4, plus the parallel SharePoint List track)
+    mandate_classification.md — how Stage 2 derives OA mandates from the central DB
+    zenodo_design.md      — Stage 2.5 / 3 design (API surface, metadata mapping, module layout)
+    sharepoint_list_design.md — Parallel track design (List columns, views, identity mapping, propose_* action routing, sync module)
 ```
 
 ## Key Design Decisions
 
-- Operator never edits SQLite directly; all changes go through `action_sheet.tsv` → `oa apply`.
+- Operator never edits SQLite directly; all changes go through `action_sheet.tsv` → `oa apply`. New code paths and new input sources also route through the action sheet at the start (validation phase), then graduate to auto-apply once an operator has seen them behave correctly — see `feedback_no_auto_state_changes.md` in the memory store.
 - Applied action rows are moved to `action_history.tsv` and removed from the active sheet.
 - `string.Template` is used for email templates (`${placeholder}` syntax).
 - The scanner is read-only against the folder tree — it only observes, never modifies.

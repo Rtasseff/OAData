@@ -245,6 +245,34 @@ def test_scan_does_not_overwrite_overridden_zenodo_code(test_config, monkeypatch
     assert a["zenodo_code"] == "operator_override"
 
 
+def test_scan_does_not_overwrite_overridden_corresponding_author(test_config, monkeypatch):
+    """An operator-pinned effective corresponding author survives a rescan."""
+    _enrich_with(monkeypatch, corresponding_author_name="DB Author",
+                 corresponding_author_email="dbauthor@cicbiomagune.es")
+    pub_dir = test_config.sharepoint_root / "1105"
+    pub_dir.mkdir()
+    scan_folders(test_config)
+
+    # Operator pins an effective CA (e.g. the real one is external/blank).
+    with get_connection(test_config.database) as conn:
+        conn.execute(
+            "UPDATE archives SET corresponding_author_name=?, "
+            "corresponding_author_email=?, corresponding_author_overridden=1 "
+            "WHERE publication_id='1105'",
+            ("Effective PI", "pi@cicbiomagune.es"),
+        )
+
+    # Re-scan with a different cached author — the override must hold.
+    _enrich_with(monkeypatch, corresponding_author_name="Changed Author",
+                 corresponding_author_email="changed@cicbiomagune.es")
+    scan_folders(test_config)
+
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "1105")
+    assert a["corresponding_author_name"] == "Effective PI"
+    assert a["corresponding_author_email"] == "pi@cicbiomagune.es"
+
+
 def test_scan_continues_when_pub_db_unreachable(test_config, monkeypatch):
     """A connection failure adds an error but the scan still runs."""
     def _fail():

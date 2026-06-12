@@ -1,8 +1,18 @@
 """Tests for email draft generation."""
 
+import dataclasses
+from email import policy
+from email.parser import BytesParser
+
+from oa_tracker.config import EmailSettings
 from oa_tracker.db import get_connection, upsert_archive
-from oa_tracker.emails import generate_emails
-from oa_tracker.status import OPEN_ACTIVE, OPEN_ZENODO_PUBLISHED
+from oa_tracker.emails import (
+    _cc_line, _write_draft, generate_emails, pending_response_pubs,
+)
+from oa_tracker.status import (
+    OPEN_ACTIVE, OPEN_INACTIVE, OPEN_READY_FOR_ZENODO_DRAFT,
+    OPEN_ZENODO_PUBLISHED,
+)
 
 
 def test_no_emails_when_nothing_due(test_config):
@@ -214,6 +224,149 @@ def test_cheat_sheet_not_generated_for_other_statuses(test_config):
     _enriched_archive(test_config.database, "PUB701", OPEN_ACTIVE)
     paths = generate_emails(test_config)
     assert not any(p.parent.name == "zenodo_cheat" for p in paths)
+
+
+# ── Reminders stop once work is operator-owned (past QA) ──────────────
+
+
+def test_reminder_suppressed_once_operator_owned(test_config):
+    """A data-required archive with a due reminder gets NO reminder draft once
+    it has passed QA (OPEN_READY_FOR_ZENODO_DRAFT) — the remaining work is the
+    operator's manual Zenodo/DB steps, not the data contact's."""
+    _enriched_archive(
+        test_config.database, "PUB710", OPEN_READY_FOR_ZENODO_DRAFT,
+        next_reminder_at="2020-01-01T00:00:00",  # due
+        oa_data_required=1, oa_paper_required=1, oa_mandate_missing=0,
+    )
+    paths = generate_emails(test_config)
+    assert all("reminder_PUB710" not in p.name for p in paths)
+
+
+def test_reminder_still_sent_for_open_active(test_config):
+    """Regression guard: OPEN_ACTIVE (uploaded but not yet QA-passed, e.g. an
+    incomplete drop) MUST still be reminded — the fix only stops reminders
+    past QA, not at OPEN_ACTIVE."""
+    _enriched_archive(
+        test_config.database, "PUB711", OPEN_ACTIVE,
+        next_reminder_at="2020-01-01T00:00:00",
+        oa_data_required=1, oa_paper_required=1, oa_mandate_missing=0,
+    )
+    paths = generate_emails(test_config)
+    assert any(p.name.startswith("reminder_PUB711") for p in paths)
+
+
+def test_reminder_status_note_differs_by_status(test_config):
+    """Reminder text adapts: 'nothing uploaded' for INACTIVE vs. a
+    'finish/package it' nudge for an incomplete OPEN_ACTIVE drop."""
+    _enriched_archive(
+        test_config.database, "PUBINA", OPEN_INACTIVE,
+        next_reminder_at="2020-01-01T00:00:00",
+        oa_data_required=1, oa_paper_required=1,
+    )
+    _enriched_archive(
+        test_config.database, "PUBACT", OPEN_ACTIVE,
+        next_reminder_at="2020-01-01T00:00:00",
+        oa_data_required=1, oa_paper_required=1,
+    )
+    paths = generate_emails(test_config)
+    inactive = next(p for p in paths if p.name.startswith("reminder_PUBINA"))
+    active = next(p for p in paths if p.name.startswith("reminder_PUBACT"))
+    assert "nothing has been uploaded" in inactive.read_text()
+    assert "some files in the publication folder" in active.read_text()
+
+
+def test_cheat_sheet_includes_derived_zenodo_doi(test_config):
+    """The cheat sheet derives the Zenodo DOI from the code when present."""
+    _enriched_archive(
+        test_config.database, "PUB720", OPEN_READY_FOR_ZENODO_DRAFT,
+        pub_title="P", pub_doi="10.1/x", pub_journal="J", pub_year=2025,
+        oa_paper_required=1, oa_data_required=1, max_embargo_months=0,
+        zenodo_code="20662261",
+    )
+    paths = generate_emails(test_config)
+    cheat = next(p for p in paths if p.name == "PUB720.txt")
+    assert "10.5281/zenodo.20662261" in cheat.read_text()
+
+
+def test_cheat_sheet_zenodo_doi_blank_without_code(test_config):
+    """Without a code the DOI value is empty — a labeled space the operator
+    can paste into during the manual mint (tested at the value layer so it
+    doesn't couple to template formatting)."""
+    from oa_tracker.emails import _cheat_template_vars
+    with_code = _cheat_template_vars(
+        {"publication_id": "X", "zenodo_code": "20662261"}, "now", test_config
+    )
+    without_code = _cheat_template_vars(
+        {"publication_id": "X"}, "now", test_config
+    )
+    assert with_code["zenodo_doi"] == "10.5281/zenodo.20662261"
+    assert without_code["zenodo_doi"] == ""
+
+
+# ── Reminder suppression when a Tracker response is pending ───────────
+
+
+def test_reminder_held_when_tracker_response_pending(test_config):
+    _enriched_archive(
+        test_config.database, "PUB800", OPEN_ACTIVE,
+        oa_data_required=1, oa_mandate_missing=0,
+        next_reminder_at="2020-01-01T00:00:00",  # due
+    )
+    # an un-applied proposal row for PUB800 sitting in the proposals file
+    ppath = test_config.output_dir / "sharepoint_proposals.tsv"
+    ppath.write_text("publication_id\ttask_code\tdone\nPUB800\tpropose_done\t0\n")
+
+    assert "PUB800" in pending_response_pubs(test_config)
+    paths = generate_emails(test_config)
+    assert all("reminder_PUB800" not in p.name for p in paths)
+
+
+def test_reminder_sent_when_no_pending_response(test_config):
+    """Control: same archive, no proposals file → reminder is generated."""
+    _enriched_archive(
+        test_config.database, "PUB801", OPEN_ACTIVE,
+        oa_data_required=1, oa_mandate_missing=0,
+        next_reminder_at="2020-01-01T00:00:00",
+    )
+    paths = generate_emails(test_config)
+    assert any("reminder_PUB801" in p.name for p in paths)
+
+
+# ── .eml drafts, cc, and format selection ────────────────────────────
+
+
+def test_cc_line_only_for_distinct_corresponding_author():
+    a = {"corresponding_author_name": "CA", "corresponding_author_email": "ca@x.es"}
+    assert _cc_line(a, "dc@x.es") == "Cc: CA <ca@x.es>\n"
+    assert _cc_line(a, "ca@x.es") == ""                 # CA == data contact → no cc
+    assert _cc_line({"corresponding_author_email": ""}, "dc@x.es") == ""
+
+
+def test_write_draft_eml_has_proper_headers(test_config, tmp_path):
+    cfg = dataclasses.replace(
+        test_config,
+        email=EmailSettings(sender_name="Q Officer", sender_email="q@x.es", draft_format="eml"),
+    )
+    rendered = "To: Jane <jane@x.es>\nCc: Boss <boss@x.es>\nSubject: Hi 42\n\nBody line.\n"
+    written = _write_draft(tmp_path / "draft_42", rendered, cfg)
+    assert len(written) == 1 and written[0].suffix == ".eml"
+    msg = BytesParser(policy=policy.default).parse(open(written[0], "rb"))
+    assert msg["To"] == "Jane <jane@x.es>"
+    assert msg["Cc"] == "Boss <boss@x.es>"
+    assert msg["Subject"] == "Hi 42"
+    assert msg["From"] == "Q Officer <q@x.es>"
+    assert "Body line." in msg.get_content()
+
+
+def test_write_draft_both_writes_txt_and_eml(test_config, tmp_path):
+    cfg = dataclasses.replace(test_config, email=EmailSettings(draft_format="both"))
+    written = _write_draft(tmp_path / "d", "To: a@b.es\nSubject: x\n\nbody\n", cfg)
+    assert {p.suffix for p in written} == {".txt", ".eml"}
+
+
+def test_write_draft_txt_is_default(test_config, tmp_path):
+    written = _write_draft(tmp_path / "d", "To: a@b.es\nSubject: x\n\nbody\n", test_config)
+    assert len(written) == 1 and written[0].suffix == ".txt"
 
 
 # ── Stage 2: completion drafts for done=2 / recently-closed archives ──

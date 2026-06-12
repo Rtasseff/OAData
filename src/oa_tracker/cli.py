@@ -100,7 +100,7 @@ def emails(
     db: Optional[str] = DbOption,
 ):
     """Generate email drafts (reminders + completion notices)."""
-    from oa_tracker.emails import generate_emails
+    from oa_tracker.emails import generate_emails, pending_response_pubs
 
     cfg = _get_config(config, db)
     paths = generate_emails(cfg)
@@ -110,6 +110,14 @@ def emails(
             typer.echo(f"  {p}")
     else:
         typer.echo("No email drafts to generate.")
+
+    pending = pending_response_pubs(cfg)
+    if pending:
+        typer.echo(
+            f"Note: {len(pending)} publication(s) have an un-applied Tracker response; "
+            "any due reminders for them are held until you apply or decline them in "
+            f"sharepoint_proposals.tsv: {', '.join(sorted(pending))}"
+        )
 
 
 @app.command()
@@ -143,6 +151,7 @@ def action(
     from oa_tracker.actions import (
         apply_single, set_data_contact, reset_data_contact,
         set_zenodo_code, reset_zenodo_code,
+        set_corresponding_author, reset_corresponding_author,
     )
 
     if done not in (1, 2):
@@ -168,9 +177,15 @@ def action(
         elif task_code == "set_zenodo_code":
             result = set_zenodo_code(cfg, pub_id, code=code)
             ok_msg = f"Set zenodo_code on {pub_id}: {code}"
-        else:  # reset_zenodo_code
+        elif task_code == "reset_zenodo_code":
             result = reset_zenodo_code(cfg, pub_id)
             ok_msg = f"Reset zenodo_code override on {pub_id}; next scan will re-seed from the central DB."
+        elif task_code == "set_corresponding_author":
+            result = set_corresponding_author(cfg, pub_id, email=email, name=(name or None))
+            ok_msg = f"Set corresponding_author on {pub_id}: {name or '?'} <{email}>"
+        else:  # reset_corresponding_author
+            result = reset_corresponding_author(cfg, pub_id)
+            ok_msg = f"Reset corresponding_author override on {pub_id}; next scan will re-seed from the central DB."
 
         for e in result.errors:
             typer.echo(f"Error: {e}")
@@ -311,3 +326,184 @@ def status(
             typer.echo("-" * 80)
             for a in archives:
                 typer.echo(f"{a['publication_id']:<25} {a['status']:<35} {a.get('final_pid') or '-'}")
+
+
+# ── SharePoint List parallel track ───────────────────────────────────
+
+sharepoint_app = typer.Typer(help="SharePoint List sync (parallel track).")
+app.add_typer(sharepoint_app, name="sharepoint")
+
+
+@sharepoint_app.command("provision")
+def sharepoint_provision(
+    config: Optional[str] = ConfigOption,
+    db: Optional[str] = DbOption,
+):
+    """Create (or verify) the SharePoint List and its columns. Idempotent.
+
+    First run is interactive (device-code sign-in); the refresh token is
+    cached so scheduled runs don't re-prompt.
+    """
+    from oa_tracker import sharepoint as sp_mod
+
+    cfg = _get_config(config, db)
+    sp = sp_mod.load_settings(cfg)
+    client = sp_mod.GraphClient(sp)
+    site_id = client.get_site_id(sp.site)
+    try:
+        _, web_url, name_for = sp_mod.ensure_list(client, site_id, sp)
+    except RuntimeError as e:
+        typer.echo(str(e))
+        raise typer.Exit(1)
+    typer.echo(f"List ready ({len(name_for)} columns): {sp.list_name}")
+    if web_url:
+        typer.echo(f"  {web_url}")
+
+
+@sharepoint_app.command("sync")
+def sharepoint_sync(
+    read_only: bool = typer.Option(
+        False, "--read-only", help="Diff against the list and write nothing (prototype mode)."
+    ),
+    config: Optional[str] = ConfigOption,
+    db: Optional[str] = DbOption,
+):
+    """Push system-owned columns for all OPEN archives to the SharePoint List.
+
+    ``--read-only`` fetches the list and reports what a push WOULD change
+    (writing a scratch JSON), without touching SharePoint.
+    """
+    import csv
+    import json
+    from datetime import datetime
+    from oa_tracker import sharepoint as sp_mod
+    from oa_tracker.db import get_archive, get_connection, get_open_archives
+    from oa_tracker.sheet import SHEET_COLUMNS
+
+    cfg = _get_config(config, db)
+    sp = sp_mod.load_settings(cfg)
+    with get_connection(cfg.database) as conn:
+        archives = get_open_archives(conn)
+
+    client = sp_mod.GraphClient(sp)
+    site_id = client.get_site_id(sp.site)
+
+    if read_only:
+        # Genuinely read-only: do NOT provision and write nothing back.
+        lst = sp_mod.get_list(client, site_id, sp.list_name)
+        if lst is None:
+            typer.echo(f"List {sp.list_name!r} isn't provisioned yet.")
+            typer.echo("Run `oa sharepoint provision` first (read-only won't create it).")
+            raise typer.Exit(1)
+        list_id = lst["id"]
+        name_for = sp_mod.resolve_names(client, site_id, list_id)
+        pubid = name_for.get(sp_mod.D_PUBID)
+        existing = sp_mod.fetch_items(client, site_id, list_id, pubid) if pubid else {}
+        diff = sp_mod.diff_against_list(archives, existing, sp)
+        pulled = sp_mod.pull_proposals(list(existing.values()), name_for) if pubid else []
+        waiting = sum(len(p.proposals) for p in pulled)
+        cfg.output_dir.mkdir(parents=True, exist_ok=True)
+        out = cfg.output_dir / "sharepoint_state.json"
+        out.write_text(json.dumps(
+            {"open_archives": len(archives), "on_list": len(existing),
+             "diff": diff, "pending_proposals": waiting}, indent=2
+        ))
+        typer.echo("Read-only — nothing written to SharePoint.")
+        typer.echo(f"  would create: {len(diff['would_create'])}")
+        typer.echo(f"  would update: {len(diff['would_update'])}")
+        typer.echo(f"  would remove (closed since last sync): {len(diff['would_remove'])}")
+        typer.echo(f"  new user proposals waiting: {waiting}")
+        typer.echo(f"  state written to {out}")
+        return
+
+    # Outbound: push system-owned columns.
+    list_id, web_url, name_for = sp_mod.ensure_list(client, site_id, sp)
+    email_to_lookup = client.resolve_users(site_id)
+    now = datetime.now().isoformat(timespec="seconds")
+    result = sp_mod.push_archives(
+        client, site_id, list_id, sp, name_for, email_to_lookup, archives, now
+    )
+    typer.echo(result.summary)
+
+    # Inbound: pull user edits → reviewable action rows; stamp status back.
+    # user_details (LookupId → name/email) lets a "suggest a new data contact"
+    # proposal name the person and pre-fill the set_data_contact command.
+    user_details = client.resolve_user_details(site_id)
+    by_id = {a["publication_id"]: a for a in archives}
+    items = sp_mod.fetch_items(client, site_id, list_id, name_for[sp_mod.D_PUBID])
+    pulled = sp_mod.pull_proposals(list(items.values()), name_for, user_details)
+
+    def _row_for(pub_id, arch, task_code, task_text, note, pid="", url=""):
+        # Mirror the action sheet's column population (sheet.py:_row) so this
+        # file is a drop-in for `oa apply`: current_status is the raw pipeline
+        # code (not the friendly List label), and the reminder fields are
+        # carried straight from the archive for consistency.
+        row = {c: "" for c in SHEET_COLUMNS}
+        row.update({
+            "publication_id": pub_id, "task_code": task_code,
+            "task_text": task_text, "done": "0", "pid": pid, "url": url, "note": note,
+        })
+        if arch is not None:
+            row["current_status"] = arch["status"]
+            row["first_seen_at"] = arch.get("first_seen_at") or ""
+            row["next_reminder_at"] = arch.get("next_reminder_at") or ""
+            row["reminder_count"] = str(arch.get("reminder_count") or 0)
+        else:
+            row["reminder_count"] = "0"
+        return row
+
+    rows = []
+    for pi in pulled:
+        arch = by_id.get(pi.pub_id)
+        for prop in pi.proposals:
+            rows.append(_row_for(pi.pub_id, arch, prop.task_code, prop.task_text,
+                                 prop.note, prop.pid, prop.url))
+        # A free-text List note is awareness-only, but it must be DURABLE —
+        # a scheduled sync's stdout goes nowhere. Emit it as a `user_note`
+        # row so it lands in the proposals file like everything else and is
+        # recorded to the archive's notes on apply.
+        if pi.user_notes:
+            rows.append(_row_for(pi.pub_id, arch, "user_note",
+                                 "User note (awareness only — no action needed)",
+                                 pi.user_notes))
+    if rows:
+        cfg.output_dir.mkdir(parents=True, exist_ok=True)
+        ppath = cfg.output_dir / "sharepoint_proposals.tsv"
+        write_header = not ppath.exists()
+        with open(ppath, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=SHEET_COLUMNS, delimiter="\t")
+            if write_header:
+                w.writeheader()
+            w.writerows(rows)
+        typer.echo(f"Pulled {len(rows)} row(s) → {ppath}")
+        typer.echo(f"  review, set done=1 on the ones to apply, then: oa apply {ppath}")
+    else:
+        typer.echo("No new user proposals.")
+    # Stamp IngestedSig (+ RequestStatus where actionable) so edits aren't re-emitted.
+    for pi in pulled:
+        sp_mod.write_proposal_feedback(client, site_id, list_id, name_for, pi)
+
+    # Reconcile rows whose archive closed since the last sync: relabel to the
+    # closed status once ("show Done"), then remove on the following sync (or
+    # keep, when sync_closed=true). Open rows were handled by the push above;
+    # rows with no matching archive are left untouched.
+    open_ids = set(by_id)
+    non_open = [pid for pid in items if pid not in open_ids]
+    archive_by_id: dict = {}
+    if non_open:
+        with get_connection(cfg.database) as conn:
+            for pid in non_open:
+                archive_by_id[pid] = get_archive(conn, pid)
+    rec = sp_mod.reconcile_closed_rows(
+        client, site_id, list_id, sp, name_for, items, archive_by_id, now
+    )
+    if rec.relabeled or rec.removed or rec.warnings:
+        typer.echo(rec.summary)
+
+    notes = [(pi.pub_id, pi.user_notes) for pi in pulled if pi.user_notes]
+    if notes:
+        typer.echo("User notes (awareness only — saved as user_note rows in the file):")
+        for pub_id, n in notes:
+            typer.echo(f"  {pub_id}: {n}")
+    if web_url:
+        typer.echo(f"  {web_url}")

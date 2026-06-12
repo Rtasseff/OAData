@@ -118,6 +118,39 @@ def _apply_row(
         result.applied += 1
         return (True, old_status, new_status)
 
+    # ── close_archived_external: data archived in an external repo ──
+    # The "ALL data deposited in another archive" exemption. The data is
+    # archived (just not via our Zenodo pipeline), so this closes as
+    # CLOSED_DATA_ARCHIVED with the EXTERNAL PID/URL recorded — it counts
+    # in "data archived" totals, not as an exception. Handled before the
+    # generic fast-track below so the external PID isn't mistaken for a
+    # Zenodo publish. Requires both a PID and a URL.
+    if task_code == "close_archived_external":
+        if old_status not in st.OPEN_STATUSES:
+            result.errors.append(
+                f"{row_label} ({pub_id}): close_archived_external needs an OPEN "
+                f"status, not {old_status}"
+            )
+            return (False, old_status, None)
+        if not pid or not url:
+            result.errors.append(
+                f"{row_label} ({pub_id}): close_archived_external requires both a "
+                f"PID and a URL (the external archive's)"
+            )
+            return (False, old_status, None)
+        extra_fields = {"final_pid": pid, "final_url": url}
+        if note:
+            existing_notes = archive.get("notes") or ""
+            separator = "\n" if existing_notes else ""
+            extra_fields["notes"] = f"{existing_notes}{separator}[{now}] {note}"
+        db.update_archive_status(conn, pub_id, st.CLOSED_DATA_ARCHIVED, **extra_fields)
+        db.insert_event(
+            conn, pub_id, "close_archived_external", old_status,
+            st.CLOSED_DATA_ARCHIVED, source, pid=pid, url=url, note=note or None,
+        )
+        result.applied += 1
+        return (True, old_status, st.CLOSED_DATA_ARCHIVED)
+
     # ── done=1 with PID/URL: fast-track to OPEN_ZENODO_PUBLISHED ──
     if (pid or url) and task_code not in ("remind_sent", "qa_hold"):
         if _looks_like_paper_doi(pid):
@@ -225,7 +258,18 @@ def _apply_row(
     # mandate_missing is acknowledgment-only: the row regenerates on the
     # next scan unless the upstream mandate becomes derivable or the
     # operator changes the task_code to an explicit closure.
-    if task_code in ("qa_hold", "mandate_missing"):
+    # propose_* parallel-track signals are likewise acknowledgment-only
+    # for now: they log an event (and any note) for operator awareness
+    # without changing status. The SharePoint sync module (step 6) gives
+    # them their real routing — propose_data_contact → set the contact,
+    # propose_exemption → re-route to the category's concrete close_* code.
+    # user_note is a pure awareness signal: applying it records the user's
+    # List note to the archive's notes (a durable, audited record) with no
+    # status change.
+    if task_code in (
+        "qa_hold", "mandate_missing",
+        "propose_data_contact", "propose_exemption", "propose_done", "user_note",
+    ):
         extra: dict[str, Any] = {}
         if note:
             existing_notes = archive.get("notes") or ""
@@ -367,6 +411,64 @@ def reset_data_contact(config: Config, pub_id: str) -> ApplyResult:
             conn, pub_id, "reset_data_contact",
             archive["status"], archive["status"], "cli",
             note="data_contact override cleared",
+        )
+        result.applied += 1
+    return result
+
+
+def set_corresponding_author(
+    config: Config, pub_id: str, email: str, name: str | None = None
+) -> ApplyResult:
+    """Pin an 'effective' corresponding author (operator-managed).
+
+    For papers whose real corresponding author is external/blank, this
+    lets the operator point the row at the right biomaGUNE person so it
+    surfaces in that person's corresponding-author view on the SharePoint
+    List. Subsequent scans preserve these values until
+    ``reset_corresponding_author`` clears the override flag. Mirrors
+    ``set_data_contact``.
+    """
+    result = ApplyResult()
+    if not email:
+        result.errors.append("set_corresponding_author requires --email")
+        return result
+    with db.get_connection(config.database) as conn:
+        archive = _archive_or_error(conn, pub_id, result)
+        if archive is None:
+            return result
+        updates = {
+            "publication_id": pub_id,
+            "corresponding_author_email": email,
+            "corresponding_author_overridden": 1,
+        }
+        if name is not None:
+            updates["corresponding_author_name"] = name
+        db.upsert_archive(conn, **updates)
+        db.insert_event(
+            conn, pub_id, "set_corresponding_author",
+            archive["status"], archive["status"], "cli",
+            note=f"corresponding_author set to {name or '?'} <{email}>",
+        )
+        result.applied += 1
+    return result
+
+
+def reset_corresponding_author(config: Config, pub_id: str) -> ApplyResult:
+    """Clear the corresponding-author override; the next scan re-seeds from the central DB."""
+    result = ApplyResult()
+    with db.get_connection(config.database) as conn:
+        archive = _archive_or_error(conn, pub_id, result)
+        if archive is None:
+            return result
+        db.upsert_archive(
+            conn,
+            publication_id=pub_id,
+            corresponding_author_overridden=0,
+        )
+        db.insert_event(
+            conn, pub_id, "reset_corresponding_author",
+            archive["status"], archive["status"], "cli",
+            note="corresponding_author override cleared",
         )
         result.applied += 1
     return result

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import csv
 from datetime import datetime, timedelta
+from email.message import EmailMessage
+from email.parser import Parser
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -41,6 +44,14 @@ _CHEAT_STATUSES = {
     st.OPEN_ZENODO_DRAFT_VALIDATED,
 }
 
+# Reminders go to people who still owe us something: nothing uploaded yet
+# (OPEN_INACTIVE) or uploaded-but-not-yet-QA-passed (OPEN_ACTIVE — which
+# covers the common case of an incomplete or unusable drop that the author
+# never came back to finish). Once QA passes (OPEN_READY_FOR_ZENODO_DRAFT
+# and everything after it) the remaining work is the operator's manual
+# Zenodo/DB steps, not the author's, so reminders stop.
+_REMINDER_STATUSES = {st.OPEN_INACTIVE, st.OPEN_ACTIVE}
+
 _PROTOCOL_URL = (
     "https://biomagune.sharepoint.com/:w:/s/ResearchDataManagement/"
     "IQBZr-ga4BCNQpXNesqWrKkIAbQ64o7l1RYH3iBm0fEgd-0?e=5IhaD6"
@@ -50,6 +61,14 @@ _SHAREPOINT_FOLDER_BASE = (
     "https://biomagune.sharepoint.com/sites/PublicationsData/"
     "Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FPublicationsData"
     "%2FShared%20Documents%2F"
+)
+
+# OA Archive Tracker list — opens to the recipient's own "data contact" view.
+# (Hardcoded here to match the existing link constants; see the process notes
+# about moving all of these into config.toml.)
+_TRACKER_URL = (
+    "https://biomagune.sharepoint.com/sites/PublicationsData/Lists/"
+    "OA%20Archive%20Tracker/My%20datacontact%20papers.aspx"
 )
 
 
@@ -101,7 +120,27 @@ def _data_required(archive: dict[str, Any]) -> bool:
     return archive.get("oa_data_required") == 1
 
 
-def _cheat_template_vars(archive: dict[str, Any], now_str: str) -> dict[str, str]:
+def _reminder_status_note(archive: dict[str, Any]) -> str:
+    """A status-specific sentence for reminder emails. The ask is different
+    for an empty folder vs. an upload that stalled before QA — many authors
+    drop something incomplete and never come back, and that case needs a
+    'please finish/package it' nudge rather than 'please upload'."""
+    if archive.get("status") == st.OPEN_ACTIVE:
+        return (
+            "We can see some files in the publication folder, but the deposit "
+            "does not yet look complete or ready — for example it may be "
+            "missing a README, or the data may not be packaged as a single ZIP "
+            "the way the protocol asks. Please check that the data are complete "
+            "and packaged per the protocol, or let us know if it is already "
+            "final and we will take it from there."
+        )
+    return (
+        "Our records show that nothing has been uploaded to the publication "
+        "folder yet."
+    )
+
+
+def _cheat_template_vars(archive: dict[str, Any], now_str: str, config: Config) -> dict[str, str]:
     """Build the substitution map for the Zenodo cheat sheet."""
     def _or_none(v):
         return str(v) if v not in (None, "", "TBD") else "(none)"
@@ -135,13 +174,34 @@ def _cheat_template_vars(archive: dict[str, Any], now_str: str) -> dict[str, str
         "mandate_trace": archive.get("oa_mandate_source") or "(none)",
         "central_repository_summary": central_str,
         "zenodo_code": _or_none(archive.get("zenodo_code")),
+        # The Zenodo DOI is the PID we actually collect, and it lives nowhere
+        # in the central DB. Derive it from the code when we have one; leave a
+        # labeled blank otherwise so the operator can jot it during the manual
+        # mint, then make it permanent with `oa action ... set_zenodo_code`.
+        "zenodo_doi": (
+            f"10.5281/zenodo.{archive['zenodo_code']}"
+            if archive.get("zenodo_code") else ""
+        ),
         "folder_path": archive.get("folder_path") or "(unknown)",
-        "protocol_url": _PROTOCOL_URL,
+        "protocol_url": config.sharepoint.sop_url or _PROTOCOL_URL,
         "generated_at": now_str,
     }
 
 
-def _common_template_vars(archive: dict[str, Any]) -> dict[str, str]:
+def _folder_url(archive: dict[str, Any], config: Config) -> str:
+    """The publication's SharePoint folder URL — the same builder the List
+    uses (config ``folder_url_template``), with the legacy base as a fallback
+    so emails and the List always point to the same place."""
+    tpl = config.sharepoint.folder_url_template
+    if tpl:
+        try:
+            return tpl.format(pub_id=archive["publication_id"])
+        except (KeyError, IndexError):
+            pass
+    return _SHAREPOINT_FOLDER_BASE + archive["publication_id"]
+
+
+def _common_template_vars(archive: dict[str, Any], config: Config) -> dict[str, str]:
     """Variables shared by reminder + completion templates."""
     return {
         "publication_id": archive["publication_id"],
@@ -152,9 +212,79 @@ def _common_template_vars(archive: dict[str, Any]) -> dict[str, str]:
         "flags": _flags_description(archive),
         "current_status": archive["status"],
         "became_active_at": archive.get("became_active_at") or "unknown",
-        "sharepoint_folder_url": _SHAREPOINT_FOLDER_BASE + archive["publication_id"],
-        "protocol_url": _PROTOCOL_URL,
+        "sharepoint_folder_url": _folder_url(archive, config),
+        "protocol_url": config.sharepoint.sop_url or _PROTOCOL_URL,
+        "tracker_url": config.sharepoint.tracker_url or _TRACKER_URL,
+        "sender_name": config.email.sender_name,
+        "sender_title": config.email.sender_title,
     }
+
+
+def _cc_line(archive: dict[str, Any], data_contact_email: str) -> str:
+    """A ``Cc:`` header line for the corresponding author on completion
+    notices, or '' when there is no distinct CA to copy."""
+    email = (archive.get("corresponding_author_email") or "").strip()
+    if not email or email.lower() == (data_contact_email or "").strip().lower():
+        return ""
+    name = archive.get("corresponding_author_name")
+    return f"Cc: {name} <{email}>\n" if name else f"Cc: {email}\n"
+
+
+def pending_response_pubs(config: Config) -> set[str]:
+    """Publication IDs with an un-applied Tracker response.
+
+    Rows stay in ``output/sharepoint_proposals.tsv`` until ``oa apply`` moves
+    them to history, so any row still present means the data contact is
+    awaiting our reply — reminders are held for those publications.
+    """
+    path = config.output_dir / "sharepoint_proposals.tsv"
+    if not path.exists():
+        return set()
+    pubs: set[str] = set()
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f, delimiter="\t"):
+            pid = (row.get("publication_id") or "").strip()
+            if pid:
+                pubs.add(pid)
+    return pubs
+
+
+def _render_eml(rendered: str, config: Config) -> bytes:
+    """Turn a rendered draft (To/Cc/Subject headers, blank line, body) into a
+    valid .eml so a double-click opens a pre-addressed draft in Outlook."""
+    parsed = Parser().parsestr(rendered)
+    msg = EmailMessage()
+    for header in ("To", "Cc", "Subject"):
+        value = parsed[header]
+        if value:
+            msg[header] = value
+    if config.email.sender_email:
+        msg["From"] = (
+            f"{config.email.sender_name} <{config.email.sender_email}>"
+            if config.email.sender_name else config.email.sender_email
+        )
+    msg.set_content(parsed.get_payload())
+    return msg.as_bytes()
+
+
+def _write_draft(base: Path, rendered: str, config: Config) -> list[Path]:
+    """Write a rendered draft per ``config.email.draft_format`` ("txt" | "eml"
+    | "both") and return the file(s) written. Unknown values fall back to txt."""
+    fmt = (config.email.draft_format or "txt").lower()
+    written: list[Path] = []
+    if fmt in ("txt", "both"):
+        p = base.with_suffix(".txt")
+        p.write_text(rendered)
+        written.append(p)
+    if fmt in ("eml", "both"):
+        p = base.with_suffix(".eml")
+        p.write_bytes(_render_eml(rendered, config))
+        written.append(p)
+    if not written:  # unrecognised format → safe fallback
+        p = base.with_suffix(".txt")
+        p.write_text(rendered)
+        written.append(p)
+    return written
 
 
 def generate_emails(config: Config) -> list[Path]:
@@ -171,10 +301,21 @@ def generate_emails(config: Config) -> list[Path]:
     cheat_tpl_path = config.template_dir / "zenodo_cheat.txt"
     cheat_tpl = Template(cheat_tpl_path.read_text()) if cheat_tpl_path.exists() else None
 
+    # Publications where the data contact already responded on the Tracker and
+    # we haven't applied it yet — hold their reminders so we don't nag someone
+    # who is waiting on us.
+    pending = pending_response_pubs(config)
+
     with db.get_connection(config.database) as conn:
         reminders_due = db.get_reminders_due(conn)
         max_rem = config.reminders.max_reminders
         for archive in reminders_due:
+            # Only author-owned phases get reminders. Once QA passes
+            # (OPEN_READY_FOR_ZENODO_DRAFT+) the remaining work is the
+            # operator's manual Zenodo/DB steps, not the author's, so we
+            # stop nagging the data contact even though it's still OPEN_*.
+            if archive["status"] not in _REMINDER_STATUSES:
+                continue
             # Suppress reminders when the central mandate says data isn't
             # actually required — same suppression rule the action sheet
             # uses. The operator still sees the archive on the sheet.
@@ -185,23 +326,29 @@ def generate_emails(config: Config) -> list[Path]:
             if (archive.get("reminder_count") or 0) >= max_rem - 1:
                 continue
             pub_id = archive["publication_id"]
+            # Hold the reminder if a Tracker response for this publication is
+            # still awaiting operator review (see pending_response_pubs).
+            if pub_id in pending:
+                continue
             n = archive["reminder_count"] + 1
-            draft_path = drafts_dir / f"reminder_{pub_id}_{n}.txt"
-            vars_ = _common_template_vars(archive)
+            vars_ = _common_template_vars(archive, config)
             vars_["reminder_number"] = str(n)
+            vars_["status_note"] = _reminder_status_note(archive)
             content = reminder_tpl.safe_substitute(**vars_)
-            draft_path.write_text(content)
-            generated.append(draft_path)
+            generated.extend(
+                _write_draft(drafts_dir / f"reminder_{pub_id}_{n}", content, config)
+            )
 
         def _write_completion_draft(archive: dict[str, Any]) -> None:
             pub_id = archive["publication_id"]
-            draft_path = drafts_dir / f"completion_{pub_id}.txt"
-            vars_ = _common_template_vars(archive)
+            vars_ = _common_template_vars(archive, config)
             vars_["final_pid"] = archive.get("final_pid") or "(pending)"
             vars_["final_url"] = archive.get("final_url") or "(pending)"
+            vars_["cc_line"] = _cc_line(archive, vars_["data_contact_email"])
             content = completion_tpl.safe_substitute(**vars_)
-            draft_path.write_text(content)
-            generated.append(draft_path)
+            generated.extend(
+                _write_draft(drafts_dir / f"completion_{pub_id}", content, config)
+            )
 
         # 1) Archives published on Zenodo but not yet closed — operator
         # is mid-flow and needs the email to send out.
@@ -240,7 +387,7 @@ def generate_emails(config: Config) -> list[Path]:
                     pub_id = archive["publication_id"]
                     cheat_path = cheat_dir / f"{pub_id}.txt"
                     content = cheat_tpl.safe_substitute(
-                        **_cheat_template_vars(archive, now_str)
+                        **_cheat_template_vars(archive, now_str, config)
                     )
                     cheat_path.write_text(content)
                     generated.append(cheat_path)

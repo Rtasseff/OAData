@@ -1,24 +1,32 @@
-Subject: Reminder: Data upload pending for publication ${publication_id}
+To: ${data_contact_name} <${data_contact_email}>
+Subject: Reminder: research data upload pending for publication ${publication_id}
 
 Dear ${data_contact_name},
 
-This is a reminder (#${reminder_number}) regarding the Open Access data deposit for publication ${publication_id} ("${publication_title}").
+This is a reminder (#${reminder_number}) about the Open Access research data deposit for publication ${publication_id} ("${publication_title}"). Our records show the archiving for this publication is not yet complete.
 
-The project office created a SharePoint folder for you to upload the associated research data. Our records suggest that the archiving process has not yet been completed.
-
-Current status in our system: ${oa_status}
+Current status: ${oa_status}
 Open Access requirements: ${flags}
 
-Could you please check the status of your upload and let me know if you need any assistance?
+${status_note}
 
-Links:
+You can check the status and respond yourself in the OA Archive Tracker. It opens to the publications where you are the data contact:
 
-SharePoint for your data - ${sharepoint_folder_url}
+  OA Archive Tracker - ${tracker_url}
 
-Protocol for Open Access Data - ${protocol_url}
+Open the row for this publication and you can:
+  - upload your data (use the Folder link there to open its SharePoint folder),
+  - tell us you believe it is already done,
+  - propose an exemption (e.g. the data are archived elsewhere, there is no new data, or this is a collaboration biomaGUNE did not lead), or
+  - suggest a different data contact if someone else should handle it.
 
+Helpful links:
+  Data folder for this publication - ${sharepoint_folder_url}
+  Archiving protocol (SOP) - ${protocol_url}
+
+If you would rather not use the Tracker, just reply to this email and we will help.
 
 Best regards,
-Ryan Tasseff
-Data Quality Officer
+${sender_name}
+${sender_title}
 CIC biomaGUNE

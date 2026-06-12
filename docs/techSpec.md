@@ -197,12 +197,37 @@ Generated outputs:
 * `email_drafts/reminder_<pubid>_<n>.txt`
 * `email_drafts/completion_<pubid>.txt`
 
-## 6. Future automation hooks (Stage 3+)
+## 6. Automation hooks (Stages 2.5, 3, 4 and the parallel SharePoint track)
 
-See [roadmap.md](roadmap.md) for stage definitions.
+See [roadmap.md](roadmap.md) for stage definitions and current status.
+Stage-specific design docs:
 
-The key design choice: **task codes become triggers**.
+* [zenodo_design.md](zenodo_design.md) — Stage 2.5 (automated draft
+  creation) and Stage 3 (file uploads + publish). Module layout,
+  metadata mapping, file handling, configuration, error policy.
+* [roadmap.md § Parallel track](roadmap.md) — SharePoint List
+  user-interaction layer (covers list schema, view design, sync
+  module, action-routing policy).
 
-* If later you allow `zenodo_upload` tasks, `apply_actions` can call a Zenodo upload routine.
-* If later DB write becomes possible, `db_updated` can be automated (and you’d stop generating that task).
+The key design choice across all of these: **task codes become
+triggers**. New automation is added as new task codes processed by
+`apply_actions`, not as out-of-band side effects in the scanner or
+elsewhere. New code paths route through the action sheet at the
+start (operator-confirmed) and graduate to auto-apply once a class
+of signals has been validated against real data — see
+`feedback_no_auto_state_changes.md` in the memory store for the
+full rule.
+
+Concrete planned task codes:
+
+* `zenodo_create_draft`, `zenodo_upload_files`, `zenodo_publish` —
+  Stages 2.5 / 3. Each maps to a deterministic API call sequence
+  inside `src/oa_tracker/zenodo.py`.
+* `propose_data_contact`, `propose_exemption`, `propose_done` —
+  parallel SharePoint track. Each is emitted from `oa sharepoint
+  sync` when a user has edited the corresponding column on the
+  SharePoint List.
+* If/when DB write becomes possible (Stage 4), `db_updated` can be
+  automated end-to-end and `apply_actions` stops emitting it as a
+  manual task.
 

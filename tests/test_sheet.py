@@ -248,6 +248,24 @@ def test_data_required_archive_emits_standard_workflow(test_config):
     assert qa_row["note"] == ""  # no auto-note for plain data-required
 
 
+def test_no_reminder_row_once_operator_owned(test_config):
+    """Past QA (OPEN_READY_FOR_ZENODO_DRAFT+), the sheet emits the pipeline
+    task but NO remind_sent/contact_pi_manual row, even when a reminder is
+    technically due — the remaining work is the operator's, not the author's.
+    Mirrors the emails-side suppression so sheet and drafts agree."""
+    _enriched_insert(
+        test_config.database, "PUB206", OPEN_READY_FOR_ZENODO_DRAFT,
+        oa_mandate_missing=0, oa_data_required=1, oa_paper_required=1,
+        next_reminder_at="2020-01-01T00:00:00",  # due, but operator-owned
+        reminder_count=1,
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    task_codes = [r["task_code"] for r in rows]
+    assert "zenodo_draft_created" in task_codes
+    assert "remind_sent" not in task_codes
+    assert "contact_pi_manual" not in task_codes
+
+
 def test_ambiguous_mix_treated_as_mandate_missing(test_config):
     """no_oa + unknown contributions → data_req=None, paper_req=None,
     mandate_missing=0. Sheet should still surface as needs-confirmation."""

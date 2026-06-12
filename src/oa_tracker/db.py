@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -51,7 +51,11 @@ CREATE TABLE IF NOT EXISTS archives (
     data_contact_email       TEXT,
     data_contact_overridden  INTEGER NOT NULL DEFAULT 0,
     zenodo_code              TEXT,
-    zenodo_code_overridden   INTEGER NOT NULL DEFAULT 0
+    zenodo_code_overridden   INTEGER NOT NULL DEFAULT 0,
+    -- v3: SharePoint sync bookkeeping + corresponding-author override
+    sharepoint_item_id       INTEGER,
+    sharepoint_synced_at     TEXT,
+    corresponding_author_overridden INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -92,6 +96,14 @@ _V1_TO_V2_ALTERS = [
     "ALTER TABLE archives ADD COLUMN zenodo_code_overridden INTEGER NOT NULL DEFAULT 0",
 ]
 
+# v2 → v3: SharePoint List parallel track. Adds sync bookkeeping columns
+# and the corresponding-author override flag (mirrors data_contact_overridden).
+_V2_TO_V3_ALTERS = [
+    "ALTER TABLE archives ADD COLUMN sharepoint_item_id INTEGER",
+    "ALTER TABLE archives ADD COLUMN sharepoint_synced_at TEXT",
+    "ALTER TABLE archives ADD COLUMN corresponding_author_overridden INTEGER NOT NULL DEFAULT 0",
+]
+
 
 def init_db(path: Path) -> None:
     """Create the database and tables; run any pending migrations."""
@@ -112,6 +124,9 @@ def _migrate(conn: sqlite3.Connection, from_version: int) -> None:
     """Apply migrations from ``from_version`` up to ``_SCHEMA_VERSION``."""
     if from_version < 2:
         for stmt in _V1_TO_V2_ALTERS:
+            conn.execute(stmt)
+    if from_version < 3:
+        for stmt in _V2_TO_V3_ALTERS:
             conn.execute(stmt)
     conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
 
