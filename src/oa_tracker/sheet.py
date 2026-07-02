@@ -88,6 +88,68 @@ def _mandate_classification(archive: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def proposal_row(
+    pub_id: str,
+    archive: dict[str, Any] | None,
+    task_code: str,
+    task_text: str,
+    note: str = "",
+    pid: str = "",
+    url: str = "",
+) -> dict[str, str]:
+    """A sheet-format row for a pulled SharePoint proposal — a drop-in for
+    ``oa apply``. Mirrors ``_row`` but tolerates a missing archive (a List
+    row we don't recognise still needs to surface for the operator)."""
+    row = {c: "" for c in SHEET_COLUMNS}
+    row.update({
+        "publication_id": pub_id, "task_code": task_code,
+        "task_text": task_text, "done": "0", "pid": pid, "url": url, "note": note,
+    })
+    if archive is not None:
+        row["current_status"] = archive["status"]
+        row["first_seen_at"] = archive.get("first_seen_at") or ""
+        row["next_reminder_at"] = archive.get("next_reminder_at") or ""
+        row["reminder_count"] = str(archive.get("reminder_count") or 0)
+    else:
+        row["reminder_count"] = "0"
+    return row
+
+
+def _package_note(archive: dict[str, Any]) -> str:
+    """Cross-check the Tracker 'done' tick against the detected package
+    (.zip + README.txt) for OPEN_ACTIVE archives. Returns the operator
+    note for the QA row — empty when there's nothing noteworthy."""
+    user_done = bool(archive.get("user_done_flag"))
+    has_zip = bool(archive.get("package_has_zip"))
+    has_readme = bool(archive.get("package_has_readme"))
+    complete = has_zip and has_readme
+    if user_done and complete:
+        return (
+            "Tracker 'done' + package (.zip + README) detected — auto-QC "
+            "eligible; if this row is still here, automation is off or the "
+            "mandate isn't data-required. Review and pass QA."
+        )
+    if user_done and not complete:
+        missing = " and ".join(
+            m for m, ok in ((".zip", has_zip), ("README.txt", has_readme)) if not ok
+        )
+        return (
+            f"MISMATCH: user marked done on the Tracker but the folder is "
+            f"missing {missing} — the reminder asks them to package per "
+            "protocol; QA manually if the contents are actually fine."
+        )
+    if complete:
+        return (
+            "Package (.zip + README) detected but the contact hasn't ticked "
+            "'done' on the Tracker — QA manually, or wait for their confirmation."
+        )
+    return ""
+
+
+def _join_notes(*parts: str) -> str:
+    return " ".join(p for p in parts if p)
+
+
 def _row(archive: dict[str, Any], task_code: str, task_text: str, note: str = "") -> dict[str, str]:
     """Build a sheet row dict with the standard column population."""
     return {
@@ -174,9 +236,47 @@ def generate_sheet(config: Config) -> Path:
             # step — exactly the "QA must precede reminder" rule.
             next_task = st.next_task_for_status(cur_status)
             if next_task:
-                meta = st.TASK_CODES[next_task]
+                task = next_task
+                note = auto_note
+
+                if cur_status == st.OPEN_ACTIVE:
+                    note = _join_notes(note, _package_note(archive))
+
+                # Zenodo-aware rows: when the API integration is on, the
+                # sheet offers the API-backed codes so done=1 performs the
+                # step (create draft / publish) instead of just recording
+                # hand-done work. Env-mismatched or hand-managed drafts
+                # keep the manual codes.
+                zen = config.zenodo
+                env_ok = archive.get("zenodo_env") in (None, zen.environment)
+                if zen.enabled and cur_status == st.OPEN_READY_FOR_ZENODO_DRAFT \
+                        and not archive.get("zenodo_code") and pub_id.isdigit():
+                    task = "zenodo_create_draft"
+                    note = _join_notes(
+                        note,
+                        f"done=1 creates the draft via the API on {zen.environment} "
+                        "(metadata + reserved DOI + package upload happen automatically "
+                        "when `oa auto` runs).",
+                    )
+                elif cur_status == st.OPEN_ZENODO_DRAFT_CREATED and archive.get("zenodo_code"):
+                    from oa_tracker import zenodo as z
+                    note = _join_notes(
+                        note,
+                        f"Review the draft: {z.record_ui_url(zen, archive['zenodo_code'])}",
+                    )
+                elif zen.enabled and cur_status == st.OPEN_ZENODO_DRAFT_VALIDATED \
+                        and archive.get("zenodo_code") and env_ok:
+                    task = "zenodo_publish"
+                    note = _join_notes(
+                        note,
+                        f"done=1 publishes record {archive['zenodo_code']} on "
+                        f"{zen.environment} via the API and mints the DOI — this is "
+                        "the permanent step.",
+                    )
+
+                meta = st.TASK_CODES[task]
                 rows.append(_row(
-                    archive, next_task, meta["description"], note=auto_note,
+                    archive, task, meta["description"], note=note,
                 ))
 
             # Reminders fire only when data is actually required by mandate

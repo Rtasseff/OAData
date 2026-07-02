@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -55,7 +55,17 @@ CREATE TABLE IF NOT EXISTS archives (
     -- v3: SharePoint sync bookkeeping + corresponding-author override
     sharepoint_item_id       INTEGER,
     sharepoint_synced_at     TEXT,
-    corresponding_author_overridden INTEGER NOT NULL DEFAULT 0
+    corresponding_author_overridden INTEGER NOT NULL DEFAULT 0,
+    -- v4: automation — package detection (scanner), the user's Tracker
+    -- "done" flag (SharePoint pull), and the Zenodo draft's reserved DOI
+    -- + environment (so a sandbox draft is never mistaken for production)
+    package_has_zip          INTEGER,
+    package_has_readme       INTEGER,
+    package_checked_at       TEXT,
+    user_done_flag           INTEGER NOT NULL DEFAULT 0,
+    user_done_at             TEXT,
+    zenodo_doi               TEXT,
+    zenodo_env               TEXT
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -104,6 +114,20 @@ _V2_TO_V3_ALTERS = [
     "ALTER TABLE archives ADD COLUMN corresponding_author_overridden INTEGER NOT NULL DEFAULT 0",
 ]
 
+# v3 → v4: automation. Package detection is refreshed by the scanner;
+# user_done_* is set by the SharePoint pull; zenodo_doi/zenodo_env are
+# written when a draft is created via the API (reserved DOI + which
+# Zenodo instance it lives on).
+_V3_TO_V4_ALTERS = [
+    "ALTER TABLE archives ADD COLUMN package_has_zip INTEGER",
+    "ALTER TABLE archives ADD COLUMN package_has_readme INTEGER",
+    "ALTER TABLE archives ADD COLUMN package_checked_at TEXT",
+    "ALTER TABLE archives ADD COLUMN user_done_flag INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE archives ADD COLUMN user_done_at TEXT",
+    "ALTER TABLE archives ADD COLUMN zenodo_doi TEXT",
+    "ALTER TABLE archives ADD COLUMN zenodo_env TEXT",
+]
+
 
 def init_db(path: Path) -> None:
     """Create the database and tables; run any pending migrations."""
@@ -127,6 +151,9 @@ def _migrate(conn: sqlite3.Connection, from_version: int) -> None:
             conn.execute(stmt)
     if from_version < 3:
         for stmt in _V2_TO_V3_ALTERS:
+            conn.execute(stmt)
+    if from_version < 4:
+        for stmt in _V3_TO_V4_ALTERS:
             conn.execute(stmt)
     conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
 
@@ -203,6 +230,18 @@ def get_reminders_due(conn: sqlite3.Connection, now: str | None = None) -> list[
         (now,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_last_event(
+    conn: sqlite3.Connection, publication_id: str, action_code: str
+) -> dict[str, Any] | None:
+    """Most recent event of a given action for one archive, or None."""
+    row = conn.execute(
+        "SELECT * FROM events WHERE publication_id = ? AND action_code = ? "
+        "ORDER BY event_id DESC LIMIT 1",
+        (publication_id, action_code),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def get_recent_events(conn: sqlite3.Connection, since: str) -> list[dict[str, Any]]:

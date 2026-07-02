@@ -78,6 +78,7 @@ All paths are resolved relative to the project root unless absolute.
 | `oa status [PUB_ID]` | Show status of one or all archives |
 | `oa action <PUB_ID> <TASK> [...]` | Apply a single task to one archive without editing the sheet |
 | `oa reopen <PUB_ID> --reason "..."` | Reopen a CLOSED archive back to an OPEN status |
+| `oa auto` | Full unattended cycle for cron: scan → SharePoint sync → auto-advance → sheet/emails/report → `output/auto_digest.md` (see `scripts/run_auto.sh`) |
 
 All commands accept `--config` / `-c` and `--db` overrides.
 
@@ -107,12 +108,21 @@ Global flags:
   - `oa action <PUB_ID> zenodo_draft_created [--note "..."]`
 - `zenodo_validated` — mark Zenodo draft as validated → `OPEN_ZENODO_DRAFT_VALIDATED`
   - `oa action <PUB_ID> zenodo_validated [--note "..."]`
-- `zenodo_published` — publish Zenodo record → `OPEN_ZENODO_PUBLISHED`
+- `zenodo_published` — record a hand-published Zenodo record → `OPEN_ZENODO_PUBLISHED`
   - `oa action <PUB_ID> zenodo_published --pid PID [--url URL] [--note "..."]`
 - `db_updated` — internal publication DB updated → `OPEN_DB_UPDATED`
   - `oa action <PUB_ID> db_updated [--note "..."]`
 - `folder_removed` — SharePoint folder removed; close → `CLOSED_DATA_ARCHIVED`
   - `oa action <PUB_ID> folder_removed [--note "..."]`
+
+**API-backed Zenodo tasks** (need `[zenodo]` enabled in `config.toml`; they call the Zenodo API):
+
+- `zenodo_create_draft` — create the draft via the API (metadata + reserved DOI) → `OPEN_ZENODO_DRAFT_CREATED`
+  - `oa action <PUB_ID> zenodo_create_draft`
+- `zenodo_upload_files` — upload the folder's package (`*.zip` + `README*.txt`) to the draft; status unchanged
+  - `oa action <PUB_ID> zenodo_upload_files`
+- `zenodo_publish` — publish the validated draft via the API; mints the DOI and records it → `OPEN_ZENODO_PUBLISHED`
+  - `oa action <PUB_ID> zenodo_publish`
 
 **Closures** (from any `OPEN_*` status):
 

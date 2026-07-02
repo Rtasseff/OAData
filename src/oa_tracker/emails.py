@@ -124,8 +124,34 @@ def _reminder_status_note(archive: dict[str, Any]) -> str:
     """A status-specific sentence for reminder emails. The ask is different
     for an empty folder vs. an upload that stalled before QA — many authors
     drop something incomplete and never come back, and that case needs a
-    'please finish/package it' nudge rather than 'please upload'."""
+    'please finish/package it' nudge rather than 'please upload'.
+
+    Package-aware (automation): the note names exactly what is missing —
+    the ZIP/README package, or only the Tracker 'done' confirmation. When
+    both are present the archive auto-advances and no reminder is due."""
     if archive.get("status") == st.OPEN_ACTIVE:
+        user_done = bool(archive.get("user_done_flag"))
+        has_zip = bool(archive.get("package_has_zip"))
+        has_readme = bool(archive.get("package_has_readme"))
+        if user_done and not (has_zip and has_readme):
+            missing = " and a ".join(
+                m for m, ok in (("single ZIP of the datasets", has_zip),
+                                ("README.txt", has_readme)) if not ok
+            )
+            return (
+                "You marked this publication as done on the OA Archive Tracker — "
+                f"thank you. However, the folder does not yet contain a {missing} "
+                "as the protocol asks, so we cannot process it automatically. "
+                "Please add the missing item(s), or reply if you believe the "
+                "upload is already complete as-is."
+            )
+        if has_zip and has_readme and not user_done:
+            return (
+                "Your uploaded data package looks complete (ZIP and README "
+                "received). To let us process it, please open the OA Archive "
+                "Tracker and tick \"I think this is done\" on this publication — "
+                "or simply reply to confirm, and we will take it from there."
+            )
         return (
             "We can see some files in the publication folder, but the deposit "
             "does not yet look complete or ready — for example it may be "
@@ -179,8 +205,9 @@ def _cheat_template_vars(archive: dict[str, Any], now_str: str, config: Config) 
         # labeled blank otherwise so the operator can jot it during the manual
         # mint, then make it permanent with `oa action ... set_zenodo_code`.
         "zenodo_doi": (
-            f"10.5281/zenodo.{archive['zenodo_code']}"
-            if archive.get("zenodo_code") else ""
+            archive.get("zenodo_doi")
+            or (f"10.5281/zenodo.{archive['zenodo_code']}"
+                if archive.get("zenodo_code") else "")
         ),
         "folder_path": archive.get("folder_path") or "(unknown)",
         "protocol_url": config.sharepoint.sop_url or _PROTOCOL_URL,

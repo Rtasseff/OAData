@@ -56,6 +56,44 @@ def _folder_has_files(folder: Path) -> bool:
         return False
 
 
+def _package_state(folder: Path) -> tuple[bool, bool]:
+    """Detect the protocol package: ``(has_zip, has_readme)``.
+
+    The protocol asks contacts to upload a ``.zip`` of the datasets plus a
+    ``README.txt``. In practice the README sometimes ends up only *inside*
+    the zip (§2.4 of the protocol puts it in the folder that gets zipped),
+    so a README found either beside the zip or inside any zip counts.
+    Read-only: zip inspection reads the central directory, never extracts.
+    """
+    has_zip = False
+    has_readme = False
+    try:
+        files = [p for p in folder.rglob("*") if p.is_file()]
+    except PermissionError:
+        return (False, False)
+    zips = [p for p in files if p.name.lower().endswith(".zip")]
+    has_zip = bool(zips)
+    has_readme = any(
+        p.name.lower().startswith("readme") and p.name.lower().endswith(".txt")
+        for p in files
+    )
+    if has_zip and not has_readme:
+        import zipfile
+        for z in zips:
+            try:
+                with zipfile.ZipFile(z) as zf:
+                    if any(
+                        n.rsplit("/", 1)[-1].lower().startswith("readme")
+                        and n.lower().endswith(".txt")
+                        for n in zf.namelist()
+                    ):
+                        has_readme = True
+                        break
+            except (zipfile.BadZipFile, OSError):
+                continue
+    return (has_zip, has_readme)
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -161,7 +199,13 @@ def _scan_placeholder(
     appear. This is what keeps them off the missing-folder integrity list.
     """
     pub_id = existing["publication_id"]
-    updates: dict[str, Any] = {"last_seen_at": now}
+    has_zip, has_readme = _package_state(folder)
+    updates: dict[str, Any] = {
+        "last_seen_at": now,
+        "package_has_zip": int(has_zip),
+        "package_has_readme": int(has_readme),
+        "package_checked_at": now,
+    }
     if existing["unexpected_missing_folder"]:
         updates["unexpected_missing_folder"] = 0
         updates["missing_folder_detected_at"] = None
@@ -230,6 +274,12 @@ def scan_folders(config: Config) -> ScanResult:
                     continue
                 found_ids.add(pub_id)
                 has_files = _folder_has_files(folder)
+                has_zip, has_readme = _package_state(folder) if has_files else (False, False)
+                package_kw: dict[str, Any] = {
+                    "package_has_zip": int(has_zip),
+                    "package_has_readme": int(has_readme),
+                    "package_checked_at": now,
+                }
 
                 existing = db.get_archive(conn, pub_id)
 
@@ -259,6 +309,7 @@ def scan_folders(config: Config) -> ScanResult:
                             last_changed_at=now,
                             status=st.OPEN_ACTIVE,
                             next_reminder_at=next_reminder,
+                            **package_kw,
                             **enriched,
                         )
                         db.insert_event(
@@ -278,6 +329,7 @@ def scan_folders(config: Config) -> ScanResult:
                             last_seen_at=now,
                             status=st.OPEN_INACTIVE,
                             next_reminder_at=_compute_next_reminder(config, now),
+                            **package_kw,
                             **enriched,
                         )
                         db.insert_event(
@@ -286,7 +338,7 @@ def scan_folders(config: Config) -> ScanResult:
                         result.new_inactive.append(pub_id)
                 else:
                     # Existing folder — update last_seen, check transitions
-                    updates: dict[str, Any] = {"last_seen_at": now, **enriched}
+                    updates: dict[str, Any] = {"last_seen_at": now, **package_kw, **enriched}
 
                     # Clear missing-folder flag if it was set
                     if existing["unexpected_missing_folder"]:

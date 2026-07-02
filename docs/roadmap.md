@@ -361,13 +361,24 @@ Remaining checklist:
 
 ### Stage 2.5 — Automate Zenodo repo creation (interim, before uploads)
 
-**Status:** design captured 2026-05-30 in `docs/zenodo_design.md`,
-all design decisions locked the same day (license CC0-1.0, no
-community, default keywords `["CIC biomaGUNE"]`, abstract-based
-description with attribution framing, sandbox-first rollout, all
-authors via `publication.author_with_affiliation` parse with a
-fallback path). Only remaining gate is the Zenodo personal access
-token, expected from operator on return to keyboard.
+**Status:** **shipped 2026-07-02** (together with Stage 3 uploads and the
+automation engine — see the 2026-07-02 progress entry below). Built
+against Zenodo's current InvenioRDM API (`/api/records`), not the legacy
+deposit API — the RDM relation vocabulary carries the operator-specified
+"Is published in" link (`ispublishedin`), which the legacy API lacks.
+Awaiting sandbox validation: the operator supplies a sandbox token in
+`~/.zenodorc`, lets `oa auto` draft 2–3 real archives against
+`sandbox.zenodo.org`, inspects them in the browser, then flips
+`environment = "production"`.
+
+Design captured 2026-05-30 in `docs/zenodo_design.md`, decisions locked
+the same day (license CC0-1.0, no community, default keywords
+`["CIC biomaGUNE"]`, abstract-based description with attribution framing,
+sandbox-first rollout, all authors via
+`publication.author_with_affiliation` parse with a fallback path). One
+design delta at implementation time, on operator instruction 2026-07-02:
+the related-work relation is **`ispublishedin`** ("Is published in", with
+resource type Journal article), superseding the `isSupplementTo` lock.
 
 **Goal:** automate creation of empty Zenodo draft records (metadata only,
 no large-file upload yet). Stage 2 currently produces a "Zenodo cheat
@@ -386,10 +397,12 @@ the operator decisions that gate implementation.
 
 ### Stage 3 — Zenodo automation: uploads
 
-**Status:** design captured 2026-05-30 in `docs/zenodo_design.md`
-alongside Stage 2.5 (same module, same configuration, shared
-client). Implementation follows once Stage 2.5 is validated against
-the sandbox.
+**Status:** **shipped 2026-07-02** alongside Stage 2.5 (same module
+`src/oa_tracker/zenodo.py`, same configuration, shared client). Uploads
+are idempotent (checksummed against the draft's files; safe to re-run)
+and default to the protocol package (`*.zip` + `README*.txt`) with
+non-package files reported, never silently skipped. Publish remains
+operator-confirmed indefinitely, exactly as designed.
 
 **Goal:** remove the most painful manual step (large-file drag/drop and Zenodo
 UI errors). Builds on Stages 2 and 2.5 — uses publication metadata to
@@ -1406,6 +1419,67 @@ small gaps (231 tests pass):
   `10.5281/zenodo.<code>` when a code is set, blank otherwise (the DOI is the PID
   we collect and never lives in the central DB). Blank line is a labeled scratch
   space during the manual mint.
+
+**2026-07-02 — Stages 2.5 + 3 shipped; automation engine + `oa auto` (cron) landed**
+
+Operator directive: automate to the max; the only steps that stay
+operator-confirmed are Zenodo **publish** (permanent DOI) and the QC
+decision — and QC gets a mechanical fast path (below). 294 tests pass
+(+63). Branch: `automation-max`.
+
+- **`src/oa_tracker/zenodo.py`** — Zenodo client + metadata builder against
+  the current InvenioRDM API (`POST /api/records`, three-step file upload,
+  `POST .../draft/actions/publish`). Vocabulary IDs verified live against
+  `zenodo.org/api/vocabularies/*` (2026-07-02): `ispublishedin`, `cc0-1.0`,
+  `dataset`, `publication-article`, `datacurator`. The draft's DOI is
+  explicitly **reserved at creation** (`POST .../draft/pids/doi`) so the
+  dataset's own `10.5281/zenodo.<id>` is recorded before publish — the
+  paper DOI is only ever a related identifier. Corrections vs. the IT
+  script (`tmp_zenodo_make.txt`): new DOI (not the paper's), type
+  `dataset` (not publication/article), CC0 license attached, related-work
+  link to the paper, public visibility (embargoed files only when the
+  mandate requires). Token in `~/.zenodorc` (mode 600), sections
+  `[zenodo]` / `[zenodo-sandbox]`, per-environment.
+- **Auto-QC rule (operator-defined 2026-07-02):** Tracker "I think this is
+  done" **+** detected package (`*.zip` + `README*.txt`, sibling or inside
+  the zip) **+** data-required mandate → automatic `qa_pass`. Both
+  mismatch directions go manual with the reason spelled out: the action
+  sheet flags them, and the reminder email itself asks the contact for the
+  specific missing piece ("add the ZIP/README" / "tick done on the
+  Tracker"). Scanner now records `package_has_zip` / `package_has_readme`
+  per scan; the SharePoint pull persists the done-tick (`user_done_flag`),
+  including clears.
+- **Automation engine (`src/oa_tracker/auto.py`) + `oa auto`:** one
+  cron-able command — scan → List pull (auto-apply promoted signal
+  classes; rest to the proposals TSV) → advance (auto-QC → draft +
+  reserved DOI + package upload, stops at DRAFT_CREATED for validation;
+  auto-close OPEN_DB_UPDATED archives whose folder was removed and PID is
+  on record) → List push/reconcile → sheet/emails/report → digest
+  (`output/auto_digest.md` + rolling `auto_log.txt`). Per-class gates in
+  `[automation]`; every auto action goes through the same `apply_single`
+  path with `source="auto"` in the audit log. Promoted to auto-apply per
+  the standing policy (operator directive = the promotion): data-contact
+  reassignments, categorized exemptions with evidence, user notes.
+  "Other — needs explanation" and evidence-less external-archive claims
+  stay operator-routed, as always. Headless-safe: an expired Graph token
+  fails that stage with instructions instead of blocking on a device-code
+  prompt; `run_auto` self-migrates the DB schema (v4).
+- **Sheet/emails are automation-aware:** READY rows become
+  `zenodo_create_draft` (done=1 performs the API call), DRAFT_CREATED rows
+  carry the draft's review URL, VALIDATED rows become `zenodo_publish`
+  (done=1 publishes — the one permanent step, deliberately still a human
+  keystroke). Env-mismatched or hand-managed drafts keep the manual codes;
+  a `zenodo_env` column pins which instance a draft lives on so sandbox
+  and production can never be confused.
+- **Cron:** `scripts/run_auto.sh` (flock + venv + log). WSL caveat noted in
+  the script: use Windows Task Scheduler → `wsl.exe -- .../run_auto.sh` if
+  WSL cron isn't running.
+- **Rollout gate (sandbox-first, per design):** first `oa auto` runs with
+  `environment = "sandbox"` — 3272/3293 are at READY today and will become
+  the sandbox validation drafts. After operator inspection, flip to
+  production. Email sending remains draft-based (`.eml`) — auto-send via
+  Graph `Mail.Send` is a possible follow-up but needs a consent test with
+  the MS tenant.
 
 ---
 

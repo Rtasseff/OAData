@@ -32,6 +32,39 @@ sync_closed = false
 # MSAL refresh-token cache — OUTSIDE the repo (no secret in config; device-code uses the operator's identity)
 token_cache = "~/.oa_sharepoint_token.json"
 
+[zenodo]                      # Zenodo API (Stages 2.5 + 3) — see docs/zenodo_design.md
+enabled = true
+# SANDBOX FIRST: run 2–3 real archives against sandbox.zenodo.org and inspect
+# the drafts in the browser, then flip this to "production". Sandbox and
+# production need SEPARATE tokens (sandbox tokens come from sandbox.zenodo.org).
+environment = "sandbox"
+# The token file (mode 600, never in the repo):
+#   [zenodo]           ← production token
+#   token = ...
+#   [zenodo-sandbox]   ← sandbox token
+#   token = ...
+token_file = "~/.zenodorc"
+default_license = "cc0-1.0"          # Creative Commons Zero v1.0 Universal
+default_affiliation = "CIC biomaGUNE"
+default_keywords = ["CIC biomaGUNE"]
+# "package" uploads only the protocol package (*.zip + README*.txt); other
+# folder files are listed in the digest, never silently skipped. "all"
+# uploads every non-clutter file.
+upload_files = "package"
+manifest_dir = "./output/zenodo_uploads"
+
+[automation]                  # per-signal-class gates for `oa auto` (cron entry point)
+enabled = true
+auto_qa_pass = true               # Tracker "done" + .zip + README detected → qa_pass
+auto_zenodo_draft = true          # READY → draft with metadata + reserved DOI
+auto_zenodo_upload = true         # upload the package files to the draft
+auto_apply_data_contact = true    # List "suggest a new data contact" applies directly
+auto_apply_exemptions = true      # categorized exemptions with evidence apply directly
+auto_apply_user_notes = true      # List notes recorded to the archive automatically
+auto_close_on_folder_removed = true  # OPEN_DB_UPDATED + folder gone + PID → closed
+# NOTE: there is deliberately no auto_publish switch — publishing mints a
+# permanent DOI and always waits for the operator (sheet row `zenodo_publish`).
+
 [email]                       # outbound email drafts produced by `oa emails`
 sender_name = "Ryan Tasseff"
 sender_title = "Data Quality Officer"

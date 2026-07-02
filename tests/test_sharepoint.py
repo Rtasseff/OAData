@@ -439,8 +439,15 @@ def test_pull_dedup_skips_unchanged_signature():
     assert pull_proposals([base], nf) == []
 
 
-def test_pull_empty_item_emits_nothing():
-    assert pull_proposals([_item()], _name_for()) == []
+def test_pull_empty_item_returned_without_proposals():
+    # Changed-but-empty items ARE returned (so IngestedSig gets stamped and
+    # a cleared "done" tick can be persisted) — but carry no proposals or
+    # notes, so nothing lands in the proposals TSV.
+    pulled = pull_proposals([_item()], _name_for())
+    assert len(pulled) == 1
+    assert pulled[0].proposals == []
+    assert pulled[0].user_notes is None
+    assert pulled[0].proposed_done is False
 
 
 def test_pull_notes_only_pulled_without_proposals():

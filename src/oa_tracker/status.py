@@ -156,6 +156,22 @@ TASK_CODES = {
         "description": "Clear the corresponding-author override; auto-seed from the central DB next scan",
         "changes_status": False,
     },
+    # ── Stage 2.5 / 3: Zenodo API task codes ─────────────────────────
+    # These call the Zenodo API when applied (actions.py orchestrates;
+    # zenodo.py talks to the API). The manual codes above them
+    # (zenodo_draft_created / zenodo_published) stay for hand-done work.
+    "zenodo_create_draft": {
+        "description": "Create Zenodo draft via API (metadata + reserved DOI)",
+        "changes_status": True,
+    },
+    "zenodo_upload_files": {
+        "description": "Upload the package files to the Zenodo draft via API",
+        "changes_status": False,
+    },
+    "zenodo_publish": {
+        "description": "Publish the validated Zenodo draft via API (mints the DOI)",
+        "changes_status": True,
+    },
 }
 
 # Override commands handled via dedicated paths in actions.py — they do
@@ -182,6 +198,9 @@ TRANSITIONS: dict[tuple[str, str], str] = {
     (OPEN_ZENODO_DRAFT_VALIDATED, "zenodo_published"): OPEN_ZENODO_PUBLISHED,
     (OPEN_ZENODO_PUBLISHED, "db_updated"): OPEN_DB_UPDATED,
     (OPEN_DB_UPDATED, "folder_removed"): CLOSED_DATA_ARCHIVED,
+    # API-backed Zenodo codes (side effects handled in actions.py):
+    (OPEN_READY_FOR_ZENODO_DRAFT, "zenodo_create_draft"): OPEN_ZENODO_DRAFT_CREATED,
+    (OPEN_ZENODO_DRAFT_VALIDATED, "zenodo_publish"): OPEN_ZENODO_PUBLISHED,
 }
 
 # These can be applied from any OPEN status
@@ -210,6 +229,17 @@ def validate_transition(current_status: str, task_code: str) -> str:
     # event/note for the operator but do not themselves move status.
     # (propose_exemption's eventual closure is applied by re-routing to a
     # concrete close_* code; the bare signal is a no-op until then.)
+    # zenodo_upload_files uploads to an existing draft — the status stays
+    # OPEN_ZENODO_DRAFT_CREATED (upload alone is not validation). It is
+    # only valid at that status, unlike the other no-op codes.
+    if task_code == "zenodo_upload_files":
+        if current_status != OPEN_ZENODO_DRAFT_CREATED:
+            raise ValueError(
+                f"zenodo_upload_files needs {OPEN_ZENODO_DRAFT_CREATED!r}, "
+                f"not {current_status!r}"
+            )
+        return current_status
+
     if task_code in (
         "remind_sent", "qa_hold", "contact_pi_manual", "mandate_missing",
         "propose_data_contact", "propose_exemption", "propose_done", "user_note",

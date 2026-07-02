@@ -583,3 +583,76 @@ def test_init_db_is_idempotent(tmp_path):
         assert [r[0] for r in rows] == [_SCHEMA_VERSION]
     finally:
         conn.close()
+
+
+# ── v4 automation: package detection ─────────────────────────────────
+
+def test_scan_detects_zip_and_readme(test_config):
+    from oa_tracker.scanner import scan_folders
+    from oa_tracker.db import get_archive, get_connection
+
+    folder = test_config.sharepoint_root / "4001"
+    folder.mkdir()
+    (folder / "Datasets_articleDOI-x.zip").write_bytes(b"zipdata")
+    (folder / "README.txt").write_text("readme")
+
+    scan_folders(test_config)
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "4001")
+    assert a["package_has_zip"] == 1
+    assert a["package_has_readme"] == 1
+    assert a["package_checked_at"]
+
+
+def test_scan_detects_readme_inside_zip(test_config):
+    import io
+    import zipfile
+    from oa_tracker.scanner import scan_folders
+    from oa_tracker.db import get_archive, get_connection
+
+    folder = test_config.sharepoint_root / "4002"
+    folder.mkdir()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("Datasets_ZIP/README.txt", "inside")
+        zf.writestr("Datasets_ZIP/data.csv", "a,b")
+    (folder / "Datasets_articleDOI-y.zip").write_bytes(buf.getvalue())
+
+    scan_folders(test_config)
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "4002")
+    assert a["package_has_zip"] == 1
+    assert a["package_has_readme"] == 1
+
+
+def test_scan_flags_incomplete_package(test_config):
+    from oa_tracker.scanner import scan_folders
+    from oa_tracker.db import get_archive, get_connection
+
+    folder = test_config.sharepoint_root / "4003"
+    folder.mkdir()
+    (folder / "loose_data.csv").write_text("a,b")
+
+    scan_folders(test_config)
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "4003")
+    assert a["package_has_zip"] == 0
+    assert a["package_has_readme"] == 0
+
+
+def test_rescan_updates_package_state(test_config):
+    from oa_tracker.scanner import scan_folders
+    from oa_tracker.db import get_archive, get_connection
+
+    folder = test_config.sharepoint_root / "4004"
+    folder.mkdir()
+    (folder / "loose_data.csv").write_text("a,b")
+    scan_folders(test_config)
+
+    (folder / "data.zip").write_bytes(b"z")
+    (folder / "readme.TXT").write_text("case-insensitive")
+    scan_folders(test_config)
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "4004")
+    assert a["package_has_zip"] == 1
+    assert a["package_has_readme"] == 1

@@ -97,11 +97,20 @@ The `task_code` column in `action_sheet.tsv` identifies the **action you are bei
 |---|---|---|---|
 | `OPEN_ACTIVE` | `qa_pass` | Review uploaded data and approve QA | `OPEN_READY_FOR_ZENODO_DRAFT` |
 | `OPEN_ACTIVE` | `qa_hold` | Flag QA issue; add note and keep monitoring | *(stays OPEN_ACTIVE)* |
-| `OPEN_READY_FOR_ZENODO_DRAFT` | `zenodo_draft_created` | Create Zenodo draft deposit | `OPEN_ZENODO_DRAFT_CREATED` |
-| `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_validated` | Validate Zenodo draft metadata and files | `OPEN_ZENODO_DRAFT_VALIDATED` |
-| `OPEN_ZENODO_DRAFT_VALIDATED` | `zenodo_published` | Publish Zenodo record (enter PID and URL) | `OPEN_ZENODO_PUBLISHED` |
+| `OPEN_READY_FOR_ZENODO_DRAFT` | `zenodo_draft_created` | Create Zenodo draft deposit **by hand** and record it | `OPEN_ZENODO_DRAFT_CREATED` |
+| `OPEN_READY_FOR_ZENODO_DRAFT` | `zenodo_create_draft` | **API:** done=1 creates the draft (metadata + reserved DOI) | `OPEN_ZENODO_DRAFT_CREATED` |
+| `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_upload_files` | **API:** upload the package files to the draft | *(stays OPEN_ZENODO_DRAFT_CREATED)* |
+| `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_validated` | Validate Zenodo draft metadata and files (in the browser) | `OPEN_ZENODO_DRAFT_VALIDATED` |
+| `OPEN_ZENODO_DRAFT_VALIDATED` | `zenodo_published` | Record a **hand-published** Zenodo record (enter PID and URL) | `OPEN_ZENODO_PUBLISHED` |
+| `OPEN_ZENODO_DRAFT_VALIDATED` | `zenodo_publish` | **API:** done=1 publishes the draft and mints the DOI | `OPEN_ZENODO_PUBLISHED` |
 | `OPEN_ZENODO_PUBLISHED` | `db_updated` | Update internal publication DB with dataset DOI/URL | `OPEN_DB_UPDATED` |
 | `OPEN_DB_UPDATED` | `folder_removed` | Confirm SharePoint folder removed; close archive | `CLOSED_DATA_ARCHIVED` |
+
+The **API** codes appear on the sheet automatically when `[zenodo]` is
+enabled in `config.toml`; when a draft was made by hand or lives on a
+different Zenodo environment than the config, the manual codes appear
+instead. `zenodo_publish` is the deliberate human keystroke that mints
+the permanent DOI — it is never applied automatically.
 
 ### Special actions (available from any OPEN status)
 
@@ -274,6 +283,45 @@ a `mandate_missing` flag when no rule applies), and refreshes the
 corresponding-author and central-repository fields. If the central DB
 is unreachable the scan logs an error and continues with the previously
 cached values — folder detection still works.
+
+### 8.1b Automated operation (`oa auto`) — the standing cadence
+
+With `[automation]` enabled, a scheduled `oa auto` run (cron or Windows
+Task Scheduler → `scripts/run_auto.sh`) does the whole regeneration cycle
+unattended and advances what it safely can:
+
+1. `scan` — folder states, package detection (`.zip` + `README.txt`),
+   pub-DB enrichment.
+2. SharePoint pull — records each contact's "I think this is done" tick;
+   auto-applies promoted signals (data-contact reassignments, categorized
+   exemptions with evidence, notes); routes everything else to
+   `output/sharepoint_proposals.tsv` as before.
+3. Advance — auto-QC (done tick + package + data-required mandate →
+   `qa_pass`), then Zenodo draft with reserved DOI + package upload
+   (stops at `OPEN_ZENODO_DRAFT_CREATED`), and closure of
+   `OPEN_DB_UPDATED` archives whose folder you already removed.
+4. SharePoint push + closed-row reconcile, then fresh
+   sheet / email drafts / weekly report.
+5. Digest → `output/auto_digest.md` — **this is the one file to read
+   when you sit down**: what was done automatically, what needs your
+   decision, and the pipeline states only you can advance.
+
+Your weekly manual session shrinks to: read the digest → validate any
+Zenodo drafts in the browser (link is in the sheet row/digest) →
+`done=1` on `zenodo_validated` and `zenodo_publish` rows → update the
+internal DB (`db_updated`) → remove finished folders in SharePoint →
+send the generated `.eml` drafts → `oa apply`.
+
+Never automated: Zenodo publish (permanent DOI), the QC judgement when
+the done-tick and the folder package disagree (both mismatch directions
+are flagged on the sheet and in the reminder text), free-text "Other"
+exemptions, and anything on a placeholder archive (no central-DB
+metadata to build a record from).
+
+Zenodo credentials: `~/.zenodorc` (mode 600), sections `[zenodo]`
+(production) and `[zenodo-sandbox]`, each with `token = ...`. The
+environment is chosen by `[zenodo] environment` in `config.toml` —
+sandbox first, production after the drafts have been inspected.
 
 ### 8.2 Weekly operations (recommended cadence)
 

@@ -292,3 +292,90 @@ def test_unclassified_archive_uses_legacy_behavior(test_config):
     # Both reminder and pipeline rows emitted (legacy behavior)
     assert "remind_sent" in task_codes
     assert "qa_pass" in task_codes
+
+
+# ── v4 automation: package-aware and Zenodo-aware rows ───────────────
+
+def _seed_active(test_config, pub_id="5001", **over):
+    from oa_tracker import db
+    row = {
+        "publication_id": pub_id,
+        "folder_path": f"/tmp/{pub_id}",
+        "first_seen_at": "2026-07-01T00:00:00",
+        "last_seen_at": "2026-07-01T00:00:00",
+        "status": "OPEN_ACTIVE",
+        "oa_data_required": 1,
+        "oa_paper_required": 1,
+        "oa_mandate_missing": 0,
+        "pub_db_last_refreshed_at": "2026-07-01T00:00:00",
+    }
+    row.update(over)
+    with db.get_connection(test_config.database) as conn:
+        db.upsert_archive(conn, **row)
+
+
+def _rows(test_config):
+    import csv
+    from oa_tracker.sheet import generate_sheet
+    path = generate_sheet(test_config)
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f, delimiter="\t"))
+
+
+def test_sheet_notes_mismatch_done_without_package(test_config):
+    _seed_active(test_config, user_done_flag=1, package_has_zip=1, package_has_readme=0)
+    qa = [r for r in _rows(test_config) if r["task_code"] == "qa_pass"]
+    assert "MISMATCH" in qa[0]["note"]
+    assert "README.txt" in qa[0]["note"]
+
+
+def test_sheet_notes_package_without_done(test_config):
+    _seed_active(test_config, user_done_flag=0, package_has_zip=1, package_has_readme=1)
+    qa = [r for r in _rows(test_config) if r["task_code"] == "qa_pass"]
+    assert "hasn't ticked" in qa[0]["note"]
+
+
+def test_sheet_plain_active_has_no_package_note(test_config):
+    _seed_active(test_config, user_done_flag=0, package_has_zip=0, package_has_readme=0)
+    qa = [r for r in _rows(test_config) if r["task_code"] == "qa_pass"]
+    assert qa[0]["note"] == ""
+
+
+def test_sheet_emits_api_draft_row_when_zenodo_enabled(test_config):
+    test_config.zenodo.enabled = True
+    _seed_active(test_config, status="OPEN_READY_FOR_ZENODO_DRAFT")
+    rows = _rows(test_config)
+    assert [r["task_code"] for r in rows] == ["zenodo_create_draft"]
+    assert "sandbox" in rows[0]["note"]
+
+
+def test_sheet_keeps_manual_draft_row_when_zenodo_disabled(test_config):
+    _seed_active(test_config, status="OPEN_READY_FOR_ZENODO_DRAFT")
+    rows = _rows(test_config)
+    assert [r["task_code"] for r in rows] == ["zenodo_draft_created"]
+
+
+def test_sheet_validate_row_links_the_draft(test_config):
+    test_config.zenodo.enabled = True
+    _seed_active(test_config, status="OPEN_ZENODO_DRAFT_CREATED",
+                 zenodo_code="123", zenodo_env="sandbox")
+    rows = _rows(test_config)
+    assert rows[0]["task_code"] == "zenodo_validated"
+    assert "sandbox.zenodo.org/uploads/123" in rows[0]["note"]
+
+
+def test_sheet_emits_api_publish_row(test_config):
+    test_config.zenodo.enabled = True
+    _seed_active(test_config, status="OPEN_ZENODO_DRAFT_VALIDATED",
+                 zenodo_code="123", zenodo_env="sandbox")
+    rows = _rows(test_config)
+    assert rows[0]["task_code"] == "zenodo_publish"
+    assert "mints the DOI" in rows[0]["note"]
+
+
+def test_sheet_env_mismatch_keeps_manual_publish_row(test_config):
+    test_config.zenodo.enabled = True   # config env = sandbox (default)
+    _seed_active(test_config, status="OPEN_ZENODO_DRAFT_VALIDATED",
+                 zenodo_code="123", zenodo_env="production")
+    rows = _rows(test_config)
+    assert rows[0]["task_code"] == "zenodo_published"

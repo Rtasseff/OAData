@@ -213,6 +213,15 @@ def _apply_row(
         result.errors.append(f"{row_label} ({pub_id}): {e}")
         return (False, old_status, None)
 
+    # API-backed Zenodo codes: the apply IS the API call (create draft /
+    # upload files / publish). Terminal API failures become row errors —
+    # no status change happens unless the call succeeded.
+    if task_code in ("zenodo_create_draft", "zenodo_upload_files", "zenodo_publish"):
+        return _apply_zenodo_row(
+            conn, archive, task_code, new_status, note, now, config,
+            source, result, row_label,
+        )
+
     # Warn if zenodo_published PID looks like a paper DOI
     if task_code == "zenodo_published" and pid and _looks_like_paper_doi(pid):
         result.warnings.append(
@@ -309,6 +318,147 @@ def _apply_row(
     )
     result.applied += 1
     return (True, old_status, new_status)
+
+
+def _append_note(archive: dict, note: str, now: str) -> str:
+    existing_notes = archive.get("notes") or ""
+    separator = "\n" if existing_notes else ""
+    return f"{existing_notes}{separator}[{now}] {note}"
+
+
+def _apply_zenodo_row(
+    conn: sqlite3.Connection,
+    archive: dict,
+    task_code: str,
+    new_status: str,
+    note: str,
+    now: str,
+    config: Config,
+    source: str,
+    result: ApplyResult,
+    row_label: str,
+) -> tuple[bool, str | None, str | None]:
+    """Perform the Zenodo API side effect for an apply row, then record it.
+
+    The status is written only after the API call succeeds, so a failed
+    call leaves the archive exactly where it was (safe to re-apply).
+    """
+    from oa_tracker import zenodo
+
+    pub_id = archive["publication_id"]
+    old_status = archive["status"]
+    zset = config.zenodo
+    if not zset.enabled:
+        result.errors.append(
+            f"{row_label} ({pub_id}): [zenodo] is not enabled in config.toml — "
+            "either enable it or use the manual codes "
+            "(zenodo_draft_created / zenodo_published)"
+        )
+        return (False, old_status, None)
+
+    try:
+        client = zenodo.get_client(zset)
+
+        if task_code == "zenodo_create_draft":
+            if archive.get("zenodo_code"):
+                result.errors.append(
+                    f"{row_label} ({pub_id}): already has zenodo_code "
+                    f"{archive['zenodo_code']!r} — refusing to create a second draft. "
+                    "Run `oa action ... reset_zenodo_code` first if that code is stale."
+                )
+                return (False, old_status, None)
+            extras = zenodo.fetch_publication_extras(pub_id) if pub_id.isdigit() else {}
+            payload = zenodo.build_record_payload(
+                archive, zset,
+                abstract=extras.get("abstract"),
+                author_with_affiliation=extras.get("author_with_affiliation"),
+                author_fallback=extras.get("author"),
+                extra_biomagune_names=(
+                    [extras["first_author_name"]] if extras.get("first_author_name") else []
+                ),
+            )
+            draft = zenodo.create_draft(client, payload)
+            event_note = (
+                f"Zenodo draft {draft.record_id} created on {zset.environment}"
+                + (f"; reserved DOI {draft.doi}" if draft.doi else "; DOI reserve failed (minted at publish)")
+                + f" — {zenodo.summarize_payload(payload)}"
+            )
+            extra_fields: dict[str, Any] = {
+                "zenodo_code": draft.record_id,
+                "zenodo_code_overridden": 1,   # protect from scan re-seed
+                "zenodo_env": zset.environment,
+                "notes": _append_note(archive, note or event_note, now),
+            }
+            if draft.doi:
+                extra_fields["zenodo_doi"] = draft.doi
+            db.update_archive_status(conn, pub_id, new_status, **extra_fields)
+            db.insert_event(
+                conn, pub_id, task_code, old_status, new_status, source,
+                pid=draft.doi, url=zenodo.record_ui_url(zset, draft.record_id),
+                note=event_note,
+            )
+            result.applied += 1
+            return (True, old_status, new_status)
+
+        code = archive.get("zenodo_code")
+        if not code:
+            result.errors.append(
+                f"{row_label} ({pub_id}): no zenodo_code on record — create the "
+                "draft first (zenodo_create_draft)"
+            )
+            return (False, old_status, None)
+        env = archive.get("zenodo_env")
+        if env and env != zset.environment:
+            result.errors.append(
+                f"{row_label} ({pub_id}): draft {code} lives on {env!r} but config "
+                f"environment is {zset.environment!r} — refusing to touch the wrong instance"
+            )
+            return (False, old_status, None)
+        if not env:
+            result.warnings.append(
+                f"{row_label} ({pub_id}): zenodo_env unknown for code {code} "
+                f"(set manually?) — assuming {zset.environment!r}"
+            )
+
+        if task_code == "zenodo_upload_files":
+            from pathlib import Path as _P
+            res = zenodo.upload_files(client, str(code), _P(archive["folder_path"]), zset)
+            if not res.ok:
+                result.errors.append(f"{row_label} ({pub_id}): upload failed — {res.summary}")
+                return (False, old_status, None)
+            db.upsert_archive(
+                conn, publication_id=pub_id,
+                notes=_append_note(archive, note or f"Zenodo upload: {res.summary}", now),
+            )
+            db.insert_event(
+                conn, pub_id, task_code, old_status, old_status, source,
+                note=res.summary,
+            )
+            result.applied += 1
+            return (True, old_status, old_status)
+
+        # zenodo_publish — the operator-confirmed, DOI-minting step.
+        published = zenodo.publish(client, str(code))
+        extra_fields = {
+            "final_pid": published["doi"],
+            "final_url": published["html_url"],
+            "zenodo_doi": published["doi"],
+            "notes": _append_note(
+                archive, note or f"Published on Zenodo ({zset.environment}): {published['doi']}", now
+            ),
+        }
+        db.update_archive_status(conn, pub_id, new_status, **extra_fields)
+        db.insert_event(
+            conn, pub_id, task_code, old_status, new_status, source,
+            pid=published["doi"], url=published["html_url"],
+            note=f"published on {zset.environment}",
+        )
+        result.applied += 1
+        return (True, old_status, new_status)
+
+    except zenodo.ZenodoError as e:
+        result.errors.append(f"{row_label} ({pub_id}): Zenodo [{e.kind}] {e}")
+        return (False, old_status, None)
 
 
 def apply_actions(sheet_path: Path, config: Config) -> ApplyResult:

@@ -23,15 +23,17 @@ If a task would require modifying anything on `/mnt/c/`, stop and ask the user t
 config.toml          — user settings (paths, reminder schedule)
 templates/           — email templates (reminder.txt, completion.txt)
 src/oa_tracker/
-    cli.py           — Typer app: oa init/scan/report/sheet/apply/emails/status
+    cli.py           — Typer app: oa init/scan/report/sheet/apply/emails/status/auto
     config.py        — load config.toml, resolve paths, Config dataclass
     status.py        — status constants, TRANSITIONS dict, validate_transition()
     db.py            — SQLite schema, get_connection(), CRUD helpers
-    scanner.py       — walk sharepoint_root, detect new/active/missing folders
+    scanner.py       — walk sharepoint_root, detect new/active/missing folders + package (.zip/README)
     sheet.py         — generate action_sheet.tsv from DB state
-    actions.py       — parse TSV, validate transitions, apply to DB
+    actions.py       — parse TSV, validate transitions, apply to DB (incl. Zenodo API codes)
     report.py        — generate weekly_report.md
     emails.py        — generate email drafts from templates
+    zenodo.py        — Zenodo InvenioRDM API client + metadata builder (Stages 2.5/3)
+    auto.py          — unattended automation engine behind `oa auto` (cron entry point)
 tests/
     conftest.py      — shared fixtures (tmp_db, tmp_sharepoint, test_config)
     test_*.py        — one test file per module
@@ -48,6 +50,8 @@ docs/
 ## Key Design Decisions
 
 - Operator never edits SQLite directly; all changes go through `action_sheet.tsv` → `oa apply`. New code paths and new input sources also route through the action sheet at the start (validation phase), then graduate to auto-apply once an operator has seen them behave correctly — see `feedback_no_auto_state_changes.md` in the memory store.
+- Promoted auto-apply classes run via `oa auto` (`auto.py`), gated per class in `[automation]`; every automatic action uses the same `apply_single` path with `source="auto"` in the audit log. Zenodo publish and disputed QC decisions are never automated.
+- Zenodo work targets the current InvenioRDM API (`/api/records`); the dataset's DOI is reserved at draft creation and the paper DOI only ever appears as an `ispublishedin` related identifier. Token in `~/.zenodorc` (never in the repo). Sandbox-first: `zenodo_env` on the archive pins which instance a draft lives on.
 - Applied action rows are moved to `action_history.tsv` and removed from the active sheet.
 - `string.Template` is used for email templates (`${placeholder}` syntax).
 - The scanner is read-only against the folder tree — it only observes, never modifies.

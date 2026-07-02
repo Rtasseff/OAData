@@ -229,3 +229,42 @@ def test_get_reminders_due(tmp_db):
         due = get_reminders_due(conn, "2026-02-17T00:00:00")
         assert len(due) == 1
         assert due[0]["publication_id"] == "REM1"
+
+
+_V4_COLUMNS = {
+    "package_has_zip", "package_has_readme", "package_checked_at",
+    "user_done_flag", "user_done_at", "zenodo_doi", "zenodo_env",
+}
+
+
+def test_fresh_db_has_v4_columns(tmp_db):
+    with get_connection(tmp_db) as conn:
+        assert _V4_COLUMNS <= _columns(conn)
+
+
+def test_migrates_v3_to_v4(tmp_path):
+    """A v3-era database gains the v4 automation columns on init_db."""
+    db_path = tmp_path / "legacy_v3.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE archives (
+            publication_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            sharepoint_item_id INTEGER,
+            sharepoint_synced_at TEXT,
+            corresponding_author_overridden INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        INSERT INTO schema_version (version) VALUES (3);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    with get_connection(db_path) as conn:
+        assert _V4_COLUMNS <= _columns(conn)
+        row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
+        assert row["v"] == _SCHEMA_VERSION

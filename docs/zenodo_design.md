@@ -1,5 +1,29 @@
 # Zenodo automation — design (Stages 2.5 and 3)
 
+> **Implementation deltas (2026-07-02, shipped in `src/oa_tracker/zenodo.py`):**
+> the module was built against Zenodo's current **InvenioRDM API**
+> (`POST /api/records`, three-step draft file upload, publish action) rather
+> than the legacy `/api/deposit/depositions` API this document describes.
+> Reasons and changes:
+>
+> 1. **Relation is `ispublishedin`** ("Is published in", + resource type
+>    Journal article) per operator instruction 2026-07-02 — superseding the
+>    `isSupplementTo` lock below. The legacy API's vocabulary cannot express
+>    it; the RDM vocabulary carries it (verified live against
+>    `zenodo.org/api/vocabularies/relationtypes`).
+> 2. **DOI is reserved at draft creation** (`POST .../draft/pids/doi`) so the
+>    dataset's own `10.5281/zenodo.<id>` is on record before publish.
+> 3. License id is the RDM `cc0-1.0` (same CC0 1.0 Universal).
+> 4. Embargo maps to RDM access: record public, files restricted +
+>    `embargo.until`.
+> 5. Upload default is the protocol **package** (`*.zip` + `README*.txt`);
+>    other files are reported, not uploaded (configurable to "all").
+> 6. HTTP client is stdlib `urllib` (matching `sharepoint.py`'s GraphClient
+>    pattern) — `requests` was not added.
+>
+> Everything else — token file, retry policy, error classes, sandbox-first
+> rollout, promotion path, metadata defaults — is implemented as designed.
+
 This is the design reference for the Zenodo work in the staged
 automation plan (`roadmap.md`). It covers Stage 2.5 (automate
 creation of empty draft records) and Stage 3 (automate file uploads

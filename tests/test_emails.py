@@ -470,3 +470,34 @@ def test_completion_draft_not_generated_for_closed_exception(test_config):
         )
     paths = generate_emails(test_config)
     assert not any(p.name == "completion_PUB803.txt" for p in paths)
+
+
+# ── v4 automation: package-aware reminder notes ──────────────────────
+
+def test_reminder_note_done_but_missing_package():
+    from oa_tracker.emails import _reminder_status_note
+    note = _reminder_status_note({
+        "status": "OPEN_ACTIVE", "user_done_flag": 1,
+        "package_has_zip": 1, "package_has_readme": 0,
+    })
+    assert "marked this publication as done" in note
+    assert "README.txt" in note
+
+
+def test_reminder_note_package_but_no_done_tick():
+    from oa_tracker.emails import _reminder_status_note
+    note = _reminder_status_note({
+        "status": "OPEN_ACTIVE", "user_done_flag": 0,
+        "package_has_zip": 1, "package_has_readme": 1,
+    })
+    assert "looks complete" in note
+    assert "I think this is done" in note
+
+
+def test_reminder_note_plain_active_unchanged():
+    from oa_tracker.emails import _reminder_status_note
+    note = _reminder_status_note({
+        "status": "OPEN_ACTIVE", "user_done_flag": 0,
+        "package_has_zip": 0, "package_has_readme": 0,
+    })
+    assert "does not yet look complete" in note

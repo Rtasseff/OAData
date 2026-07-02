@@ -310,7 +310,10 @@ class ReconcileResult:
 class GraphClient:
     """Delegated Microsoft Graph client with a persisted MSAL token cache."""
 
-    def __init__(self, sp: SharePointSettings, scopes=("Sites.Selected",), timeout: int = 30):
+    def __init__(
+        self, sp: SharePointSettings, scopes=("Sites.Selected",), timeout: int = 30,
+        interactive: bool = True,
+    ):
         if not sp.client_id:
             raise ValueError("sharepoint.client_id is not configured")
         self._authority = f"https://login.microsoftonline.com/{sp.tenant}"
@@ -319,6 +322,10 @@ class GraphClient:
         self._scopes = list(scopes)
         self._timeout = timeout
         self._token: str | None = None
+        # interactive=False (scheduled/cron runs): never start a device-code
+        # prompt — a headless run would block on it forever. Silent refresh
+        # from the token cache only; failure raises with the fix named.
+        self._interactive = interactive
 
     # -- auth --
     def _load_cache(self):
@@ -347,6 +354,11 @@ class GraphClient:
         accounts = app.get_accounts()
         if accounts:
             result = app.acquire_token_silent(self._scopes, account=accounts[0])
+        if not result and not self._interactive:
+            raise RuntimeError(
+                "SharePoint token cache is expired and this is a non-interactive "
+                "run — run `oa sharepoint sync` once in a terminal to re-authenticate."
+            )
         if not result:
             flow = app.initiate_device_flow(scopes=self._scopes)
             if "user_code" not in flow:
@@ -641,6 +653,7 @@ def reconcile_closed_rows(
 # ── Pull path: user edits → reviewable proposals ─────────────────────
 
 REQUEST_STATUS_PENDING = "Received — pending review"
+REQUEST_STATUS_PROCESSED = "Received — processed"
 
 # Exemption category → the concrete closure task code applied (after the
 # operator confirms). "needs_evidence" categories require PID + URL. Maps
@@ -662,6 +675,11 @@ class Proposal:
     pid: str = ""
     url: str = ""
     note: str = ""
+    # Structured payload for propose_data_contact, so the automation
+    # engine can apply the reassignment without parsing the note text.
+    # Populated only when the Person column resolved to a real user.
+    contact_name: str = ""
+    contact_email: str = ""
 
 
 @dataclass
@@ -671,6 +689,11 @@ class PulledItem:
     new_sig: str
     proposals: list[Proposal] = field(default_factory=list)
     user_notes: str | None = None
+    # Current state of the "I think this is done" tick — persisted to the
+    # archive row (user_done_flag) so the automation engine and the action
+    # sheet can cross-check it against the detected folder package without
+    # a live Graph call. False also means "unticked" (clears the flag).
+    proposed_done: bool = False
 
 
 def _fval(fields: dict, name: str):
@@ -756,6 +779,7 @@ def pull_proposals(
         reassign = fields.get(name_for[D_REASSIGN] + "LookupId") or fields.get(name_for[D_REASSIGN])
         if reassign:
             person = (user_details or {}).get(str(reassign))
+            pname = pemail = ""
             if person and (person.get("email") or person.get("name")):
                 pname = person.get("name") or ""
                 pemail = person.get("email") or ""
@@ -774,19 +798,32 @@ def pull_proposals(
                         f"oa action {pub_id} set_data_contact --email <email> --name <name>")
             proposals.append(Proposal(
                 "propose_data_contact", "Apply suggested data contact", note=note,
+                contact_name=pname, contact_email=pemail,
             ))
 
         notes_val = (fields.get(name_for[D_NOTES]) or "").strip() or None
-        if proposals or notes_val:
-            out.append(PulledItem(pub_id, it["id"], sig, proposals, notes_val))
+        # Every changed item is returned (not only actionable ones) so the
+        # caller can persist the done-tick state and stamp IngestedSig —
+        # otherwise an un-tick would be re-hashed forever and never land.
+        out.append(PulledItem(
+            pub_id, it["id"], sig, proposals, notes_val,
+            proposed_done=_is_true(fields.get(name_for[D_PDONE])),
+        ))
     return out
 
 
-def write_proposal_feedback(client, site_id: str, list_id: str, name_for: dict[str, str], item: PulledItem) -> None:
+def write_proposal_feedback(
+    client, site_id: str, list_id: str, name_for: dict[str, str], item: PulledItem,
+    request_status: str | None = None,
+) -> None:
     """Mark the row as ingested: stamp IngestedSig (dedup) and, when there
-    are actionable proposals, set the user-visible RequestStatus."""
+    are actionable proposals, set the user-visible RequestStatus.
+    ``request_status`` overrides the default pending label — the automation
+    engine passes REQUEST_STATUS_PROCESSED when it auto-applied the signal."""
     body: dict[str, Any] = {name_for[D_INGESTED]: item.new_sig}
-    if item.proposals:
+    if request_status is not None:
+        body[name_for[D_REQSTATUS]] = request_status
+    elif item.proposals:
         body[name_for[D_REQSTATUS]] = REQUEST_STATUS_PENDING
     client.request("PATCH", f"/sites/{site_id}/lists/{list_id}/items/{item.item_id}/fields", body)
 

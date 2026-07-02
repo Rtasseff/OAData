@@ -328,6 +328,58 @@ def status(
                 typer.echo(f"{a['publication_id']:<25} {a['status']:<35} {a.get('final_pid') or '-'}")
 
 
+@app.command()
+def auto(
+    config: Optional[str] = ConfigOption,
+    db: Optional[str] = DbOption,
+):
+    """Run the full unattended cycle (designed for cron).
+
+    scan → SharePoint pull (auto-apply promoted signals, route the rest)
+    → advance archives (auto-QC, Zenodo draft + upload, closures)
+    → SharePoint push → regenerate sheet/emails/report → write the digest.
+
+    Never prompts: an expired SharePoint token fails that stage with a
+    clear message instead of blocking on a device-code prompt. Zenodo
+    publishing is never automatic — validated drafts wait for you.
+    """
+    from oa_tracker.auto import run_auto, write_digest
+    from oa_tracker.emails import generate_emails
+    from oa_tracker.report import generate_report
+    from oa_tracker.sheet import generate_sheet
+
+    cfg = _get_config(config, db)
+    if not cfg.automation.enabled:
+        typer.echo("[automation] is not enabled in config.toml — nothing to do.")
+        typer.echo("Set `enabled = true` under [automation] to turn on `oa auto`.")
+        raise typer.Exit(1)
+
+    result = run_auto(cfg)
+
+    # Regenerate the operator artifacts from the post-run state.
+    try:
+        generate_sheet(cfg)
+    except Exception as e:
+        result.errors.append(f"sheet generation failed: {e}")
+    try:
+        generate_emails(cfg)
+    except Exception as e:
+        result.errors.append(f"email generation failed: {e}")
+    try:
+        generate_report(cfg)
+    except Exception as e:
+        result.errors.append(f"report generation failed: {e}")
+
+    digest = write_digest(cfg, result)
+    typer.echo(result.summary)
+    typer.echo(f"Digest: {digest}")
+    if result.errors:
+        typer.echo("Errors this run:")
+        for e in result.errors:
+            typer.echo(f"  - {e}")
+        raise typer.Exit(1)
+
+
 # ── SharePoint List parallel track ───────────────────────────────────
 
 sharepoint_app = typer.Typer(help="SharePoint List sync (parallel track).")
@@ -377,8 +429,10 @@ def sharepoint_sync(
     import json
     from datetime import datetime
     from oa_tracker import sharepoint as sp_mod
-    from oa_tracker.db import get_archive, get_connection, get_open_archives
-    from oa_tracker.sheet import SHEET_COLUMNS
+    from oa_tracker.db import (
+        get_archive, get_connection, get_open_archives, insert_event, upsert_archive,
+    )
+    from oa_tracker.sheet import SHEET_COLUMNS, proposal_row
 
     cfg = _get_config(config, db)
     sp = sp_mod.load_settings(cfg)
@@ -433,39 +487,42 @@ def sharepoint_sync(
     items = sp_mod.fetch_items(client, site_id, list_id, name_for[sp_mod.D_PUBID])
     pulled = sp_mod.pull_proposals(list(items.values()), name_for, user_details)
 
-    def _row_for(pub_id, arch, task_code, task_text, note, pid="", url=""):
-        # Mirror the action sheet's column population (sheet.py:_row) so this
-        # file is a drop-in for `oa apply`: current_status is the raw pipeline
-        # code (not the friendly List label), and the reminder fields are
-        # carried straight from the archive for consistency.
-        row = {c: "" for c in SHEET_COLUMNS}
-        row.update({
-            "publication_id": pub_id, "task_code": task_code,
-            "task_text": task_text, "done": "0", "pid": pid, "url": url, "note": note,
-        })
-        if arch is not None:
-            row["current_status"] = arch["status"]
-            row["first_seen_at"] = arch.get("first_seen_at") or ""
-            row["next_reminder_at"] = arch.get("next_reminder_at") or ""
-            row["reminder_count"] = str(arch.get("reminder_count") or 0)
-        else:
-            row["reminder_count"] = "0"
-        return row
+    # Persist the "I think this is done" tick (set or cleared) on the
+    # archive row — the automation engine and the action sheet cross-check
+    # it against the detected folder package.
+    with get_connection(cfg.database) as conn:
+        for pi in pulled:
+            arch = by_id.get(pi.pub_id)
+            if arch is None:
+                continue
+            new_flag = 1 if pi.proposed_done else 0
+            if (arch.get("user_done_flag") or 0) != new_flag:
+                upsert_archive(
+                    conn, publication_id=pi.pub_id,
+                    user_done_flag=new_flag,
+                    user_done_at=now if new_flag else None,
+                )
+                insert_event(
+                    conn, pi.pub_id, "user_done_flag", arch["status"], arch["status"],
+                    "sharepoint",
+                    note=("Tracker 'I think this is done' ticked" if new_flag
+                          else "Tracker 'done' tick cleared"),
+                )
 
     rows = []
     for pi in pulled:
         arch = by_id.get(pi.pub_id)
         for prop in pi.proposals:
-            rows.append(_row_for(pi.pub_id, arch, prop.task_code, prop.task_text,
-                                 prop.note, prop.pid, prop.url))
+            rows.append(proposal_row(pi.pub_id, arch, prop.task_code, prop.task_text,
+                                     prop.note, prop.pid, prop.url))
         # A free-text List note is awareness-only, but it must be DURABLE —
         # a scheduled sync's stdout goes nowhere. Emit it as a `user_note`
         # row so it lands in the proposals file like everything else and is
         # recorded to the archive's notes on apply.
         if pi.user_notes:
-            rows.append(_row_for(pi.pub_id, arch, "user_note",
-                                 "User note (awareness only — no action needed)",
-                                 pi.user_notes))
+            rows.append(proposal_row(pi.pub_id, arch, "user_note",
+                                     "User note (awareness only — no action needed)",
+                                     pi.user_notes))
     if rows:
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
         ppath = cfg.output_dir / "sharepoint_proposals.tsv"
