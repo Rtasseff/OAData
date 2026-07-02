@@ -136,7 +136,8 @@ def _reminder_status_note(archive: dict[str, Any]) -> str:
         if user_done and not (has_zip and has_readme):
             missing = " and a ".join(
                 m for m, ok in (("single ZIP of the datasets", has_zip),
-                                ("README.txt", has_readme)) if not ok
+                                ("README.txt (as its own file, next to the ZIP)",
+                                 has_readme)) if not ok
             )
             return (
                 "You marked this publication as done on the OA Archive Tracker — "

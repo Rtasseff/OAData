@@ -37,14 +37,12 @@ src/oa_tracker/
 tests/
     conftest.py      — shared fixtures (tmp_db, tmp_sharepoint, test_config)
     test_*.py        — one test file per module
-docs/
-    summary.md            — project context and motivation
-    techSpec.md           — technical spec (schema, statuses, task codes, transitions)
-    sop.md                — standard operating procedure
-    roadmap.md            — single source of truth for the staged automation plan (Stages 1, 2, 2.5, 3, 4, plus the parallel SharePoint List track)
-    mandate_classification.md — how Stage 2 derives OA mandates from the central DB
-    zenodo_design.md      — Stage 2.5 / 3 design (API surface, metadata mapping, module layout)
-    sharepoint_list_design.md — Parallel track design (List columns, views, identity mapping, propose_* action routing, sync module)
+docs/                    — see the "Documentation map" table in README.md
+                           for which document is canonical for what; keep
+                           each topic in exactly one doc and link instead
+                           of restating. Key canonicals: roadmap.md (plan
+                           + history), sop.md (operating procedure),
+                           techSpec.md (schema/codes/transitions).
 ```
 
 ## Key Design Decisions

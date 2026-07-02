@@ -54,6 +54,15 @@ Out of scope:
 * **Inactive:** folder exists but empty.
 * **Active:** folder contains files (indicates data contact activity).
 * **PID:** dataset persistent identifier (preferably Zenodo DOI); may also be external repository PID.
+* **Package (decision 2026-07-02):** one `.zip` of the datasets **plus a
+  `README.txt` as its own file next to the zip** — one canonical location,
+  chosen because the standalone README uploads to Zenodo as a
+  browser-readable file and can be QC'd in SharePoint without extracting
+  anything. (A copy inside the zip is welcome but not the requirement.)
+  Detection is deliberately lenient — the scanner also accepts a README
+  found only inside the zip, so nobody is bounced on a technicality — but
+  all instructions and reminder texts ask for the sibling file. The
+  user-facing protocol docx should say the same (see its §2.4/§4).
 
 ## 6. Status model
 

@@ -6,7 +6,14 @@ Here’s a concise context summary you can hand to software folks.
 
 We run an internal workflow to ensure **publication-associated research outputs** (primarily datasets; sometimes article files) are deposited into **Zenodo** and properly recorded for Open Access reporting. The upstream steps (publication database curation, OA checks, creation of a SharePoint folder per publication ID, and author/data-contact email request) are managed by the Project Office. My scope begins **after** the data contact uploads files to the SharePoint folder.
 
-### What we’re building (Stage 1 MVP)
+> **Status note:** this page is the non-technical context hand-off and
+> describes the Stage 1 foundation. The system has since grown mandate
+> derivation from the central DB, a user-facing SharePoint List, Zenodo
+> API automation, and an unattended `oa auto` cycle — current state and
+> history live in [roadmap.md](roadmap.md); operating procedure in
+> [sop.md](sop.md).
+
+### What we built first (Stage 1 MVP)
 
 A lightweight automation system that:
 

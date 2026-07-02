@@ -42,8 +42,8 @@ Tables (minimum):
   * `max_embargo_months` INTEGER NULL
   * `oa_mandate_source` TEXT NULL — audit trace of contributing per-project signals
   * `oa_mandate_missing` INTEGER NULL (0/1) — 1 when no mandate could be derived
-  * `corresponding_author_name` TEXT NULL — from `publi_corr_auth → mdm_personal`
-  * `corresponding_author_email` TEXT NULL — always NULL in this DB (no email column)
+  * `corresponding_author_name` TEXT NULL — from `publi_corr_auth → center_user`
+  * `corresponding_author_email` TEXT NULL — derived as `center_user.username`@institutional domain
   * `central_repository` TEXT NULL — repository name(s) recorded centrally, joined with `; `
   * `central_repository_code` TEXT NULL — parallel codes, joined with `; `
   * `pub_db_last_refreshed_at` DATETIME NULL
@@ -54,6 +54,23 @@ Tables (minimum):
   * `data_contact_overridden` INTEGER DEFAULT 0
   * `zenodo_code` TEXT NULL — seeds from central DB iff repository name is `Zenodo`
   * `zenodo_code_overridden` INTEGER DEFAULT 0
+
+  SharePoint List track (v3):
+  * `sharepoint_item_id` INTEGER NULL, `sharepoint_synced_at` DATETIME NULL — sync bookkeeping
+  * `corresponding_author_overridden` INTEGER DEFAULT 0 — mirrors `data_contact_overridden`
+
+  Automation (v4):
+  * `package_has_zip` / `package_has_readme` INTEGER NULL (0/1) — protocol
+    package detected by the scanner (README counts beside the zip or inside it)
+  * `package_checked_at` DATETIME NULL
+  * `user_done_flag` INTEGER DEFAULT 0, `user_done_at` DATETIME NULL — the
+    Tracker "I think this is done" tick, persisted by the SharePoint pull
+  * `zenodo_doi` TEXT NULL — the reserved (pre-publish) Zenodo DOI
+  * `zenodo_env` TEXT NULL — `sandbox`/`production`; pins which Zenodo
+    instance a draft lives on so the two can never be confused
+
+  The executable source of truth for the schema is `_SCHEMA_SQL` +
+  the `_Vn_TO_Vm_ALTERS` lists in `src/oa_tracker/db.py`.
 
 * `events` (append-only audit log)
 
@@ -154,6 +171,32 @@ Stage-2 additions:
 * `set_zenodo_code` / `reset_zenodo_code` — same pattern for the
   Zenodo record code.
 
+SharePoint-track additions (v3):
+
+* `propose_data_contact` / `propose_exemption` / `propose_done` —
+  signals pulled from user edits on the List; acknowledgment-only as
+  sheet rows (categorized exemptions re-route to a concrete `close_*`).
+* `user_note` — records a List free-text note to the archive; no status change.
+* `close_archived_external` — any OPEN → `CLOSED_DATA_ARCHIVED` with an
+  **external** repository's PID + URL (both required).
+* `set_corresponding_author` / `reset_corresponding_author` — CLI-only
+  override, mirrors `set_data_contact`.
+
+Zenodo API codes (v4 — the apply IS the API call; see
+`actions._apply_zenodo_row`):
+
+* `zenodo_create_draft` — `OPEN_READY_FOR_ZENODO_DRAFT` →
+  `OPEN_ZENODO_DRAFT_CREATED`; creates the draft, reserves the DOI,
+  records `zenodo_code`/`zenodo_doi`/`zenodo_env`.
+* `zenodo_upload_files` — uploads the folder package to the draft;
+  status unchanged (upload is not validation).
+* `zenodo_publish` — `OPEN_ZENODO_DRAFT_VALIDATED` →
+  `OPEN_ZENODO_PUBLISHED`; publishes, records `final_pid`/`final_url`.
+  Never emitted by the automation engine — operator keystroke only.
+
+The executable source of truth for codes and transitions is
+`TASK_CODES` / `TRANSITIONS` in `src/oa_tracker/status.py`.
+
 ### 3.3 Apply semantics
 
 `apply_actions`:
@@ -182,6 +225,10 @@ This keeps the sheet as your working checklist without touching SQLite manually.
 * `oa reopen <pub_id> --reason "..." [--to OPEN_ACTIVE|OPEN_INACTIVE]`
   → bring a `CLOSED_*` archive back to an OPEN status
 * `oa status [<pub_id>]` → show one or all archives
+* `oa sharepoint provision|sync [--read-only]` → List sync (parallel track)
+* `oa auto` → unattended cycle for cron (scan → List pull/auto-apply →
+  advance → List push → sheet/emails/report → `output/auto_digest.md`);
+  gates in `[automation]`, engine in `src/oa_tracker/auto.py`
 
 ## 5. Email template generation (v1)
 
@@ -218,16 +265,12 @@ of signals has been validated against real data — see
 `feedback_no_auto_state_changes.md` in the memory store for the
 full rule.
 
-Concrete planned task codes:
+Both sets of automation task codes shipped (see §3.2): the Zenodo API
+codes (2026-07-02) and the SharePoint `propose_*` codes (2026-06-03).
+The promoted signal classes now auto-apply through `oa auto`'s engine
+(`src/oa_tracker/auto.py`), still via the same `apply_single` path with
+`source="auto"` in the audit log.
 
-* `zenodo_create_draft`, `zenodo_upload_files`, `zenodo_publish` —
-  Stages 2.5 / 3. Each maps to a deterministic API call sequence
-  inside `src/oa_tracker/zenodo.py`.
-* `propose_data_contact`, `propose_exemption`, `propose_done` —
-  parallel SharePoint track. Each is emitted from `oa sharepoint
-  sync` when a user has edited the corresponding column on the
-  SharePoint List.
-* If/when DB write becomes possible (Stage 4), `db_updated` can be
-  automated end-to-end and `apply_actions` stops emitting it as a
-  manual task.
+Remaining: if/when central-DB write becomes possible (Stage 4),
+`db_updated` can be automated end-to-end and stops being a manual task.
 
