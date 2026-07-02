@@ -5,7 +5,14 @@ import sqlite3
 import pytest
 
 from oa_tracker import pub_db
-from oa_tracker.db import _SCHEMA_VERSION, _V1_TO_V2_ALTERS, get_archive, get_connection, init_db
+from oa_tracker.db import (
+    _SCHEMA_VERSION,
+    _V1_TO_V2_ALTERS,
+    get_archive,
+    get_connection,
+    init_db,
+    upsert_archive,
+)
 from oa_tracker.scanner import scan_folders
 
 
@@ -57,6 +64,80 @@ def test_scan_activation(test_config):
     with get_connection(test_config.database) as conn:
         archive = get_archive(conn, "1003")
         assert archive["status"] == "OPEN_ACTIVE"
+
+
+def _register_placeholder(config, pub_id, folder, status, **extra):
+    """Bootstrap a non-numeric placeholder archive, as the operator does."""
+    with get_connection(config.database) as conn:
+        upsert_archive(
+            conn,
+            publication_id=pub_id,
+            folder_path=str(folder),
+            first_seen_at="2026-07-01T00:00:00",
+            last_seen_at="2026-07-01T00:00:00",
+            status=status,
+            **extra,
+        )
+
+
+def test_scan_skips_unregistered_non_numeric_folder(test_config):
+    # A non-numeric folder with no archive row (e.g. the SharePoint
+    # "Attachments" system folder) is junk: reported, never tracked.
+    (test_config.sharepoint_root / "Attachments").mkdir()
+    result = scan_folders(test_config)
+    assert "Attachments" in result.skipped_non_numeric
+    with get_connection(test_config.database) as conn:
+        assert get_archive(conn, "Attachments") is None
+
+
+def test_scan_tracks_registered_placeholder_without_enrichment(test_config, monkeypatch):
+    folder = test_config.sharepoint_root / "SMN-1"
+    folder.mkdir()
+    (folder / "raw_data.zip").write_text("x")
+    _register_placeholder(
+        test_config, "SMN-1", folder, "OPEN_ZENODO_PUBLISHED",
+        final_pid="10.5281/zenodo.21108962", pub_title="Placeholder title",
+        data_contact_overridden=1,
+    )
+
+    # Enrichment must never run for a placeholder (it isn't in the central DB).
+    def _boom(_conn, pub_id):
+        raise AssertionError(f"enrichment ran for placeholder {pub_id}")
+
+    monkeypatch.setattr(pub_db, "enrich_archive", _boom)
+
+    result = scan_folders(test_config)
+
+    assert "SMN-1" not in result.skipped_non_numeric
+    assert "SMN-1" not in result.missing
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "SMN-1")
+        assert a["status"] == "OPEN_ZENODO_PUBLISHED"          # unchanged
+        assert a["unexpected_missing_folder"] == 0             # not falsely missing
+        assert a["pub_title"] == "Placeholder title"           # operator data intact
+        assert a["final_pid"] == "10.5281/zenodo.21108962"
+
+
+def test_scan_activates_registered_placeholder_when_files_appear(test_config):
+    folder = test_config.sharepoint_root / "SMN-2"
+    folder.mkdir()
+    _register_placeholder(test_config, "SMN-2", folder, "OPEN_INACTIVE")
+
+    # Empty folder → stays inactive, tracked (not missing).
+    result = scan_folders(test_config)
+    assert "SMN-2" in result.unchanged
+    assert "SMN-2" not in result.missing
+    with get_connection(test_config.database) as conn:
+        assert get_archive(conn, "SMN-2")["status"] == "OPEN_INACTIVE"
+
+    # Data uploaded → activates.
+    (folder / "raw.zip").write_text("data")
+    result = scan_folders(test_config)
+    assert "SMN-2" in result.activated
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "SMN-2")
+        assert a["status"] == "OPEN_ACTIVE"
+        assert a["became_active_at"] is not None
 
 
 def test_scan_missing_folder(test_config):

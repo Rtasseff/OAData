@@ -141,6 +141,46 @@ def _new_archive_defaults() -> dict[str, Any]:
     }
 
 
+def _scan_placeholder(
+    conn: Any,
+    folder: Path,
+    existing: dict[str, Any],
+    config: Config,
+    now: str,
+    result: ScanResult,
+) -> None:
+    """Refresh a registered non-numeric placeholder archive.
+
+    Placeholders are pre-publication folders with no institutional
+    publication ID yet (a Zenodo deposit or data-collection folder created
+    before the paper reaches the central DB). They are operator-registered,
+    so we NEVER enrich them from the central DB — all metadata stays
+    operator-managed. We only mirror the numeric existing-folder path minus
+    enrichment: refresh ``last_seen_at``, clear any stale missing-folder
+    flag, and activate an empty (OPEN_INACTIVE) placeholder once files
+    appear. This is what keeps them off the missing-folder integrity list.
+    """
+    pub_id = existing["publication_id"]
+    updates: dict[str, Any] = {"last_seen_at": now}
+    if existing["unexpected_missing_folder"]:
+        updates["unexpected_missing_folder"] = 0
+        updates["missing_folder_detected_at"] = None
+
+    if existing["status"] == st.OPEN_INACTIVE and _folder_has_files(folder):
+        updates["status"] = st.OPEN_ACTIVE
+        updates["became_active_at"] = now
+        updates["last_changed_at"] = now
+        updates["next_reminder_at"] = _compute_next_reminder(config, now)
+        db.upsert_archive(conn, publication_id=pub_id, **updates)
+        db.insert_event(
+            conn, pub_id, "became_active", st.OPEN_INACTIVE, st.OPEN_ACTIVE, "scanner"
+        )
+        result.activated.append(pub_id)
+    else:
+        db.upsert_archive(conn, publication_id=pub_id, **updates)
+        result.unchanged.append(pub_id)
+
+
 def scan_folders(config: Config) -> ScanResult:
     """Scan the SharePoint root and update the database."""
     result = ScanResult()
@@ -169,12 +209,24 @@ def scan_folders(config: Config) -> ScanResult:
                     continue
 
                 pub_id = folder.name
-                # Publication IDs in the central DB are integer-valued.
-                # Anything that doesn't look like a publication ID (e.g.,
-                # the SharePoint "Attachments" system folder) is flagged
-                # for operator review rather than silently scanned.
+                # Publication IDs in the central DB are integer-valued. A
+                # non-numeric folder name is either junk (e.g. the
+                # SharePoint "Attachments" system folder) or an operator-
+                # registered placeholder for a pre-publication archive with
+                # no institutional publication ID yet. Tell them apart by
+                # whether an archive row already exists:
+                #   - no row  → junk; flag for operator review, don't track
+                #   - row     → registered placeholder; track it (refresh
+                #               last_seen, activate on first files, keep it
+                #               off the missing list) but skip central-DB
+                #               enrichment — it isn't in the central DB.
                 if not pub_id.isdigit():
-                    result.skipped_non_numeric.append(pub_id)
+                    placeholder = db.get_archive(conn, pub_id)
+                    if placeholder is None:
+                        result.skipped_non_numeric.append(pub_id)
+                        continue
+                    found_ids.add(pub_id)
+                    _scan_placeholder(conn, folder, placeholder, config, now, result)
                     continue
                 found_ids.add(pub_id)
                 has_files = _folder_has_files(folder)
