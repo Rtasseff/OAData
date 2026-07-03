@@ -114,7 +114,7 @@ safety rules, conventions, common tasks — and is not operator reading.)
 | [`docs/mandate_classification.md`](docs/mandate_classification.md) | **How OA mandates are derived** from the central DB. | A mandate flag looks wrong. |
 | [`docs/email_from_office_address.md`](docs/email_from_office_address.md) | **Sending from the Project Office address** — the exact IT ask (EAC + PowerShell, doc-cited), operator setup, future Graph auto-send notes. | You're setting up or debugging office-address sending. |
 | [`docs/summary.md`](docs/summary.md) | Non-technical project context for outsiders. | Explaining the project to someone new. |
-| `publication_archive_protocol.docx` | **The user-facing protocol** (what data contacts are told). Maintained in Word/SharePoint; the SOP and reminder texts must stay consistent with it. | Changing what we ask users to do. |
+| Publication archive protocol (docx, **lives on SharePoint** — the link is `[sharepoint] sop_url` in config.toml) | **The user-facing protocol** (what data contacts are told). Not in this repo; the SOP and reminder texts must stay consistent with it. | Changing what we ask users to do. |
 | [`docs/pub_db_access_handoff.md`](docs/pub_db_access_handoff.md), [`docs/sharepoint_demo_runbook.md`](docs/sharepoint_demo_runbook.md) | Historical/aux references (DB access handoff; List demo walkthrough). | Rarely. |
 
 At a glance, the OPEN → CLOSED pipeline is:

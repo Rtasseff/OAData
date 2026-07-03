@@ -20,6 +20,10 @@
 >    other files are reported, not uploaded (configurable to "all").
 > 6. HTTP client is stdlib `urllib` (matching `sharepoint.py`'s GraphClient
 >    pattern) — `requests` was not added.
+> 7. `metadata.publisher` is set explicitly to `"Zenodo"` — the UI
+>    auto-fills it but the API does not (operator-observed on the first
+>    sandbox drafts, 2026-07-02; field confirmed as a plain string in the
+>    InvenioRDM metadata reference).
 >
 > Everything else — token file, retry policy, error classes, sandbox-first
 > rollout, promotion path, metadata defaults — is implemented as designed.

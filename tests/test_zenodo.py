@@ -198,6 +198,7 @@ def test_payload_locked_fields(settings):
         "resource_type": {"id": "publication-article"},
     }]
     assert md["publication_date"] == "2026-07-02"   # data date, not paper's
+    assert md["publisher"] == "Zenodo"   # UI auto-fills this; the API doesn't
     assert md["version"] == "1.0.0"
     assert md["subjects"] == [{"subject": "CIC biomaGUNE"}]
     assert "We did things." in md["description"]

@@ -371,6 +371,9 @@ def build_record_payload(
         "publication_date": today.isoformat(),
         "creators": creators,
         "description": description,
+        # The Zenodo UI auto-fills Publisher as "Zenodo"; the API does not
+        # (operator-observed on sandbox, 2026-07-02) — set it explicitly.
+        "publisher": "Zenodo",
         "rights": [{"id": settings.default_license}],
         "subjects": [{"subject": k} for k in settings.default_keywords],
         "version": "1.0.0",
