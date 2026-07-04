@@ -83,6 +83,15 @@ class ZenodoSettings:
     # at or below the threshold keep the plain single-PUT upload.
     multipart_threshold_mb: int = 1024
     multipart_part_size_mb: int = 200
+    # Ceiling for UNATTENDED single-PUT uploads. Multipart ignores it
+    # (per-part retry makes size safe) — but as of 2026-07-04 Zenodo
+    # denies multipart part uploads (403; scaffolding deployed, feature
+    # not enabled for API users), so oversized files fall back to
+    # single PUT, and above this ceiling that attempt is deferred to
+    # the operator instead: the digest carries the manual instructions
+    # and `oa action <pub> zenodo_upload_files` closes the loop after a
+    # hand upload (checksum match — no bytes re-sent).
+    single_put_max_mb: int = 5120
 
     @property
     def base_url(self) -> str:
@@ -226,6 +235,8 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
                 "multipart_threshold_mb", zen_defaults.multipart_threshold_mb),
             multipart_part_size_mb=zen_raw.get(
                 "multipart_part_size_mb", zen_defaults.multipart_part_size_mb),
+            single_put_max_mb=zen_raw.get(
+                "single_put_max_mb", zen_defaults.single_put_max_mb),
         ),
         automation=AutomationSettings(
             enabled=auto_raw.get("enabled", auto_defaults.enabled),

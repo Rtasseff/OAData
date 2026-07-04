@@ -327,14 +327,19 @@ are flagged on the sheet and in the reminder text), free-text "Other"
 exemptions, and anything on a placeholder archive (no central-DB
 metadata to build a record from).
 
-Large packages: files above `[zenodo] multipart_threshold_mb` upload
-via Zenodo's multipart transfer (per-part retry — a mid-transfer drop
-costs one ~200 MB part, not the file; see zenodo_design.md § Large
-files). Uploads that keep failing across runs surface in the digest
-with the manual path: upload by hand to the already-created draft,
-then `oa action <pub_id> zenodo_upload_files` records it (the
-checksum match sends nothing). Deposits over Zenodo's 50 GB/record
-cap are refused up front — split them or contact Zenodo support.
+Large packages: files above `[zenodo] multipart_threshold_mb` try
+Zenodo's multipart transfer (per-part retry — a mid-transfer drop
+costs one ~200 MB part, not the file). **As of 2026-07-04 Zenodo
+denies the part uploads (403)** — the code detects this and falls
+back automatically; multipart activates by itself the day Zenodo
+enables it (see zenodo_design.md § Large files). Until then, fallback
+files above `single_put_max_mb` (5 GB) are deferred to you: the
+digest carries the manual path — upload by hand to the
+already-created draft, then `oa action <pub_id> zenodo_upload_files`
+records it (checksum match, no bytes re-sent). The same manual path
+appears when smaller uploads keep failing across runs. Deposits over
+Zenodo's 50 GB/record cap are refused up front — split them or
+contact Zenodo support.
 
 Zenodo credentials: `~/.zenodorc` (mode 600), sections `[zenodo]`
 (production) and `[zenodo-sandbox]`, each with `token = ...`. The

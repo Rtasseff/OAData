@@ -34,6 +34,7 @@ class FakeZenodo:
         self.next_id = 100
         self.calls: list[tuple[str, str]] = []
         self.multipart_supported = True
+        self.deny_part_put = False      # real Zenodo 2026-07-04: init OK, part PUT 403
         self.report_md5 = True
         self.corrupt_on_commit = False
 
@@ -80,6 +81,9 @@ class FakeZenodo:
                 entries.append(entry)
             return 201, {"entries": entries}
         if method == "PUT" and "/content/" in path:
+            if self.deny_part_put:
+                raise zenodo.ZenodoError(
+                    "config", "HTTP 403 from Zenodo — Permission denied.", 403)
             rid = path.split("/")[3]
             key = urllib.parse.unquote(path.split("/")[-3])
             part = int(path.split("/")[-1])
@@ -461,6 +465,53 @@ def test_multipart_falls_back_to_single_put(tmp_path, settings):
     entry = fake.files["100"]["data.zip"]
     assert "_parts" not in entry
     assert entry["_content"] == (folder / "data.zip").read_bytes()
+
+
+def test_part_put_denied_falls_back_to_single_put(tmp_path, settings):
+    # Real Zenodo as of 2026-07-04: multipart init succeeds (part URLs
+    # issued) but the part PUT itself is 403 — detection must cover the
+    # part stage too, clean up the pending entry, and single-PUT.
+    fake = FakeZenodo()
+    fake.deny_part_put = True
+    fake.files["100"] = {}
+    folder = _big_folder(tmp_path)
+    res = zenodo.upload_files(fake, "100", folder, _mp(settings))
+    assert res.ok
+    assert res.uploaded == ["data.zip"]
+    entry = fake.files["100"]["data.zip"]
+    assert entry["_content"] == (folder / "data.zip").read_bytes()
+    assert entry.get("checksum", "").startswith("md5:")
+
+
+def test_oversized_fallback_deferred_to_manual(tmp_path, settings):
+    # Multipart unavailable AND the file exceeds the unattended
+    # single-PUT ceiling: no upload attempt; explicit manual message.
+    fake = FakeZenodo()
+    fake.deny_part_put = True
+    fake.files["100"] = {}
+    folder = _big_folder(tmp_path)               # 2.5 MB
+    settings = _mp(settings)                     # threshold 1 MB
+    settings.single_put_max_mb = 2               # ceiling below the file
+    res = zenodo.upload_files(fake, "100", folder, settings)
+    assert not res.ok
+    assert res.manual_required == ["data.zip"]
+    assert "upload this file by hand" in res.errors[0]
+    assert "MANUAL UPLOAD NEEDED" in res.summary
+    assert "_content" not in fake.files["100"].get("data.zip", {})
+
+
+def test_working_multipart_ignores_single_put_ceiling(tmp_path, settings):
+    # When multipart works, size above the single-PUT ceiling is fine —
+    # per-part retry is what makes big unattended uploads safe.
+    fake = FakeZenodo()
+    fake.files["100"] = {}
+    folder = _big_folder(tmp_path)
+    settings = _mp(settings)
+    settings.single_put_max_mb = 2
+    res = zenodo.upload_files(fake, "100", folder, settings)
+    assert res.ok
+    assert res.uploaded == ["data.zip"]
+    assert sorted(fake.files["100"]["data.zip"]["_parts"]) == [1, 2, 3]
 
 
 def test_multipart_verification_failure_is_an_error(tmp_path, settings):

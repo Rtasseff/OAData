@@ -52,13 +52,19 @@ default_keywords = ["CIC biomaGUNE"]
 # uploads every non-clutter file.
 upload_files = "package"
 manifest_dir = "./output/zenodo_uploads"
-# Files above the threshold upload via InvenioRDM multipart (type "M"):
-# split into parts, each an independent retryable PUT — a mid-transfer
-# drop costs one part, not the whole file (verified live on sandbox
-# 2026-07-04). At or below the threshold: plain single PUT. Zenodo's own
-# hard cap of 50 GB per record still applies and is refused up front.
-multipart_threshold_mb = 1024      # > 1 GB → multipart
+# Files above the threshold TRY InvenioRDM multipart (type "M"): split
+# into parts, each an independent retryable PUT — a drop costs one part,
+# not the whole file. NOTE (verified live 2026-07-04): Zenodo currently
+# accepts the multipart init but denies the part uploads (403) — the
+# code detects that and falls back automatically; multipart will simply
+# start working the day Zenodo enables it. Until then, fallback files
+# above single_put_max_mb are NOT uploaded unattended: the digest tells
+# the operator to upload by hand (then `oa action <pub>
+# zenodo_upload_files` records it via checksum match, no bytes re-sent).
+# Zenodo's hard 50 GB/record cap is refused up front regardless.
+multipart_threshold_mb = 1024      # > 1 GB → try multipart
 multipart_part_size_mb = 200
+single_put_max_mb = 5120           # > 5 GB single-PUT fallback → manual
 
 [automation]                  # per-signal-class gates for `oa auto` (cron entry point)
 enabled = true

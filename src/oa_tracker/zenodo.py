@@ -595,9 +595,12 @@ def _upload_multipart(
     (type ``M``): init returns one URL per part; each part is an
     independent, retryable PUT; commit assembles the file server-side.
 
-    Returns False when the server does not accept the multipart init
-    (HTTP 4xx) — the caller falls back to the single-PUT path. Any
-    other failure raises ``ZenodoError`` as usual.
+    Returns False when the server does not accept multipart — the
+    caller falls back to the single-PUT path. Detection covers BOTH the
+    init call and the part PUTs: verified live 2026-07-04 that Zenodo
+    sandbox accepts a type-M init (and issues part URLs) but then denies
+    the part uploads with 403 — the scaffolding is deployed, the feature
+    isn't enabled for API users yet. Transient failures still raise.
     """
     size = path.stat().st_size
     parts = max(1, (size + part_size - 1) // part_size)
@@ -636,22 +639,34 @@ def _upload_multipart(
             pass
         return False
 
-    for i in range(1, parts + 1):
-        offset = (i - 1) * part_size
-        length = min(part_size, size - offset)
-        if on_progress:
-            on_progress(f"uploading {key} part {i}/{parts} ({length} bytes)")
-        with _PartReader(path, offset, length) as reader:
-            client.request(
-                "PUT", part_urls[i],
-                data=reader,
-                content_type="application/octet-stream",
-                content_length=length,
-            )
-    client.request(
-        "POST",
-        f"/api/records/{record_id}/draft/files/{urllib.parse.quote(key)}/commit",
-    )
+    try:
+        for i in range(1, parts + 1):
+            offset = (i - 1) * part_size
+            length = min(part_size, size - offset)
+            if on_progress:
+                on_progress(f"uploading {key} part {i}/{parts} ({length} bytes)")
+            with _PartReader(path, offset, length) as reader:
+                client.request(
+                    "PUT", part_urls[i],
+                    data=reader,
+                    content_type="application/octet-stream",
+                    content_length=length,
+                )
+        client.request(
+            "POST",
+            f"/api/records/{record_id}/draft/files/{urllib.parse.quote(key)}/commit",
+        )
+    except ZenodoError as e:
+        if e.kind in ("config", "data"):
+            # 4xx on a part PUT with a token that already passed the
+            # init → multipart isn't enabled here. Clean up and fall
+            # back; a genuinely bad token fails the single PUT loudly.
+            try:
+                delete_draft_file(client, record_id, key)
+            except ZenodoError:
+                pass
+            return False
+        raise
     return True
 
 
@@ -661,6 +676,7 @@ class UploadResult:
     already_present: list[str] = field(default_factory=list)
     replaced: list[str] = field(default_factory=list)
     skipped_local: list[str] = field(default_factory=list)   # not in upload mode
+    manual_required: list[str] = field(default_factory=list)  # too big for unattended
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -675,6 +691,8 @@ class UploadResult:
         ]
         if self.replaced:
             parts.append(f"replaced {len(self.replaced)}")
+        if self.manual_required:
+            parts.append(f"MANUAL UPLOAD NEEDED: {', '.join(self.manual_required)}")
         if self.skipped_local:
             parts.append(f"not uploaded (outside package): {', '.join(self.skipped_local)}")
         if self.errors:
@@ -745,6 +763,7 @@ def upload_files(
 
     threshold = settings.multipart_threshold_mb * 1024**2
     part_size = settings.multipart_part_size_mb * 1024**2
+    single_put_max = settings.single_put_max_mb * 1024**2
 
     remote = list_draft_files(client, record_id)
     manifest_entries = []
@@ -766,6 +785,22 @@ def upload_files(
                     used_multipart = _upload_multipart(
                         client, record_id, key, path, part_size, on_progress,
                     )
+                if not used_multipart and local_size > single_put_max:
+                    # Multipart unavailable and the file is too big to
+                    # single-PUT unattended — a mid-stream drop would
+                    # re-send everything. Defer to the operator; a hand
+                    # upload is recognised by checksum on the next run.
+                    result.manual_required.append(key)
+                    result.errors.append(
+                        f"{key} ({local_size / 1024**3:.1f} GB): too large for an "
+                        f"unattended single-PUT upload (> "
+                        f"{settings.single_put_max_mb} MB) and Zenodo does not "
+                        "currently accept multipart part uploads — upload this "
+                        "file by hand to the draft, then re-run "
+                        "zenodo_upload_files to record it (checksum match, no "
+                        "bytes re-sent)"
+                    )
+                    continue
                 if not used_multipart:
                     if on_progress:
                         on_progress(f"uploading {key} ({local_size} bytes)")

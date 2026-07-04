@@ -382,22 +382,35 @@ idempotency layer.
 
 Motivation: single-PUT uploads of very large packages (a real 20 GB
 zip) are fragile — a drop at GB 18 re-sends everything, and the
-in-request retry cannot rewind a spent stream. Zenodo's deployment
-accepts InvenioRDM v13 **multipart transfers** (verified live against
-sandbox 2026-07-04: init with `transfer: {type: "M", parts, part_size}`
-returns one URL per part, valid 14 days, plus the normal commit link).
+in-request retry cannot rewind a spent stream. InvenioRDM v13 has
+**multipart transfers** (`transfer: {type: "M", parts, part_size}`).
+
+**Live status on Zenodo (sandbox, 2026-07-04):** the init is accepted
+(201, one URL per part, valid 14 days, plus the commit link) **but the
+part `PUT` itself returns 403 Permission denied** — with the same token
+that single-PUTs fine, and with correct headers (wrong content-type
+gives 415, proving the route parses). Conclusion: the v13 scaffolding
+is deployed but part uploads are not yet enabled for API users. The
+code is written so multipart simply starts working the day Zenodo
+flips it on — nothing to change on our side.
 
 Implementation (`zenodo._upload_multipart`, `zenodo._PartReader`):
 
 - Files larger than `[zenodo] multipart_threshold_mb` (default 1024)
-  upload as `part_size_mb` (default 200) parts — each part an
+  try multipart as `part_size_mb` (default 200) parts — each part an
   independent, retryable `PUT`; a failed part costs one part, not the
   file. Files at or below the threshold keep the plain single PUT
   (now with a rewind-on-retry fix in `ZenodoClient.request` so the
   3-attempt retry genuinely works for streamed bodies).
-- **Feature detect:** if the multipart init is rejected (4xx), the
-  upload falls back to single PUT automatically — correct on any
-  environment, no config needed.
+- **Feature detect at BOTH stages:** a 4xx on the multipart init *or*
+  on a part PUT (today's Zenodo behavior) cleans up the pending entry
+  and falls back — correct on any environment, no config needed.
+- **Unattended ceiling:** when the fallback is taken, files above
+  `single_put_max_mb` (default 5120) are NOT single-PUT unattended —
+  they surface as `manual_required` with explicit instructions
+  (a mid-stream drop on a 20 GB monolithic PUT re-sends everything,
+  so that job belongs to the operator until multipart is enabled).
+  A working multipart ignores this ceiling.
 - **Verification:** after commit the draft entry is re-fetched and
   must match the local file (md5 when the server reports one; S3-style
   backends may not report a whole-file md5, in which case
