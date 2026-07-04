@@ -411,6 +411,25 @@ Implementation (`zenodo._upload_multipart`, `zenodo._PartReader`):
   (a mid-stream drop on a 20 GB monolithic PUT re-sends everything,
   so that job belongs to the operator until multipart is enabled).
   A working multipart ignores this ceiling.
+
+Follow-ups (no scheduled retry needed — every >threshold upload
+re-probes multipart implicitly and self-activates when it works):
+
+- On-demand check: `.venv/bin/python scripts/probe_zenodo_multipart.py`
+  (creates + discards a private draft; last line is the verdict).
+- Optional support ask (no documented grant process — treat an answer
+  as a bonus): via https://support.zenodo.org, something like: *"Via
+  the REST API, a draft file registered with `transfer: {type: "M"}`
+  returns 201 with per-part URLs, but the part PUT itself returns 403
+  Permission denied (same PAT uploads fine via the single-request
+  flow). Are InvenioRDM multipart uploads available on request for API
+  users, or planned? We deposit institutional datasets, occasionally
+  ~20 GB, and per-part retry would make those transfers far more
+  reliable than a monolithic PUT."*
+- Records over 50 GB: Zenodo grants a one-time quota increase up to
+  200 GB per record via a support request with fair-use justification
+  (their FAQ "What are the size limitations of Zenodo?"). That is
+  about the record cap, not transfer reliability.
 - **Verification:** after commit the draft entry is re-fetched and
   must match the local file (md5 when the server reports one; S3-style
   backends may not report a whole-file md5, in which case
