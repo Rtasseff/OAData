@@ -327,6 +327,15 @@ are flagged on the sheet and in the reminder text), free-text "Other"
 exemptions, and anything on a placeholder archive (no central-DB
 metadata to build a record from).
 
+Large packages: files above `[zenodo] multipart_threshold_mb` upload
+via Zenodo's multipart transfer (per-part retry — a mid-transfer drop
+costs one ~200 MB part, not the file; see zenodo_design.md § Large
+files). Uploads that keep failing across runs surface in the digest
+with the manual path: upload by hand to the already-created draft,
+then `oa action <pub_id> zenodo_upload_files` records it (the
+checksum match sends nothing). Deposits over Zenodo's 50 GB/record
+cap are refused up front — split them or contact Zenodo support.
+
 Zenodo credentials: `~/.zenodorc` (mode 600), sections `[zenodo]`
 (production) and `[zenodo-sandbox]`, each with `token = ...`. The
 environment is chosen by `[zenodo] environment` in `config.toml` —

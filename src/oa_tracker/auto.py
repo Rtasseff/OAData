@@ -384,6 +384,17 @@ def _advance(config: Config, result: AutoRunResult) -> None:
                     result.auto_applied.append(f"{pub_id}: package uploaded to draft (retry)")
                 else:
                     result.errors.extend(r.errors or [f"{pub_id}: upload retry did not apply"])
+                    # A retry failure means at least two runs have failed —
+                    # hand the operator the manual path (draft + DOI are
+                    # already reserved; upload_files recognises a hand-made
+                    # upload by checksum, so the loop closes cleanly).
+                    from oa_tracker import zenodo as z
+                    result.awaiting_operator.append(
+                        f"{pub_id}: automatic upload keeps failing — upload the "
+                        f"package by hand from {a.get('folder_path')} to "
+                        f"{z.record_ui_url(config.zenodo, a['zenodo_code'])}, then run "
+                        f"`oa action {pub_id} zenodo_upload_files` to record it"
+                    )
 
     # Operator worklist for the digest.
     with db.get_connection(config.database) as conn:

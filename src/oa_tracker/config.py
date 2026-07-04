@@ -75,6 +75,14 @@ class ZenodoSettings:
     # the folder. Extra folder files are reported, never silently skipped.
     upload_files: str = "package"
     manifest_dir: Path = field(default_factory=lambda: Path("./output/zenodo_uploads"))
+    # Files larger than the threshold upload via InvenioRDM's multipart
+    # transfer (type "M"): the file is split into parts, each part is an
+    # independent, retryable PUT — a mid-transfer drop costs one part,
+    # not the whole file. Verified live against sandbox.zenodo.org
+    # 2026-07-04 (init returns per-part URLs valid for 14 days). Files
+    # at or below the threshold keep the plain single-PUT upload.
+    multipart_threshold_mb: int = 1024
+    multipart_part_size_mb: int = 200
 
     @property
     def base_url(self) -> str:
@@ -214,6 +222,10 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
             default_keywords=list(zen_raw.get("default_keywords", zen_defaults.default_keywords)),
             upload_files=zen_raw.get("upload_files", zen_defaults.upload_files),
             manifest_dir=_resolve(root, zen_raw.get("manifest_dir", "./output/zenodo_uploads")),
+            multipart_threshold_mb=zen_raw.get(
+                "multipart_threshold_mb", zen_defaults.multipart_threshold_mb),
+            multipart_part_size_mb=zen_raw.get(
+                "multipart_part_size_mb", zen_defaults.multipart_part_size_mb),
         ),
         automation=AutomationSettings(
             enabled=auto_raw.get("enabled", auto_defaults.enabled),

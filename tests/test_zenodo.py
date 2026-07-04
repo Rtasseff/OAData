@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import urllib.parse
 import zipfile
 from datetime import date
 from pathlib import Path
@@ -16,7 +18,14 @@ from oa_tracker.config import ZenodoSettings
 # ── Fake client ──────────────────────────────────────────────────────
 
 class FakeZenodo:
-    """In-memory stand-in for ZenodoClient covering the endpoints we use."""
+    """In-memory stand-in for ZenodoClient covering the endpoints we use.
+
+    Multipart knobs: ``multipart_supported=False`` rejects a type-M init
+    with a 400-style ZenodoError (feature-detect fallback path);
+    ``report_md5=False`` commits without an md5 checksum (S3-style
+    backend), leaving only status+size to match on; ``corrupt_on_commit``
+    garbles assembled multipart content (verification path).
+    """
 
     def __init__(self):
         self.records: dict[str, dict] = {}
@@ -24,6 +33,9 @@ class FakeZenodo:
         self.published: set[str] = set()
         self.next_id = 100
         self.calls: list[tuple[str, str]] = []
+        self.multipart_supported = True
+        self.report_md5 = True
+        self.corrupt_on_commit = False
 
     def request(self, method, path, json_body=None, data=None,
                 content_type=None, content_length=None):
@@ -42,29 +54,65 @@ class FakeZenodo:
             return 200, {"entries": list(self.files[rid].values())}
         if method == "POST" and path.endswith("/draft/files"):
             rid = path.split("/")[3]
-            for entry in json_body:
-                self.files[rid][entry["key"]] = {"key": entry["key"]}
-            return 201, {}
+            entries = []
+            for spec in json_body:
+                key = spec["key"]
+                transfer = spec.get("transfer") or {}
+                if transfer.get("type") == "M":
+                    if not self.multipart_supported:
+                        raise zenodo.ZenodoError(
+                            "data",
+                            "HTTP 400 from Zenodo: unsupported transfer type M",
+                            400,
+                        )
+                    entry = {
+                        "key": key, "status": "pending", "checksum": None,
+                        "size": spec.get("size"), "_parts": {},
+                        "links": {"parts": [
+                            {"part": n,
+                             "url": f"/api/records/{rid}/draft/files/{key}/content/{n}"}
+                            for n in range(1, transfer["parts"] + 1)
+                        ]},
+                    }
+                else:
+                    entry = {"key": key, "status": "pending", "checksum": None}
+                self.files[rid][key] = entry
+                entries.append(entry)
+            return 201, {"entries": entries}
+        if method == "PUT" and "/content/" in path:
+            rid = path.split("/")[3]
+            key = urllib.parse.unquote(path.split("/")[-3])
+            part = int(path.split("/")[-1])
+            content = data.read() if hasattr(data, "read") else data
+            self.files[rid][key]["_parts"][part] = content
+            return 200, {}
         if method == "PUT" and path.endswith("/content"):
             rid = path.split("/")[3]
-            key = path.split("/")[-2]
-            import urllib.parse
-            key = urllib.parse.unquote(key)
+            key = urllib.parse.unquote(path.split("/")[-2])
             content = data.read() if hasattr(data, "read") else data
-            import hashlib
             self.files[rid][key]["_content"] = content
-            self.files[rid][key]["_md5"] = hashlib.md5(content).hexdigest()
             return 200, {}
         if method == "POST" and path.endswith("/commit"):
             rid = path.split("/")[3]
-            import urllib.parse
             key = urllib.parse.unquote(path.split("/")[-2])
-            self.files[rid][key]["checksum"] = "md5:" + self.files[rid][key]["_md5"]
+            entry = self.files[rid][key]
+            if entry.get("_parts"):
+                assembled = b"".join(
+                    entry["_parts"][n] for n in sorted(entry["_parts"])
+                )
+                if self.corrupt_on_commit:
+                    assembled += b"CORRUPT"
+                entry["_content"] = assembled
+            entry["status"] = "completed"
+            entry["size"] = len(entry.get("_content", b""))
+            entry["_md5"] = hashlib.md5(entry.get("_content", b"")).hexdigest()
+            entry["checksum"] = ("md5:" + entry["_md5"]) if self.report_md5 else None
             return 200, {}
         if method == "DELETE" and "/draft/files/" in path:
             rid = path.split("/")[3]
-            import urllib.parse
             key = urllib.parse.unquote(path.split("/")[-1])
+            if key not in self.files[rid]:
+                raise zenodo.ZenodoError("data", "HTTP 404 from Zenodo: no such file", 404)
             del self.files[rid][key]
             return 204, {}
         if method == "POST" and path.endswith("/actions/publish"):
@@ -339,6 +387,151 @@ def test_upload_reports_skipped_files(tmp_path, settings):
     assert res.ok
     assert res.skipped_local == ["notes.docx"]
     assert "notes.docx" in res.summary
+
+
+# ── Multipart uploads (large files) ──────────────────────────────────
+
+def _big_folder(tmp_path, size=2 * 1024 * 1024 + 512 * 1024):
+    """A folder whose data.zip exceeds a 1 MB multipart threshold."""
+    folder = tmp_path / "big"
+    folder.mkdir()
+    (folder / "data.zip").write_bytes(b"x" * size)
+    return folder
+
+
+def _mp(settings, threshold_mb=1, part_mb=1):
+    settings.multipart_threshold_mb = threshold_mb
+    settings.multipart_part_size_mb = part_mb
+    return settings
+
+
+def test_multipart_used_above_threshold(tmp_path, settings):
+    fake = FakeZenodo()
+    fake.files["100"] = {}
+    folder = _big_folder(tmp_path)          # 2.5 MB → 3 parts at 1 MB
+    res = zenodo.upload_files(fake, "100", folder, _mp(settings))
+    assert res.ok
+    assert res.uploaded == ["data.zip"]
+    entry = fake.files["100"]["data.zip"]
+    assert sorted(entry["_parts"]) == [1, 2, 3]
+    assert entry["_content"] == (folder / "data.zip").read_bytes()
+    manifest = json.loads(
+        (Path(settings.manifest_dir) / "100" / "manifest.json").read_text()
+    )
+    assert manifest["files"][0]["multipart"] is True
+
+
+def test_small_file_still_single_put(tmp_path, settings):
+    fake = FakeZenodo()
+    fake.files["100"] = {}
+    folder = tmp_path / "small"
+    folder.mkdir()
+    (folder / "data.zip").write_bytes(b"tiny")
+    res = zenodo.upload_files(fake, "100", folder, _mp(settings))
+    assert res.ok and res.uploaded == ["data.zip"]
+    assert "_parts" not in fake.files["100"]["data.zip"]
+
+
+def test_multipart_idempotent_without_md5_checksum(tmp_path, settings):
+    # S3-style backends may not report a whole-file md5. Idempotency must
+    # fall back to completed-status + size — otherwise every future run
+    # deletes and re-sends the entire large file.
+    fake = FakeZenodo()
+    fake.report_md5 = False
+    fake.files["100"] = {}
+    folder = _big_folder(tmp_path)
+    res1 = zenodo.upload_files(fake, "100", folder, _mp(settings))
+    assert res1.ok and res1.uploaded == ["data.zip"]
+    res2 = zenodo.upload_files(fake, "100", folder, _mp(settings))
+    assert res2.ok
+    assert res2.uploaded == []
+    assert res2.already_present == ["data.zip"]
+
+
+def test_multipart_falls_back_to_single_put(tmp_path, settings):
+    # Environment without transfer-type-M support: init 400s, upload
+    # silently falls back to the plain single PUT.
+    fake = FakeZenodo()
+    fake.multipart_supported = False
+    fake.files["100"] = {}
+    folder = _big_folder(tmp_path)
+    res = zenodo.upload_files(fake, "100", folder, _mp(settings))
+    assert res.ok
+    assert res.uploaded == ["data.zip"]
+    entry = fake.files["100"]["data.zip"]
+    assert "_parts" not in entry
+    assert entry["_content"] == (folder / "data.zip").read_bytes()
+
+
+def test_multipart_verification_failure_is_an_error(tmp_path, settings):
+    fake = FakeZenodo()
+    fake.corrupt_on_commit = True
+    fake.files["100"] = {}
+    res = zenodo.upload_files(fake, "100", _big_folder(tmp_path), _mp(settings))
+    assert not res.ok
+    assert "does not match" in res.errors[0]
+
+
+def test_stale_pending_entry_is_replaced(tmp_path, settings):
+    # An interrupted earlier upload leaves a "pending" entry (right size,
+    # no checksum) — it must be deleted and re-uploaded, not trusted.
+    fake = FakeZenodo()
+    folder = _big_folder(tmp_path)
+    size = (folder / "data.zip").stat().st_size
+    fake.files["100"] = {"data.zip": {
+        "key": "data.zip", "status": "pending", "checksum": None, "size": size,
+    }}
+    res = zenodo.upload_files(fake, "100", folder, _mp(settings))
+    assert res.ok
+    assert res.replaced == ["data.zip"]
+    assert res.uploaded == ["data.zip"]
+    assert fake.files["100"]["data.zip"]["status"] == "completed"
+
+
+def test_part_reader_slices_and_reseeks(tmp_path):
+    p = tmp_path / "f.bin"
+    p.write_bytes(b"0123456789")
+    with zenodo._PartReader(p, 3, 4) as r:
+        assert r.read() == b"3456"
+        assert r.read() == b""
+        r.seek(0)                    # rewinds to the SLICE start, not byte 0
+        assert r.read(2) == b"34"
+        assert r.read() == b"56"
+
+
+def test_client_retry_rewinds_streamed_body(monkeypatch, tmp_path):
+    # A failed attempt leaves a streamed body spent; the retry must
+    # rewind it or it silently sends zero bytes.
+    sent = []
+
+    def fake_urlopen(req, timeout=None):
+        body = req.data.read() if hasattr(req.data, "read") else req.data
+        sent.append(body)
+        if len(sent) == 1:
+            raise OSError("connection dropped")
+
+        class R:
+            status = 200
+            def read(self):
+                return b"{}"
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+        return R()
+
+    monkeypatch.setattr(zenodo.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(zenodo.time, "sleep", lambda s: None)
+    p = tmp_path / "f.bin"
+    p.write_bytes(b"HELLO")
+    client = zenodo.ZenodoClient("https://x.invalid", "tok")
+    with open(p, "rb") as f:
+        status, _ = client.request(
+            "PUT", "/y", data=f,
+            content_type="application/octet-stream", content_length=5,
+        )
+    assert status == 200
+    assert sent == [b"HELLO", b"HELLO"]
 
 
 def test_record_ui_url(settings):

@@ -52,6 +52,13 @@ default_keywords = ["CIC biomaGUNE"]
 # uploads every non-clutter file.
 upload_files = "package"
 manifest_dir = "./output/zenodo_uploads"
+# Files above the threshold upload via InvenioRDM multipart (type "M"):
+# split into parts, each an independent retryable PUT — a mid-transfer
+# drop costs one part, not the whole file (verified live on sandbox
+# 2026-07-04). At or below the threshold: plain single PUT. Zenodo's own
+# hard cap of 50 GB per record still applies and is refused up front.
+multipart_threshold_mb = 1024      # > 1 GB → multipart
+multipart_part_size_mb = 200
 
 [automation]                  # per-signal-class gates for `oa auto` (cron entry point)
 enabled = true

@@ -378,6 +378,43 @@ partially uploaded should converge to a fully-uploaded state, not
 duplicate or overwrite. The manifest mechanism above is the
 idempotency layer.
 
+### Large files: multipart upload (added 2026-07-04)
+
+Motivation: single-PUT uploads of very large packages (a real 20 GB
+zip) are fragile — a drop at GB 18 re-sends everything, and the
+in-request retry cannot rewind a spent stream. Zenodo's deployment
+accepts InvenioRDM v13 **multipart transfers** (verified live against
+sandbox 2026-07-04: init with `transfer: {type: "M", parts, part_size}`
+returns one URL per part, valid 14 days, plus the normal commit link).
+
+Implementation (`zenodo._upload_multipart`, `zenodo._PartReader`):
+
+- Files larger than `[zenodo] multipart_threshold_mb` (default 1024)
+  upload as `part_size_mb` (default 200) parts — each part an
+  independent, retryable `PUT`; a failed part costs one part, not the
+  file. Files at or below the threshold keep the plain single PUT
+  (now with a rewind-on-retry fix in `ZenodoClient.request` so the
+  3-attempt retry genuinely works for streamed bodies).
+- **Feature detect:** if the multipart init is rejected (4xx), the
+  upload falls back to single PUT automatically — correct on any
+  environment, no config needed.
+- **Verification:** after commit the draft entry is re-fetched and
+  must match the local file (md5 when the server reports one; S3-style
+  backends may not report a whole-file md5, in which case
+  completed-status + byte size is accepted — `_entry_matches`). The
+  same rule drives idempotency, so a completed large upload is never
+  deleted and re-sent on a later run.
+- Stale `pending` entries (an interrupted earlier upload) never match —
+  they are deleted and restarted clean.
+- Beyond Zenodo's hard 50 GB/record cap nothing helps: refused up
+  front with an explicit "split the deposit" message.
+- Escape hatch: when automatic upload fails across runs, the `oa auto`
+  digest tells the operator to upload by hand (draft + reserved DOI
+  already exist) and close the loop with
+  `oa action <pub_id> zenodo_upload_files` — the checksum/size match
+  recognises the hand-uploaded file and records the event without
+  re-sending bytes.
+
 ## Workflow integration
 
 Per the validation-phase rule

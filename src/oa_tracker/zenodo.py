@@ -123,6 +123,10 @@ class ZenodoClient:
             content_type = "application/json"
         last_exc: Exception | None = None
         for attempt in range(3):
+            # A streamed body (open file / _PartReader) is spent by a
+            # failed attempt — rewind it or the retry sends zero bytes.
+            if attempt and hasattr(body, "seek"):
+                body.seek(0)
             req = urllib.request.Request(url, data=body, method=method)
             req.add_header("Authorization", f"Bearer {self._token}")
             if content_type:
@@ -538,6 +542,119 @@ def _md5(path: Path) -> str:
     return h.hexdigest()
 
 
+class _PartReader:
+    """File-like view of one slice of a file, for streaming a multipart
+    part without reading it into memory.
+
+    ``seek(0)`` rewinds to the *slice start* — that is what the client's
+    retry loop calls, so a failed part PUT restarts cleanly at the part
+    boundary, never at byte 0 of the whole file.
+    """
+
+    def __init__(self, path: Path, offset: int, length: int):
+        self._f = open(path, "rb")
+        self._offset = offset
+        self._length = length
+        self._f.seek(offset)
+        self._remaining = length
+
+    def read(self, n: int = -1) -> bytes:
+        if self._remaining <= 0:
+            return b""
+        if n is None or n < 0 or n > self._remaining:
+            n = self._remaining
+        chunk = self._f.read(n)
+        self._remaining -= len(chunk)
+        return chunk
+
+    def seek(self, pos: int) -> None:
+        if pos != 0:
+            raise ValueError("_PartReader only supports seek(0)")
+        self._f.seek(self._offset)
+        self._remaining = self._length
+
+    def close(self) -> None:
+        self._f.close()
+
+    def __enter__(self) -> "_PartReader":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+def _upload_multipart(
+    client: ZenodoClient,
+    record_id: str,
+    key: str,
+    path: Path,
+    part_size: int,
+    on_progress: Callable[[str], None] | None = None,
+) -> bool:
+    """Upload one large file via the InvenioRDM multipart transfer
+    (type ``M``): init returns one URL per part; each part is an
+    independent, retryable PUT; commit assembles the file server-side.
+
+    Returns False when the server does not accept the multipart init
+    (HTTP 4xx) — the caller falls back to the single-PUT path. Any
+    other failure raises ``ZenodoError`` as usual.
+    """
+    size = path.stat().st_size
+    parts = max(1, (size + part_size - 1) // part_size)
+    try:
+        _, resp = client.request(
+            "POST", f"/api/records/{record_id}/draft/files",
+            json_body=[{
+                "key": key,
+                "size": size,
+                "transfer": {"type": "M", "parts": parts, "part_size": part_size},
+            }],
+        )
+    except ZenodoError as e:
+        if e.kind == "data":
+            # Environment without multipart support — feature-detect
+            # fallback. Clear any half-created entry, then let the
+            # caller single-PUT.
+            try:
+                delete_draft_file(client, record_id, key)
+            except ZenodoError:
+                pass
+            return False
+        raise
+
+    entry = next((e for e in resp.get("entries", []) if e.get("key") == key), None)
+    part_urls = {
+        p["part"]: p["url"]
+        for p in ((entry or {}).get("links") or {}).get("parts", [])
+    }
+    if len(part_urls) < parts:
+        # Accepted the init but gave no usable part links — treat like
+        # an unsupported environment rather than guessing URLs.
+        try:
+            delete_draft_file(client, record_id, key)
+        except ZenodoError:
+            pass
+        return False
+
+    for i in range(1, parts + 1):
+        offset = (i - 1) * part_size
+        length = min(part_size, size - offset)
+        if on_progress:
+            on_progress(f"uploading {key} part {i}/{parts} ({length} bytes)")
+        with _PartReader(path, offset, length) as reader:
+            client.request(
+                "PUT", part_urls[i],
+                data=reader,
+                content_type="application/octet-stream",
+                content_length=length,
+            )
+    client.request(
+        "POST",
+        f"/api/records/{record_id}/draft/files/{urllib.parse.quote(key)}/commit",
+    )
+    return True
+
+
 @dataclass
 class UploadResult:
     uploaded: list[str] = field(default_factory=list)
@@ -563,6 +680,24 @@ class UploadResult:
         if self.errors:
             parts.append(f"ERRORS: {'; '.join(self.errors)}")
         return "; ".join(parts)
+
+
+def _entry_matches(entry: dict | None, local_md5: str, local_size: int) -> bool:
+    """Is the remote draft entry the same file we have locally?
+
+    Committed single-PUT uploads carry ``checksum = "md5:<hex>"`` —
+    compare directly. Multipart-assembled files may report a non-md5
+    checksum (or none), so fall back to completed-status + byte size.
+    Without the fallback a completed large upload would look changed and
+    be deleted + re-sent on every run. Stale ``pending`` entries (an
+    interrupted upload) never match — status isn't ``completed``.
+    """
+    if not entry:
+        return False
+    checksum = entry.get("checksum") or ""
+    if checksum.startswith("md5:"):
+        return checksum.removeprefix("md5:") == local_md5
+    return entry.get("status") == "completed" and entry.get("size") == local_size
 
 
 def upload_files(
@@ -603,46 +738,71 @@ def upload_files(
     if oversized or total > _MAX_BYTES:
         result.errors.append(
             f"upload exceeds Zenodo's 50 GB limit (total {total/1024**3:.1f} GB; "
-            f"oversized: {', '.join(oversized) or 'none'})"
+            f"oversized: {', '.join(oversized) or 'none'}) — no upload method "
+            "fixes this; split the deposit or contact Zenodo support"
         )
         return result
+
+    threshold = settings.multipart_threshold_mb * 1024**2
+    part_size = settings.multipart_part_size_mb * 1024**2
 
     remote = list_draft_files(client, record_id)
     manifest_entries = []
     for key, path in keyed.items():
         local_md5 = _md5(path)
+        local_size = path.stat().st_size
         entry = remote.get(key)
-        remote_md5 = (entry or {}).get("checksum", "")
-        remote_md5 = remote_md5.removeprefix("md5:") if remote_md5 else ""
+        used_multipart = False
         try:
-            if entry and remote_md5 == local_md5:
+            if _entry_matches(entry, local_md5, local_size):
                 result.already_present.append(key)
             else:
                 if entry:
+                    # Covers changed files AND stale "pending" entries
+                    # left by an interrupted upload — both restart clean.
                     delete_draft_file(client, record_id, key)
                     result.replaced.append(key)
-                if on_progress:
-                    on_progress(f"uploading {key} ({path.stat().st_size} bytes)")
-                client.request(
-                    "POST", f"/api/records/{record_id}/draft/files",
-                    json_body=[{"key": key}],
-                )
-                with open(path, "rb") as f:
-                    client.request(
-                        "PUT",
-                        f"/api/records/{record_id}/draft/files/{urllib.parse.quote(key)}/content",
-                        data=f,
-                        content_type="application/octet-stream",
-                        content_length=path.stat().st_size,
+                if local_size > threshold:
+                    used_multipart = _upload_multipart(
+                        client, record_id, key, path, part_size, on_progress,
                     )
-                client.request(
-                    "POST",
-                    f"/api/records/{record_id}/draft/files/{urllib.parse.quote(key)}/commit",
-                )
+                if not used_multipart:
+                    if on_progress:
+                        on_progress(f"uploading {key} ({local_size} bytes)")
+                    client.request(
+                        "POST", f"/api/records/{record_id}/draft/files",
+                        json_body=[{"key": key}],
+                    )
+                    with open(path, "rb") as f:
+                        client.request(
+                            "PUT",
+                            f"/api/records/{record_id}/draft/files/{urllib.parse.quote(key)}/content",
+                            data=f,
+                            content_type="application/octet-stream",
+                            content_length=local_size,
+                        )
+                    client.request(
+                        "POST",
+                        f"/api/records/{record_id}/draft/files/{urllib.parse.quote(key)}/commit",
+                    )
+                else:
+                    # Multipart went through — verify the assembled file
+                    # before trusting it (md5 when the server reports one,
+                    # else committed-status + size).
+                    committed = list_draft_files(client, record_id).get(key)
+                    if not _entry_matches(committed, local_md5, local_size):
+                        raise ZenodoError(
+                            "transient",
+                            f"multipart upload of {key} committed but the draft "
+                            f"entry does not match the local file "
+                            f"(checksum {(committed or {}).get('checksum')!r}, "
+                            f"size {(committed or {}).get('size')!r} vs {local_size})",
+                        )
                 result.uploaded.append(key)
             manifest_entries.append({
                 "key": key, "path": str(path), "md5": local_md5,
-                "size": path.stat().st_size,
+                "size": local_size,
+                "multipart": used_multipart,
             })
         except ZenodoError as e:
             result.errors.append(f"{key}: {e}")
