@@ -455,13 +455,24 @@ def create_draft(client: ZenodoClient, payload: dict[str, Any]) -> DraftInfo:
     """
     _, body = client.request("POST", "/api/records", json_body=payload)
     record_id = str(body["id"])
-    # Reserve failure must not orphan the draft: the caller records the
-    # record id either way (so a retry never creates a duplicate), and a
-    # missing reserved DOI is minted at publish time regardless.
-    doi: str | None = None
+    # The dataset DOI is deterministically 10.5281/zenodo.<record_id>;
+    # record it now so our DB has it before publish (the design goal).
+    # We still hit the reserve endpoint so the DOI is registered as
+    # reserved on Zenodo's side, but we do NOT depend on parsing its
+    # response: Zenodo returns the reserved DOI at the top-level `doi`
+    # (and `metadata.doi`/`links.doi`), NOT at InvenioRDM's
+    # `pids.doi.identifier` — which stays null, so the old pids-only read
+    # always missed it and silently stored None. Reserve failure is
+    # non-fatal (the same DOI mints at publish regardless).
+    doi: str | None = code_to_doi(record_id)
     try:
         _, with_doi = client.request("POST", f"/api/records/{record_id}/draft/pids/doi")
-        doi = ((with_doi.get("pids") or {}).get("doi") or {}).get("identifier")
+        doi = (
+            with_doi.get("doi")
+            or ((with_doi.get("pids") or {}).get("doi") or {}).get("identifier")
+            or (with_doi.get("metadata") or {}).get("doi")
+            or doi
+        )
     except ZenodoError:
         pass
     links = body.get("links") or {}
@@ -491,9 +502,20 @@ def delete_draft_file(client: ZenodoClient, record_id: str, key: str) -> None:
 
 
 def publish(client: ZenodoClient, record_id: str) -> dict:
-    """Publish the draft. Returns ``{doi, html_url}`` from the record."""
+    """Publish the draft. Returns ``{doi, html_url}`` from the record.
+
+    Zenodo returns the minted DOI at the top-level ``doi`` field (and
+    ``metadata.doi``), NOT at InvenioRDM's ``pids.doi.identifier`` — which
+    is null even on PUBLISHED records. Reading pids-only stored an empty
+    ``final_pid`` for the permanent record; read all known locations and
+    fall back to the deterministic Zenodo form so the DOI is never lost."""
     _, body = client.request("POST", f"/api/records/{record_id}/draft/actions/publish")
-    doi = ((body.get("pids") or {}).get("doi") or {}).get("identifier") or ""
+    doi = (
+        body.get("doi")
+        or ((body.get("pids") or {}).get("doi") or {}).get("identifier")
+        or (body.get("metadata") or {}).get("doi")
+        or code_to_doi(record_id)
+    )
     links = body.get("links") or {}
     return {"doi": doi, "html_url": links.get("self_html") or ""}
 
