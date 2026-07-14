@@ -36,7 +36,10 @@ class FakeZenodo:
             return 201, {"id": rid, "links": {"self_html": f"https://fake/uploads/{rid}"}}
         if method == "POST" and path.endswith("/draft/pids/doi"):
             rid = path.split("/")[3]
-            return 201, {"pids": {"doi": {"identifier": f"10.5281/zenodo.{rid}"}}}
+            # Zenodo's real shape: DOI at top-level `doi`, `pids` left null
+            # (NOT pids.doi.identifier). Mirroring it here is what makes the
+            # create_draft/publish DOI extraction get exercised faithfully.
+            return 201, {"doi": f"10.5281/zenodo.{rid}", "pids": None}
         if method == "GET" and path.endswith("/draft/files"):
             rid = path.split("/")[3]
             return 200, {"entries": list(self.files[rid].values())}
@@ -70,8 +73,11 @@ class FakeZenodo:
         if method == "POST" and path.endswith("/actions/publish"):
             rid = path.split("/")[3]
             self.published.add(rid)
+            # Zenodo returns the minted DOI at top-level `doi`; pids is null
+            # even on published records.
             return 202, {
-                "pids": {"doi": {"identifier": f"10.5281/zenodo.{rid}"}},
+                "doi": f"10.5281/zenodo.{rid}",
+                "pids": None,
                 "links": {"self_html": f"https://fake/records/{rid}"},
             }
         raise AssertionError(f"unexpected call: {method} {path}")
@@ -250,6 +256,25 @@ def test_publish(settings):
     out = zenodo.publish(fake, draft.record_id)
     assert out["doi"] == "10.5281/zenodo.100"
     assert draft.record_id in fake.published
+
+
+def test_doi_derived_when_response_omits_it(settings):
+    """Zenodo has returned reserve/publish responses with the DOI in neither
+    `pids` nor top-level `doi`; the deterministic 10.5281/zenodo.<id> form
+    must still be recorded rather than lost as None/empty."""
+    class Terse(FakeZenodo):
+        def request(self, method, path, **kw):
+            if path.endswith("/draft/pids/doi"):
+                return 201, {"pids": None}                       # nothing usable
+            if path.endswith("/actions/publish"):
+                self.published.add(path.split("/")[3])
+                return 202, {"pids": None, "links": {"self_html": "https://fake/x"}}
+            return super().request(method, path, **kw)
+
+    fake = Terse()
+    draft = zenodo.create_draft(fake, zenodo.build_record_payload(_archive(), settings))
+    assert draft.doi == "10.5281/zenodo.100"
+    assert zenodo.publish(fake, draft.record_id)["doi"] == "10.5281/zenodo.100"
 
 
 # ── File discovery ───────────────────────────────────────────────────
