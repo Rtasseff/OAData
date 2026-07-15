@@ -554,17 +554,26 @@ def discard_draft(client: ZenodoClient, record_id: str) -> None:
 
 def _is_package_file(p: Path) -> bool:
     name = p.name.lower()
-    return name.endswith(".zip") or (name.startswith("readme") and name.endswith(".txt"))
+    if name.endswith(".zip"):
+        return True
+    if name.startswith("readme") and name.endswith(".txt"):
+        return True
+    # Manuscript (rule update 2026-07-15): the pre-print .doc/.docx/.pdf
+    # beside the zip is part of the deposit — operator decision: the
+    # pre-submission version is ours to publish on an open repository,
+    # so it uploads to Zenodo with the package.
+    return name.endswith((".doc", ".docx", ".pdf"))
 
 
 def discover_files(folder: Path, mode: str = "package") -> tuple[list[Path], list[Path]]:
     """Return ``(to_upload, skipped)`` for an archive folder.
 
     ``mode="package"`` uploads only the protocol package (``*.zip`` +
-    ``README*.txt``); everything else lands in ``skipped`` so the caller
-    can report it (never silently dropped). ``mode="all"`` uploads every
-    non-clutter file. Files are taken from the folder root and one level
-    of subfolders (the protocol puts the package at the root).
+    ``README*.txt`` + the manuscript ``.doc``/``.docx``/``.pdf``);
+    everything else lands in ``skipped`` so the caller can report it
+    (never silently dropped). ``mode="all"`` uploads every non-clutter
+    file. Files are taken from the folder root and one level of
+    subfolders (the protocol puts the package at the root).
     """
     to_upload: list[Path] = []
     skipped: list[Path] = []

@@ -339,13 +339,30 @@ def test_doi_derived_when_response_omits_it(settings):
 # ── File discovery ───────────────────────────────────────────────────
 
 def test_discover_files_package_mode(tmp_path):
+    """The package is *.zip + README*.txt + the manuscript pre-print
+    (.doc/.docx/.pdf, part of the deposit since 2026-07-15); anything
+    else is skipped-and-reported."""
     (tmp_path / "Datasets_articleDOI-x.zip").write_bytes(b"zipdata")
     (tmp_path / "README.txt").write_text("readme")
-    (tmp_path / "postprint.pdf").write_bytes(b"pdf")
+    (tmp_path / "preprint.pdf").write_bytes(b"pdf")
+    (tmp_path / "raw_measurements.csv").write_text("a,b")
     (tmp_path / ".DS_Store").write_bytes(b"junk")
+    (tmp_path / "~$preprint.docx").write_bytes(b"lock")   # Word lock file
     to_upload, skipped = zenodo.discover_files(tmp_path, "package")
-    assert [p.name for p in to_upload] == ["Datasets_articleDOI-x.zip", "README.txt"]
-    assert [p.name for p in skipped] == ["postprint.pdf"]
+    assert [p.name for p in to_upload] == [
+        "Datasets_articleDOI-x.zip", "README.txt", "preprint.pdf",
+    ]
+    assert [p.name for p in skipped] == ["raw_measurements.csv"]
+
+
+def test_discover_files_manuscript_variants(tmp_path):
+    (tmp_path / "data.zip").write_bytes(b"z")
+    (tmp_path / "manuscript.docx").write_bytes(b"d")
+    (tmp_path / "older_draft.DOC").write_bytes(b"d")
+    to_upload, _ = zenodo.discover_files(tmp_path, "package")
+    assert [p.name for p in to_upload] == [
+        "data.zip", "manuscript.docx", "older_draft.DOC",
+    ]
 
 
 def test_discover_files_all_mode(tmp_path):
@@ -418,11 +435,24 @@ def test_upload_reports_skipped_files(tmp_path, settings):
     fake.records["100"] = {}
     fake.files["100"] = {}
     folder = _folder_with_package(tmp_path)
-    (folder / "notes.docx").write_bytes(b"doc")
+    (folder / "raw_data.csv").write_text("a,b")
     res = zenodo.upload_files(fake, "100", folder, settings)
     assert res.ok
-    assert res.skipped_local == ["notes.docx"]
-    assert "notes.docx" in res.summary
+    assert res.skipped_local == ["raw_data.csv"]
+    assert "raw_data.csv" in res.summary
+
+
+def test_upload_includes_manuscript(tmp_path, settings):
+    """The manuscript pre-print uploads to the draft with the package."""
+    fake = FakeZenodo()
+    fake.records["100"] = {}
+    fake.files["100"] = {}
+    folder = _folder_with_package(tmp_path)
+    (folder / "preprint.pdf").write_bytes(b"pdf-bytes")
+    res = zenodo.upload_files(fake, "100", folder, settings)
+    assert res.ok
+    assert sorted(res.uploaded) == ["README.txt", "data.zip", "preprint.pdf"]
+    assert fake.files["100"]["preprint.pdf"]["_content"] == b"pdf-bytes"
 
 
 # ── Multipart uploads (large files) ──────────────────────────────────

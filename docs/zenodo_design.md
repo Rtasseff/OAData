@@ -16,7 +16,8 @@
 > 3. License id is the RDM `cc0-1.0` (same CC0 1.0 Universal).
 > 4. Embargo maps to RDM access: record public, files restricted +
 >    `embargo.until`.
-> 5. Upload default is the protocol **package** (`*.zip` + `README*.txt`);
+> 5. Upload default is the protocol **package** (`*.zip` + `README*.txt`
+>    + the manuscript pre-print `.doc`/`.docx`/`.pdf`, added 2026-07-15);
 >    other files are reported, not uploaded (configurable to "all").
 > 6. HTTP client is stdlib `urllib` (matching `sharepoint.py`'s GraphClient
 >    pattern) — `requests` was not added.

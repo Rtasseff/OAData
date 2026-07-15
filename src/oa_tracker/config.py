@@ -71,8 +71,10 @@ class ZenodoSettings:
     default_affiliation: str = "CIC biomaGUNE"
     default_keywords: list[str] = field(default_factory=lambda: ["CIC biomaGUNE"])
     # What gets uploaded to the draft: "package" = only the protocol
-    # package (*.zip + README*.txt); "all" = every non-clutter file in
-    # the folder. Extra folder files are reported, never silently skipped.
+    # package (*.zip + README*.txt + manuscript .doc/.docx/.pdf — the
+    # pre-print is part of the deposit, operator decision 2026-07-15);
+    # "all" = every non-clutter file in the folder. Extra folder files
+    # are reported, never silently skipped.
     upload_files: str = "package"
     manifest_dir: Path = field(default_factory=lambda: Path("./output/zenodo_uploads"))
     # Files larger than the threshold upload via InvenioRDM's multipart

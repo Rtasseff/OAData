@@ -63,12 +63,14 @@ Out of scope:
   the scanner also accepts a README found only inside the zip, so nobody
   is bounced on a technicality — but all instructions and reminder texts
   ask for the sibling file. **Plus (updated archiving rules): a version of
-  the manuscript — often a pre-print — as `.doc`/`.docx`/`.pdf`, a third
-  file NOT inside the zip.** The scanner only accepts it beside the zip;
-  auto-QC holds without it. The manuscript is a folder/QC requirement, not
-  part of the Zenodo upload (the deposit stays `*.zip + README*.txt`; the
-  digest lists the manuscript under "not uploaded (outside package)").
-  The user-facing protocol docx should say the same (see its §2.4/§4).
+  the manuscript — a pre-print, i.e. the pre-submission version — as
+  `.doc`/`.docx`/`.pdf`, a third file NOT inside the zip.** The scanner
+  only accepts it beside the zip; auto-QC holds without it. The pre-print
+  is **part of the Zenodo deposit** and uploads with the package
+  (decision 2026-07-15: the pre-submission version was never peer-reviewed
+  or transferred to a journal, so publishing it on an open repository is
+  within our rights). The user-facing protocol docx should say the same
+  (see its §2.4/§4).
 
 ## 6. Status model
 
