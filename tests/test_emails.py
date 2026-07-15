@@ -554,3 +554,57 @@ def test_reminder_note_plain_active_unchanged():
         "package_has_zip": 0, "package_has_readme": 0,
     })
     assert "does not yet look complete" in note
+
+
+# ── Handover notices (auto data-contact reassignment) ────────────────
+
+def _archive_with_handover(db_path, previous_name):
+    from oa_tracker.db import insert_event
+    with get_connection(db_path) as conn:
+        upsert_archive(
+            conn,
+            publication_id="PUB001",
+            folder_path="/tmp/pub001",
+            first_seen_at="2026-01-01T00:00:00",
+            last_seen_at="2026-01-15T00:00:00",
+            became_active_at="2026-01-05T00:00:00",
+            status=OPEN_ACTIVE,
+            data_contact_name="New Contact",
+            data_contact_email="new@biomagune.es",
+        )
+        insert_event(conn, "PUB001", "data_contact_handover",
+                     OPEN_ACTIVE, OPEN_ACTIVE, "auto", note=previous_name)
+
+
+def test_handover_draft_generated_while_pending(test_config):
+    _archive_with_handover(test_config.database, "Old Contact")
+    paths = generate_emails(test_config)
+    handover = [p for p in paths if "handover_PUB001" in p.name]
+    assert len(handover) == 1
+    content = handover[0].read_text()
+    assert "New Contact" in content
+    assert "Old Contact" in content
+    assert "handed this responsibility over to you" in content
+    assert "${handover_line}" not in content
+
+
+def test_handover_draft_first_assignment_wording(test_config):
+    """No previous contact on record → the handover line degrades to a
+    first-assignment sentence instead of naming nobody."""
+    _archive_with_handover(test_config.database, "")
+    paths = generate_emails(test_config)
+    handover = [p for p in paths if "handover_PUB001" in p.name]
+    assert len(handover) == 1
+    content = handover[0].read_text()
+    assert "first assigned data contact" in content
+    assert "handed this responsibility" not in content
+
+
+def test_handover_draft_stops_after_sent(test_config):
+    from oa_tracker.db import insert_event
+    _archive_with_handover(test_config.database, "Old Contact")
+    with get_connection(test_config.database) as conn:
+        insert_event(conn, "PUB001", "handover_sent",
+                     OPEN_ACTIVE, OPEN_ACTIVE, "sheet", note=None)
+    paths = generate_emails(test_config)
+    assert [p for p in paths if "handover" in p.name] == []

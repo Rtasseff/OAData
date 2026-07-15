@@ -134,10 +134,14 @@ def _pull_sharepoint(config: Config, result: AutoRunResult) -> _SpContext | None
             if prop.task_code == "propose_data_contact" and gates.auto_apply_data_contact \
                     and prop.contact_email:
                 r = set_data_contact(config, pi.pub_id, email=prop.contact_email,
-                                     name=prop.contact_name or None)
+                                     name=prop.contact_name or None,
+                                     source="auto", queue_handover=True)
                 if r.applied and not r.errors:
                     result.auto_applied.append(
-                        f"{pi.pub_id}: data contact → {prop.contact_name or prop.contact_email}"
+                        f"{pi.pub_id}: data contact → "
+                        f"{prop.contact_name or prop.contact_email}; handover "
+                        f"notice drafted (email_drafts/handover_{pi.pub_id}.eml "
+                        "— send it via the sheet's handover_sent row)"
                     )
                     routed_auto = True
                 else:

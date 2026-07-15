@@ -328,6 +328,10 @@ def generate_emails(config: Config) -> list[Path]:
     completion_tpl = _load_template(config.template_dir, "completion.txt")
     cheat_tpl_path = config.template_dir / "zenodo_cheat.txt"
     cheat_tpl = Template(cheat_tpl_path.read_text()) if cheat_tpl_path.exists() else None
+    handover_tpl_path = config.template_dir / "handover.txt"
+    handover_tpl = (
+        Template(handover_tpl_path.read_text()) if handover_tpl_path.exists() else None
+    )
 
     # Publications where the data contact already responded on the Tracker and
     # we haven't applied it yet — hold their reminders so we don't nag someone
@@ -417,6 +421,31 @@ def generate_emails(config: Config) -> list[Path]:
             if not archive.get("final_pid"):
                 continue  # nothing to communicate to the data contact
             _write_completion_draft(archive)
+
+        # Handover notices — one per OPEN archive with a pending
+        # data-contact handover (auto-applied reassignment not yet
+        # announced). Regenerates every run until the operator applies
+        # the sheet's handover_sent row, so the draft always reflects
+        # the current archive state and contact.
+        if handover_tpl is not None:
+            for archive in db.get_open_archives(conn):
+                pub_id = archive["publication_id"]
+                handover = db.get_pending_handover(conn, pub_id)
+                if handover is None:
+                    continue
+                previous = (handover.get("note") or "").strip()
+                vars_ = _common_template_vars(archive, config)
+                vars_["handover_line"] = (
+                    f"The previous data contact, {previous}, has handed this "
+                    "responsibility over to you."
+                    if previous else
+                    "You are the first assigned data contact for this "
+                    "publication."
+                )
+                content = handover_tpl.safe_substitute(**vars_)
+                generated.extend(
+                    _write_draft(drafts_dir / f"handover_{pub_id}", content, config)
+                )
 
         # Zenodo cheat sheets — one per archive in any draft-stage status.
         if cheat_tpl is not None:

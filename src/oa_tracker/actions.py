@@ -311,8 +311,12 @@ def _apply_row(
     # user_note is a pure awareness signal: applying it records the user's
     # List note to the archive's notes (a durable, audited record) with no
     # status change.
+    # handover_sent is the operator confirming the handover notice went
+    # out to the newly assigned data contact — the event clears the
+    # pending handover (db.get_pending_handover) so the sheet row and the
+    # regenerated handover_<pub>.eml draft stop appearing.
     if task_code in (
-        "qa_hold", "mandate_missing",
+        "qa_hold", "mandate_missing", "handover_sent",
         "propose_data_contact", "propose_exemption", "propose_done", "user_note",
     ):
         extra: dict[str, Any] = {}
@@ -620,13 +624,20 @@ def _archive_or_error(conn: sqlite3.Connection, pub_id: str, result: ApplyResult
 
 
 def set_data_contact(
-    config: Config, pub_id: str, email: str, name: str | None = None
+    config: Config, pub_id: str, email: str, name: str | None = None,
+    *, source: str = "cli", queue_handover: bool = False,
 ) -> ApplyResult:
     """Override the data-contact name/email and mark it as operator-managed.
 
     Subsequent scans preserve these values until ``reset_data_contact`` is
     called (which clears the override flag, letting the next scan re-seed
     from the central corresponding-author lookup).
+
+    ``queue_handover=True`` (the auto-apply path) additionally records a
+    ``data_contact_handover`` event whose note is the PREVIOUS contact's
+    name — that event drives the handover notice: ``oa emails`` writes
+    ``handover_<pub>.eml`` for the new contact and the action sheet emits a
+    ``handover_sent`` row until the operator marks the notice sent.
     """
     result = ApplyResult()
     if not email:
@@ -636,6 +647,7 @@ def set_data_contact(
         archive = _archive_or_error(conn, pub_id, result)
         if archive is None:
             return result
+        previous_name = (archive.get("data_contact_name") or "").strip()
         updates = {
             "publication_id": pub_id,
             "data_contact_email": email,
@@ -646,9 +658,15 @@ def set_data_contact(
         db.upsert_archive(conn, **updates)
         db.insert_event(
             conn, pub_id, "set_data_contact",
-            archive["status"], archive["status"], "cli",
+            archive["status"], archive["status"], source,
             note=f"data_contact set to {name or '?'} <{email}>",
         )
+        if queue_handover:
+            db.insert_event(
+                conn, pub_id, "data_contact_handover",
+                archive["status"], archive["status"], source,
+                note=previous_name,
+            )
         result.applied += 1
     return result
 

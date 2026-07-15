@@ -1,0 +1,32 @@
+To: ${data_contact_name} <${data_contact_email}>
+Subject: You are now the data contact for publication ${publication_id}
+
+Dear ${data_contact_name},
+
+You have been assigned as the Open Access data contact for publication ${publication_id} ("${publication_title}"). ${handover_line}
+
+As the data contact, you are the person we coordinate with to complete the research data deposit that the Open Access mandate requires for this publication.
+
+Current status: ${oa_status}
+Open Access requirements: ${flags}
+
+You can see this publication and act on it in the OA Archive Tracker. It opens to the publications where you are the data contact:
+
+  OA Archive Tracker - ${tracker_url}
+
+Open the row for this publication and you can:
+  - upload your data (use the Folder link there to open its SharePoint folder),
+  - tell us you believe it is already done,
+  - propose an exemption (e.g. the data are archived elsewhere, there is no new data, or this is a collaboration biomaGUNE did not lead), or
+  - suggest a different data contact if someone else should handle it.
+
+Helpful links:
+  Data folder for this publication - ${sharepoint_folder_url}
+  Archiving protocol (SOP) - ${protocol_url}
+
+If anything is unclear, just reply to this email and we will help.
+
+Best regards,
+${sender_name}
+${sender_title}
+CIC biomaGUNE

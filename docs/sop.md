@@ -161,6 +161,7 @@ the SharePoint folder) → closes as `CLOSED_DATA_ARCHIVED`.
 |---|---|---|
 | `remind_sent` | Send reminder email to data contact | *(no status change; updates reminder count)* |
 | `contact_pi_manual` | MAX reminder reached; manually contact PI | *(see "Final reminder" below)* |
+| `handover_sent` | Send handover notice to the new data contact | *(no status change; clears the pending handover — see §8.1b)* |
 | `close_publication_only` | Close as publication-only (no data deposit needed) | `CLOSED_PUBLICATION_ONLY` |
 | `close_exception` | Close with exception (add note explaining why) | `CLOSED_EXCEPTION` |
 | `mandate_missing` | Confirm with PO/IT — mandate could not be derived | *(no status change; see §8.7)* |
@@ -341,7 +342,14 @@ unattended and advances what it safely can:
 2. SharePoint pull — records each contact's "I think this is done" tick;
    auto-applies promoted signals (data-contact reassignments, categorized
    exemptions with evidence, notes); routes everything else to
-   `output/sharepoint_proposals.tsv` as before.
+   `output/sharepoint_proposals.tsv` as before. An auto-applied
+   data-contact reassignment also queues a **handover notice**: `oa
+   emails` writes `email_drafts/handover_<pub>.eml` — addressed to the
+   new contact, modeled on the standard notice, with a line naming the
+   previous contact who handed over — and the action sheet carries a
+   `handover_sent` row (with the file path in its note) until you send
+   the email and mark the row `done=1`. The digest lists both the
+   reassignment and the drafted notice.
 3. Advance — auto-QC (done tick + package + data-required mandate →
    `qa_pass`), then Zenodo draft with reserved DOI + package upload
    (stops at `OPEN_ZENODO_DRAFT_CREATED`), and closure of

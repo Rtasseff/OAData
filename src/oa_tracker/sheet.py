@@ -186,6 +186,21 @@ def generate_sheet(config: Config) -> Path:
             cur_status = archive["status"]
             category, auto_note = _mandate_classification(archive)
 
+            # A pending data-contact handover (auto-applied reassignment)
+            # gets its row FIRST, whatever the mandate category — the new
+            # contact should be welcomed before being asked to act. The
+            # row recurs until done=1 records handover_sent.
+            if db.get_pending_handover(conn, pub_id) is not None:
+                rows.append(_row(
+                    archive, "handover_sent",
+                    st.TASK_CODES["handover_sent"]["description"],
+                    note=(
+                        f"New data contact auto-assigned — send "
+                        f"email_drafts/handover_{pub_id}.eml (regenerates "
+                        "until sent); done=1 records it as sent."
+                    ),
+                ))
+
             # Mandate-missing and explicit no-OA archives produce a single
             # actionable row each — nothing else (no pipeline progression,
             # no reminders) until the operator addresses the situation.

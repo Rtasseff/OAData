@@ -382,3 +382,34 @@ def test_sheet_env_mismatch_keeps_manual_publish_row(test_config):
                  zenodo_code="123", zenodo_env="production")
     rows = _rows(test_config)
     assert rows[0]["task_code"] == "zenodo_published"
+
+
+# ── Handover rows (auto data-contact reassignment) ───────────────────
+
+def test_handover_row_emitted_while_pending(test_config):
+    from oa_tracker.db import insert_event
+    _insert(test_config.database, "PUB001", OPEN_ACTIVE)
+    with get_connection(test_config.database) as conn:
+        insert_event(conn, "PUB001", "data_contact_handover",
+                     OPEN_ACTIVE, OPEN_ACTIVE, "auto", note="Old Contact")
+    path = generate_sheet(test_config)
+    rows = _read_sheet(path)
+    handover_rows = [r for r in rows if r["task_code"] == "handover_sent"]
+    assert len(handover_rows) == 1
+    assert handover_rows[0]["publication_id"] == "PUB001"
+    assert "handover_PUB001.eml" in handover_rows[0]["note"]
+    # The pipeline row is still emitted alongside.
+    assert any(r["task_code"] == "qa_pass" for r in rows)
+
+
+def test_no_handover_row_after_sent(test_config):
+    from oa_tracker.db import insert_event
+    _insert(test_config.database, "PUB001", OPEN_ACTIVE)
+    with get_connection(test_config.database) as conn:
+        insert_event(conn, "PUB001", "data_contact_handover",
+                     OPEN_ACTIVE, OPEN_ACTIVE, "auto", note="Old Contact")
+        insert_event(conn, "PUB001", "handover_sent",
+                     OPEN_ACTIVE, OPEN_ACTIVE, "sheet", note=None)
+    path = generate_sheet(test_config)
+    rows = _read_sheet(path)
+    assert [r for r in rows if r["task_code"] == "handover_sent"] == []

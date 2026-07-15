@@ -903,3 +903,74 @@ def test_remind_sent_skipped_when_status_no_longer_waiting_for_data(test_config)
     with get_connection(test_config.database) as conn:
         a = get_archive(conn, "PUB900")
     assert a["reminder_count"] == 0
+
+
+# ── Data-contact handover (auto reassignment → operator-sent notice) ──
+
+def test_set_data_contact_queue_handover_records_previous_name(test_config):
+    """The auto-apply path records a data_contact_handover event whose note
+    is the PREVIOUS contact's name — the handover email names who handed
+    over, and get_pending_handover reports it until handover_sent."""
+    from oa_tracker.db import get_pending_handover
+    _insert_active_archive(test_config.database, "PUB001")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB001",
+                       data_contact_name="Old Contact",
+                       data_contact_email="old@biomagune.es")
+    r = set_data_contact(test_config, "PUB001", email="new@biomagune.es",
+                         name="New Contact", source="auto", queue_handover=True)
+    assert r.applied == 1 and not r.errors
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["data_contact_name"] == "New Contact"
+        assert archive["data_contact_email"] == "new@biomagune.es"
+        pending = get_pending_handover(conn, "PUB001")
+        assert pending is not None
+        assert pending["note"] == "Old Contact"
+        assert pending["source"] == "auto"
+
+
+def test_set_data_contact_cli_path_queues_no_handover(test_config):
+    """The plain CLI override (oa action set_data_contact) is unchanged —
+    no handover notice is queued unless explicitly requested."""
+    from oa_tracker.db import get_pending_handover
+    _insert_active_archive(test_config.database, "PUB001")
+    r = set_data_contact(test_config, "PUB001", email="new@biomagune.es",
+                         name="New Contact")
+    assert r.applied == 1
+
+    with get_connection(test_config.database) as conn:
+        assert get_pending_handover(conn, "PUB001") is None
+
+
+def test_handover_sent_row_clears_pending(test_config):
+    """done=1 on the handover_sent sheet row records the send and stops the
+    row/draft from regenerating; status is untouched."""
+    from oa_tracker.db import get_pending_handover
+    _insert_active_archive(test_config.database, "PUB001")
+    set_data_contact(test_config, "PUB001", email="new@biomagune.es",
+                     name="New Contact", source="auto", queue_handover=True)
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": OPEN_ACTIVE,
+        "task_code": "handover_sent",
+        "task_text": "Send handover notice to the new data contact",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "1",
+        "pid": "",
+        "url": "",
+        "note": "",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+    assert result.errors == []
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == OPEN_ACTIVE
+        assert get_pending_handover(conn, "PUB001") is None
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+        assert any(e["action_code"] == "handover_sent" for e in events)

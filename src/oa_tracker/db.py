@@ -232,6 +232,26 @@ def get_reminders_due(conn: sqlite3.Connection, now: str | None = None) -> list[
     return [dict(r) for r in rows]
 
 
+def get_pending_handover(
+    conn: sqlite3.Connection, publication_id: str
+) -> dict[str, Any] | None:
+    """The operative ``data_contact_handover`` event, if the handover notice
+    has not been sent yet.
+
+    A handover is pending when a ``data_contact_handover`` event exists and
+    no ``handover_sent`` event was recorded after it. The event's ``note``
+    carries the PREVIOUS contact's name (may be empty for a first
+    assignment) — the handover email names who handed over.
+    """
+    handover = get_last_event(conn, publication_id, "data_contact_handover")
+    if handover is None:
+        return None
+    sent = get_last_event(conn, publication_id, "handover_sent")
+    if sent is not None and sent["event_id"] > handover["event_id"]:
+        return None
+    return handover
+
+
 def get_last_event(
     conn: sqlite3.Connection, publication_id: str, action_code: str
 ) -> dict[str, Any] | None:

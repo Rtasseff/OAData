@@ -54,6 +54,10 @@ TASK_CODES = {
         "description": "MAX reminder reached; manually contact PI",
         "changes_status": False,
     },
+    "handover_sent": {
+        "description": "Send handover notice to the new data contact",
+        "changes_status": False,
+    },
     "qa_pass": {
         "description": "Review uploaded data and approve QA",
         "changes_status": True,
@@ -243,6 +247,7 @@ def validate_transition(current_status: str, task_code: str) -> str:
 
     if task_code in (
         "remind_sent", "qa_hold", "contact_pi_manual", "mandate_missing",
+        "handover_sent",
         "propose_data_contact", "propose_exemption", "propose_done", "user_note",
     ):
         return current_status
