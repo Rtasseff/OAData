@@ -91,6 +91,9 @@ def test_final_slot_generates_contact_pi_manual(test_config):
     assert len(reminder_rows) == 1
     assert reminder_rows[0]["task_code"] == "contact_pi_manual"
     assert "manually contact PI" in reminder_rows[0]["task_text"]
+    # The note points at the past-due draft and explains the re-queue.
+    assert f"reminder_PUB001_{max_rem}_PASTDUE" in reminder_rows[0]["note"]
+    assert "re-queues" in reminder_rows[0]["note"]
 
 
 def test_below_final_slot_still_generates_remind_sent(test_config):

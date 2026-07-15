@@ -65,7 +65,7 @@ def tmp_templates(tmp_path):
     tpl_dir = tmp_path / "templates"
     tpl_dir.mkdir()
     (tpl_dir / "reminder.txt").write_text(
-        "Reminder #${reminder_number} for ${publication_id} (${publication_title}). "
+        "${past_due_marker}Reminder #${reminder_number} for ${publication_id} (${publication_title}). "
         "To: ${data_contact_name} <${data_contact_email}>. "
         "Status: ${oa_status} (raw: ${current_status}). "
         "Flags: ${flags}. Active since: ${became_active_at}. "

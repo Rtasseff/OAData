@@ -349,22 +349,32 @@ def generate_emails(config: Config) -> list[Path]:
             # uses. The operator still sees the archive on the sheet.
             if not _data_required(archive):
                 continue
-            # Manual-contact stage: no automated reminder; the action
-            # sheet emits a contact_pi_manual row instead.
-            if (archive.get("reminder_count") or 0) >= max_rem - 1:
-                continue
             pub_id = archive["publication_id"]
             # Hold the reminder if a Tracker response for this publication is
             # still awaiting operator review (see pending_response_pubs).
             if pub_id in pending:
                 continue
+            # Manual-contact stage (reminder_count at/past max): the action
+            # sheet emits a contact_pi_manual row, and the draft here is the
+            # PAST-DUE variant — same template, marked past due — so the
+            # operator has a ready skeleton for the personal follow-up.
+            past_due = (archive.get("reminder_count") or 0) >= max_rem - 1
             n = archive["reminder_count"] + 1
             vars_ = _common_template_vars(archive, config)
             vars_["reminder_number"] = str(n)
-            vars_["status_note"] = _reminder_status_note(archive)
+            vars_["past_due_marker"] = "PAST DUE - " if past_due else ""
+            status_note = _reminder_status_note(archive)
+            if past_due:
+                status_note = (
+                    "Please note: this request is now PAST DUE — the maximum "
+                    f"number of scheduled reminders ({max_rem}) has been "
+                    "reached without the deposit being completed. "
+                ) + status_note
+            vars_["status_note"] = status_note
+            stem = f"reminder_{pub_id}_{n}" + ("_PASTDUE" if past_due else "")
             content = reminder_tpl.safe_substitute(**vars_)
             generated.extend(
-                _write_draft(drafts_dir / f"reminder_{pub_id}_{n}", content, config)
+                _write_draft(drafts_dir / stem, content, config)
             )
 
         def _write_completion_draft(archive: dict[str, Any]) -> None:

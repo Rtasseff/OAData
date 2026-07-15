@@ -217,12 +217,15 @@ repository). Each writes an event to the audit log with `source="cli"`.
 
 ### Final reminder: manual PI contact
 
-The tool sends `max_reminders - 1` automated reminder emails. Once an archive has reached that count (i.e. one slot remains), the next sheet generation replaces the usual `remind_sent` row with a **`contact_pi_manual`** row and **no automated email draft is produced**. This is deliberate: at this stage the operator should step in personally — direct email from their own account, a phone call, or an in-person conversation with the PI — rather than send yet another template reminder.
+The tool sends `max_reminders - 1` automated reminder emails. Once an archive has reached that count (i.e. one slot remains), the next sheet generation replaces the usual `remind_sent` row with a **`contact_pi_manual`** row. At this stage the operator should step in personally — direct email from their own account, a phone call, or an in-person conversation with the PI — rather than send yet another template reminder.
 
-Three outcomes are possible once the manual contact has been made:
+To support that personal contact, `oa emails` still produces a draft: the **past-due variant** (`reminder_<pub>_<n>_PASTDUE.eml`), the normal reminder marked "PAST DUE" in the subject and body. Use it as-is, as a skeleton for a personalized email, or just as the fact sheet for a face-to-face conversation. The sheet row's `note` names the file.
+
+Outcomes once the manual contact has been made:
 
 - **PI responds with data + PID:** Set `done=2` on the row, paste the Zenodo DOI into `pid` (and URL if available). Closes as `CLOSED_DATA_ARCHIVED`. Same behavior as the generic full-closure shortcut.
-- **PI responds but there will be no deposit:** Set `done=1` with no PID or URL. The archive closes as `CLOSED_EXCEPTION`. If `note` is filled in, your note is recorded; if left blank, the system records the default note *"No response after max reminders and manual PI contact; closed as non-compliant with OA policy."*
+- **Contact made, still waiting on the PI:** Set `done=1` with no PID or URL (put what was said/agreed in `note`). This does **not** close anything: the contact is logged, the reminder count ticks up, and the item re-queues at the normal reminder interval — the `contact_pi_manual` row and a fresh past-due draft come back until the data arrives. PIs who promise and stall stay on the hook automatically.
+- **Definitive no-deposit decision:** Change the row's `task_code` to `close_exception`, add a `note` explaining why, set `done=1`. Closing is always this explicit decision — it never happens as a side effect of logging a contact.
 - **No response yet:** Leave `done=0`. The row stays and regenerates on the next sheet run until you act.
 
 ### How to edit the action sheet
@@ -442,7 +445,7 @@ Zenodo DOI into `pid`, and apply. See §7 "Shortcuts" for the details.
 
 ### 8.4 Final reminder: manual PI contact
 
-When an archive has reached `reminder_count = max_reminders - 1`, the next `oa sheet` run replaces its `remind_sent` row with a `contact_pi_manual` row and `oa emails` **does not** generate a draft for it. At this point the operator must contact the PI directly (personal email, phone, in-person) rather than send another template. Once contact has been made, apply one of the outcomes described in §7 under "Final reminder: manual PI contact."
+When an archive has reached `reminder_count = max_reminders - 1`, the next `oa sheet` run replaces its `remind_sent` row with a `contact_pi_manual` row, and `oa emails` generates the **past-due** draft variant (`reminder_<pub>_<n>_PASTDUE.eml` — the normal reminder marked PAST DUE) as material for a personal follow-up rather than another automated send. Contact the PI directly (personal email, phone, in-person). `done=1` logs the contact and re-queues the item at the next reminder interval — it keeps coming back until the data arrives or you explicitly close (`close_exception` with a note, or `done=2` + PID). Details in §7 under "Final reminder: manual PI contact."
 
 ### 8.5 Mid-week single-archive changes (`oa action`)
 

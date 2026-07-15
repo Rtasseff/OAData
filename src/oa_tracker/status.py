@@ -220,8 +220,9 @@ def validate_transition(current_status: str, task_code: str) -> str:
 
     # remind_sent, qa_hold, contact_pi_manual, and mandate_missing don't
     # change status via the standard transition path. (contact_pi_manual
-    # is handled specially in apply_actions when done=1 without a PID,
-    # which short-circuits into CLOSED_EXCEPTION.) mandate_missing is an
+    # is handled specially in apply_actions: done=1 without a PID logs
+    # the manual contact and re-queues the reminder — closing is always
+    # an explicit close_* re-route.) mandate_missing is an
     # acknowledgment-only task; the row regenerates next scan unless the
     # underlying issue is fixed upstream or the operator changes the
     # task_code to an explicit closure.

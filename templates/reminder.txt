@@ -1,5 +1,5 @@
 To: ${data_contact_name} <${data_contact_email}>
-Subject: Reminder: research data upload pending for publication ${publication_id}
+Subject: ${past_due_marker}Reminder: research data upload pending for publication ${publication_id}
 
 Dear ${data_contact_name},
 

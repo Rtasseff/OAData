@@ -294,8 +294,19 @@ def generate_sheet(config: Config) -> Path:
                     archive.get("reminder_count") or 0
                 ) >= config.reminders.max_reminders - 1
                 task = "contact_pi_manual" if reached_max else "remind_sent"
+                reminder_note = ""
+                if reached_max:
+                    n = (archive.get("reminder_count") or 0) + 1
+                    reminder_note = (
+                        f"Past-due draft: email_drafts/reminder_{pub_id}_{n}"
+                        "_PASTDUE.eml (skeleton for the personal follow-up). "
+                        "done=1 logs the contact and re-queues this item at the "
+                        "next interval; to abandon instead, change the task to "
+                        "close_exception with a note."
+                    )
                 rows.append(_row(
                     archive, task, st.TASK_CODES[task]["description"],
+                    note=reminder_note,
                 ))
 
     with open(sheet_path, "w", newline="") as f:

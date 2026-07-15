@@ -43,8 +43,10 @@ def test_reminder_email_generated(test_config):
     assert "Active (files uploaded, awaiting QA)" in content
 
 
-def test_no_reminder_email_at_manual_contact_stage(test_config):
-    """At reminder_count >= max_reminders - 1, no automated reminder draft is generated."""
+def test_past_due_reminder_at_manual_contact_stage(test_config):
+    """At reminder_count >= max_reminders - 1 the draft still generates, as
+    the PAST DUE variant — a skeleton for the operator's personal follow-up
+    (subject marked, body explains max reminders reached, count keeps going)."""
     max_rem = test_config.reminders.max_reminders
     with get_connection(test_config.database) as conn:
         upsert_archive(
@@ -60,7 +62,58 @@ def test_no_reminder_email_at_manual_contact_stage(test_config):
         )
 
     paths = generate_emails(test_config)
-    assert paths == []
+    assert len(paths) == 1
+    assert f"reminder_PUB001_{max_rem}_PASTDUE" in paths[0].name
+    content = paths[0].read_text()
+    assert content.startswith("PAST DUE - Reminder")      # subject marker
+    assert "maximum number of scheduled reminders" in content  # body note
+    assert f"Reminder #{max_rem}" in content              # count keeps increasing
+    assert "${past_due_marker}" not in content
+
+
+def test_past_due_reminder_keeps_regenerating_beyond_max(test_config):
+    """Counts past max (re-queued manual contacts) still produce the
+    past-due draft with an ever-increasing reminder number."""
+    max_rem = test_config.reminders.max_reminders
+    with get_connection(test_config.database) as conn:
+        upsert_archive(
+            conn,
+            publication_id="PUB001",
+            folder_path="/tmp/pub001",
+            first_seen_at="2026-01-01T00:00:00",
+            last_seen_at="2026-01-15T00:00:00",
+            became_active_at="2026-01-05T00:00:00",
+            status=OPEN_ACTIVE,
+            next_reminder_at="2020-01-01T00:00:00",  # due
+            reminder_count=max_rem + 2,
+        )
+
+    paths = generate_emails(test_config)
+    assert len(paths) == 1
+    assert f"reminder_PUB001_{max_rem + 3}_PASTDUE" in paths[0].name
+
+
+def test_normal_reminder_has_no_past_due_marker(test_config):
+    with get_connection(test_config.database) as conn:
+        upsert_archive(
+            conn,
+            publication_id="PUB001",
+            folder_path="/tmp/pub001",
+            first_seen_at="2026-01-01T00:00:00",
+            last_seen_at="2026-01-15T00:00:00",
+            became_active_at="2026-01-05T00:00:00",
+            status=OPEN_ACTIVE,
+            next_reminder_at="2020-01-01T00:00:00",
+            reminder_count=0,
+        )
+
+    paths = generate_emails(test_config)
+    assert len(paths) == 1
+    assert "PASTDUE" not in paths[0].name
+    content = paths[0].read_text()
+    assert "PAST DUE" not in content
+    assert "${past_due_marker}" not in content
+    assert content.startswith("Reminder #1")
 
 
 def test_completion_email_generated(test_config):

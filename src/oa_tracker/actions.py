@@ -177,32 +177,51 @@ def _apply_row(
         result.applied += 1
         return (True, old_status, new_status)
 
-    # ── done=1 on contact_pi_manual (no PID/URL): close as exception ──
+    # ── done=1 on contact_pi_manual (no PID/URL): log + re-queue ──
     # With a PID or URL present, the fast-track block above already
-    # promoted the archive to OPEN_ZENODO_PUBLISHED. Without one, the
-    # operator's manual PI contact did not yield a deposit, so we
-    # close as non-compliant. Use the operator's note when supplied;
-    # otherwise a standard note makes the closure reason explicit in
-    # the audit log.
+    # promoted the archive to OPEN_ZENODO_PUBLISHED. Without one, done=1
+    # means "I contacted the PI personally" — it does NOT close the
+    # archive (PIs routinely promise and then stall): the contact is
+    # logged, the reminder count ticks up, and the item re-queues at the
+    # normal interval so it comes back as another contact_pi_manual row
+    # (with a fresh past-due email draft). Abandoning the deposit is an
+    # explicit decision: re-route the row to close_exception (or done=2
+    # with a PID for a deposit that happened elsewhere).
     if task_code == "contact_pi_manual":
-        close_note = note or (
-            "No response after max reminders and manual PI contact; "
-            "closed as non-compliant with OA policy."
+        if old_status not in (st.OPEN_INACTIVE, st.OPEN_ACTIVE):
+            result.warnings.append(
+                f"{row_label} ({pub_id}): skipping contact_pi_manual — status is "
+                f"{old_status} (no longer waiting for data)"
+            )
+            result.skipped += 1
+            return (False, old_status, None)
+        count = archive["reminder_count"] + 1
+        next_reminder = (
+            datetime.now() + timedelta(days=config.reminders.reminder_interval_days)
+        ).isoformat(timespec="seconds")
+        contact_note = note or (
+            "Manual PI contact after max reminders; re-queued for the next "
+            "reminder interval."
         )
-        extra_fields = {}
-        existing_notes = archive.get("notes") or ""
-        separator = "\n" if existing_notes else ""
-        extra_fields["notes"] = f"{existing_notes}{separator}[{now}] {close_note}"
-
-        db.update_archive_status(
-            conn, pub_id, st.CLOSED_EXCEPTION, **extra_fields
+        extra_fields: dict[str, Any] = {}
+        if note:
+            existing_notes = archive.get("notes") or ""
+            separator = "\n" if existing_notes else ""
+            extra_fields["notes"] = f"{existing_notes}{separator}[{now}] {note}"
+        db.upsert_archive(
+            conn,
+            publication_id=pub_id,
+            last_notified_at=now,
+            reminder_count=count,
+            next_reminder_at=next_reminder,
+            **extra_fields,
         )
         db.insert_event(
-            conn, pub_id, "contact_pi_manual", old_status,
-            st.CLOSED_EXCEPTION, source, note=close_note,
+            conn, pub_id, "contact_pi_manual", old_status, old_status, source,
+            note=contact_note,
         )
         result.applied += 1
-        return (True, old_status, st.CLOSED_EXCEPTION)
+        return (True, old_status, old_status)
 
     # ── done=1 standard flow ──────────────────────────────────
 
@@ -259,11 +278,13 @@ def _apply_row(
             result.skipped += 1
             return (False, old_status, None)
         count = archive["reminder_count"] + 1
-        next_reminder: str | None = None
-        if count < config.reminders.max_reminders:
-            next_reminder = (
-                datetime.now() + timedelta(days=config.reminders.reminder_interval_days)
-            ).isoformat(timespec="seconds")
+        # Always reschedule: reaching max_reminders no longer stops the
+        # clock — it switches the sheet row to contact_pi_manual (and the
+        # email draft to the past-due variant), which recur every interval
+        # until the data arrives or the operator explicitly closes.
+        next_reminder = (
+            datetime.now() + timedelta(days=config.reminders.reminder_interval_days)
+        ).isoformat(timespec="seconds")
         db.upsert_archive(
             conn,
             publication_id=pub_id,

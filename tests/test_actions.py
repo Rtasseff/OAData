@@ -365,9 +365,13 @@ def test_done2_without_pid_closes_exception(test_config):
         assert archive["status"] == CLOSED_EXCEPTION
 
 
-def test_contact_pi_manual_no_pid_closes_exception_default_note(test_config):
-    """contact_pi_manual + done=1 with no PID and no note → CLOSED_EXCEPTION with default note."""
+def test_contact_pi_manual_no_pid_requeues_reminder(test_config):
+    """contact_pi_manual + done=1 with no PID logs the contact and re-queues:
+    status unchanged, reminder count +1, next reminder scheduled — the row
+    keeps coming back until data arrives or the operator explicitly closes."""
     _insert_active_archive(test_config.database, "PUB001", "OPEN_INACTIVE")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB001", reminder_count=3)
     sheet = _write_sheet(test_config.output_dir, [{
         "publication_id": "PUB001",
         "current_status": "OPEN_INACTIVE",
@@ -387,16 +391,19 @@ def test_contact_pi_manual_no_pid_closes_exception_default_note(test_config):
 
     with get_connection(test_config.database) as conn:
         archive = get_archive(conn, "PUB001")
-        assert archive["status"] == CLOSED_EXCEPTION
-        assert "non-compliant" in (archive["notes"] or "")
+        assert archive["status"] == "OPEN_INACTIVE"
+        assert archive["reminder_count"] == 4
+        assert archive["next_reminder_at"] is not None
+        assert archive["next_reminder_at"] > archive["last_notified_at"]
         events = get_recent_events(conn, "2000-01-01T00:00:00")
         evt = next(e for e in events if e["action_code"] == "contact_pi_manual")
-        assert evt["new_status"] == CLOSED_EXCEPTION
-        assert "non-compliant" in (evt["note"] or "")
+        assert evt["new_status"] == "OPEN_INACTIVE"
+        assert "re-queued" in (evt["note"] or "")
 
 
-def test_contact_pi_manual_no_pid_uses_operator_note(test_config):
-    """If operator provides a note, it is used instead of the default."""
+def test_contact_pi_manual_operator_note_recorded_still_open(test_config):
+    """An operator note on the manual-contact row lands in the archive notes
+    (a durable record of what the PI said) without closing anything."""
     _insert_active_archive(test_config.database, "PUB001", "OPEN_INACTIVE")
     sheet = _write_sheet(test_config.output_dir, [{
         "publication_id": "PUB001",
@@ -409,16 +416,48 @@ def test_contact_pi_manual_no_pid_uses_operator_note(test_config):
         "done": "1",
         "pid": "",
         "url": "",
-        "note": "PI on sabbatical, will revisit in Q3.",
+        "note": "Spoke to PI in person; promised upload this month.",
     }])
     result = apply_actions(sheet, test_config)
     assert result.applied == 1
 
     with get_connection(test_config.database) as conn:
         archive = get_archive(conn, "PUB001")
-        assert archive["status"] == CLOSED_EXCEPTION
-        assert "sabbatical" in (archive["notes"] or "")
-        assert "non-compliant" not in (archive["notes"] or "")
+        assert archive["status"] == "OPEN_INACTIVE"
+        assert "promised upload" in (archive["notes"] or "")
+        assert archive["next_reminder_at"] is not None
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+        evt = next(e for e in events if e["action_code"] == "contact_pi_manual")
+        assert "promised upload" in (evt["note"] or "")
+
+
+def test_contact_pi_manual_skipped_when_status_no_longer_waiting(test_config):
+    """Once the archive advanced past data collection there is no one to
+    chase — contact_pi_manual is skipped with a warning, like remind_sent."""
+    _insert_active_archive(
+        test_config.database, "PUB001", "OPEN_READY_FOR_ZENODO_DRAFT")
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": "OPEN_READY_FOR_ZENODO_DRAFT",
+        "task_code": "contact_pi_manual",
+        "task_text": "MAX reminder reached; manually contact PI",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "2026-01-19T00:00:00",
+        "reminder_count": "3",
+        "done": "1",
+        "pid": "",
+        "url": "",
+        "note": "",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 0
+    assert result.skipped == 1
+    assert any("no longer waiting" in w for w in result.warnings)
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == "OPEN_READY_FOR_ZENODO_DRAFT"
+        assert archive["reminder_count"] == 0
 
 
 def test_contact_pi_manual_with_pid_fast_tracks(test_config):
