@@ -268,3 +268,38 @@ def test_migrates_v3_to_v4(tmp_path):
         assert _V4_COLUMNS <= _columns(conn)
         row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
         assert row["v"] == _SCHEMA_VERSION
+
+
+_V5_COLUMNS = {"package_has_manuscript"}
+
+
+def test_fresh_db_has_v5_columns(tmp_db):
+    with get_connection(tmp_db) as conn:
+        assert _V5_COLUMNS <= _columns(conn)
+
+
+def test_migrates_v4_to_v5(tmp_path):
+    """A v4-era database gains the manuscript column on init_db."""
+    db_path = tmp_path / "legacy_v4.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE archives (
+            publication_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            package_has_zip INTEGER,
+            package_has_readme INTEGER
+        );
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        INSERT INTO schema_version (version) VALUES (4);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    with get_connection(db_path) as conn:
+        assert _V5_COLUMNS <= _columns(conn)
+        row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
+        assert row["v"] == _SCHEMA_VERSION

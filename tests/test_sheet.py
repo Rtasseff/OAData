@@ -326,14 +326,25 @@ def _rows(test_config):
 
 
 def test_sheet_notes_mismatch_done_without_package(test_config):
-    _seed_active(test_config, user_done_flag=1, package_has_zip=1, package_has_readme=0)
+    _seed_active(test_config, user_done_flag=1, package_has_zip=1,
+                 package_has_readme=0, package_has_manuscript=1)
     qa = [r for r in _rows(test_config) if r["task_code"] == "qa_pass"]
     assert "MISMATCH" in qa[0]["note"]
     assert "README.txt" in qa[0]["note"]
 
 
+def test_sheet_notes_mismatch_done_without_manuscript(test_config):
+    """Rule 2026-07-15: the QA note names the missing manuscript."""
+    _seed_active(test_config, user_done_flag=1, package_has_zip=1,
+                 package_has_readme=1, package_has_manuscript=0)
+    qa = [r for r in _rows(test_config) if r["task_code"] == "qa_pass"]
+    assert "MISMATCH" in qa[0]["note"]
+    assert "manuscript (.doc/.docx/.pdf)" in qa[0]["note"]
+
+
 def test_sheet_notes_package_without_done(test_config):
-    _seed_active(test_config, user_done_flag=0, package_has_zip=1, package_has_readme=1)
+    _seed_active(test_config, user_done_flag=0, package_has_zip=1,
+                 package_has_readme=1, package_has_manuscript=1)
     qa = [r for r in _rows(test_config) if r["task_code"] == "qa_pass"]
     assert "hasn't ticked" in qa[0]["note"]
 

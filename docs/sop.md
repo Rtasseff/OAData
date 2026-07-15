@@ -54,15 +54,21 @@ Out of scope:
 * **Inactive:** folder exists but empty.
 * **Active:** folder contains files (indicates data contact activity).
 * **PID:** dataset persistent identifier (preferably Zenodo DOI); may also be external repository PID.
-* **Package (decision 2026-07-02):** one `.zip` of the datasets **plus a
-  `README.txt` as its own file next to the zip** — one canonical location,
-  chosen because the standalone README uploads to Zenodo as a
-  browser-readable file and can be QC'd in SharePoint without extracting
-  anything. (A copy inside the zip is welcome but not the requirement.)
-  Detection is deliberately lenient — the scanner also accepts a README
-  found only inside the zip, so nobody is bounced on a technicality — but
-  all instructions and reminder texts ask for the sibling file. The
-  user-facing protocol docx should say the same (see its §2.4/§4).
+* **Package (decision 2026-07-02; manuscript rule added 2026-07-15):** one
+  `.zip` of the datasets **plus a `README.txt` as its own file next to the
+  zip** — one canonical location, chosen because the standalone README
+  uploads to Zenodo as a browser-readable file and can be QC'd in
+  SharePoint without extracting anything. (A copy inside the zip is
+  welcome but not the requirement.) Detection is deliberately lenient —
+  the scanner also accepts a README found only inside the zip, so nobody
+  is bounced on a technicality — but all instructions and reminder texts
+  ask for the sibling file. **Plus (updated archiving rules): a version of
+  the manuscript — often a pre-print — as `.doc`/`.docx`/`.pdf`, a third
+  file NOT inside the zip.** The scanner only accepts it beside the zip;
+  auto-QC holds without it. The manuscript is a folder/QC requirement, not
+  part of the Zenodo upload (the deposit stays `*.zip + README*.txt`; the
+  digest lists the manuscript under "not uploaded (outside package)").
+  The user-facing protocol docx should say the same (see its §2.4/§4).
 
 ## 6. Status model
 
@@ -337,8 +343,8 @@ With `[automation]` enabled, a scheduled `oa auto` run (cron or Windows
 Task Scheduler → `scripts/run_auto.sh`) does the whole regeneration cycle
 unattended and advances what it safely can:
 
-1. `scan` — folder states, package detection (`.zip` + `README.txt`),
-   pub-DB enrichment.
+1. `scan` — folder states, package detection (`.zip` + `README.txt` +
+   manuscript `.doc`/`.docx`/`.pdf`), pub-DB enrichment.
 2. SharePoint pull — records each contact's "I think this is done" tick;
    auto-applies promoted signals (data-contact reassignments, categorized
    exemptions with evidence, notes); routes everything else to
@@ -350,10 +356,11 @@ unattended and advances what it safely can:
    `handover_sent` row (with the file path in its note) until you send
    the email and mark the row `done=1`. The digest lists both the
    reassignment and the drafted notice.
-3. Advance — auto-QC (done tick + package + data-required mandate →
-   `qa_pass`), then Zenodo draft with reserved DOI + package upload
-   (stops at `OPEN_ZENODO_DRAFT_CREATED`), and closure of
-   `OPEN_DB_UPDATED` archives whose folder you already removed.
+3. Advance — auto-QC (done tick + complete package incl. manuscript +
+   data-required mandate → `qa_pass`), then Zenodo draft with reserved
+   DOI + package upload (stops at `OPEN_ZENODO_DRAFT_CREATED`), and
+   closure of `OPEN_DB_UPDATED` archives whose folder you already
+   removed.
 4. SharePoint push + closed-row reconcile, then fresh
    sheet / email drafts / weekly report.
 5. Digest → `output/auto_digest.md` — **this is the one file to read

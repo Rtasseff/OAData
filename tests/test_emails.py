@@ -532,9 +532,26 @@ def test_reminder_note_done_but_missing_package():
     note = _reminder_status_note({
         "status": "OPEN_ACTIVE", "user_done_flag": 1,
         "package_has_zip": 1, "package_has_readme": 0,
+        "package_has_manuscript": 1,
     })
     assert "marked this publication as done" in note
     assert "README.txt" in note
+    assert "manuscript" not in note   # only the truly missing items are named
+
+
+def test_reminder_note_done_but_missing_manuscript():
+    """Rule 2026-07-15: zip + README present but no manuscript beside the
+    zip — the reminder names exactly that."""
+    from oa_tracker.emails import _reminder_status_note
+    note = _reminder_status_note({
+        "status": "OPEN_ACTIVE", "user_done_flag": 1,
+        "package_has_zip": 1, "package_has_readme": 1,
+        "package_has_manuscript": 0,
+    })
+    assert "marked this publication as done" in note
+    assert "manuscript" in note
+    assert "pre-print" in note
+    assert "README.txt" not in note
 
 
 def test_reminder_note_package_but_no_done_tick():
@@ -542,6 +559,7 @@ def test_reminder_note_package_but_no_done_tick():
     note = _reminder_status_note({
         "status": "OPEN_ACTIVE", "user_done_flag": 0,
         "package_has_zip": 1, "package_has_readme": 1,
+        "package_has_manuscript": 1,
     })
     assert "looks complete" in note
     assert "I think this is done" in note

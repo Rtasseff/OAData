@@ -133,11 +133,17 @@ def _reminder_status_note(archive: dict[str, Any]) -> str:
         user_done = bool(archive.get("user_done_flag"))
         has_zip = bool(archive.get("package_has_zip"))
         has_readme = bool(archive.get("package_has_readme"))
-        if user_done and not (has_zip and has_readme):
+        has_manuscript = bool(archive.get("package_has_manuscript"))
+        complete = has_zip and has_readme and has_manuscript
+        if user_done and not complete:
             missing = " and a ".join(
                 m for m, ok in (("single ZIP of the datasets", has_zip),
                                 ("README.txt (as its own file, next to the ZIP)",
-                                 has_readme)) if not ok
+                                 has_readme),
+                                ("copy of the manuscript as .pdf or Word file "
+                                 "(a pre-print version is fine; as its own "
+                                 "file, not inside the ZIP)", has_manuscript),
+                                ) if not ok
             )
             return (
                 "You marked this publication as done on the OA Archive Tracker — "
@@ -146,20 +152,22 @@ def _reminder_status_note(archive: dict[str, Any]) -> str:
                 "Please add the missing item(s), or reply if you believe the "
                 "upload is already complete as-is."
             )
-        if has_zip and has_readme and not user_done:
+        if complete and not user_done:
             return (
-                "Your uploaded data package looks complete (ZIP and README "
-                "received). To let us process it, please open the OA Archive "
-                "Tracker and tick \"I think this is done\" on this publication — "
-                "or simply reply to confirm, and we will take it from there."
+                "Your uploaded data package looks complete (ZIP, README and "
+                "manuscript received). To let us process it, please open the OA "
+                "Archive Tracker and tick \"I think this is done\" on this "
+                "publication — or simply reply to confirm, and we will take it "
+                "from there."
             )
         return (
             "We can see some files in the publication folder, but the deposit "
             "does not yet look complete or ready — for example it may be "
-            "missing a README, or the data may not be packaged as a single ZIP "
-            "the way the protocol asks. Please check that the data are complete "
-            "and packaged per the protocol, or let us know if it is already "
-            "final and we will take it from there."
+            "missing a README or a copy of the manuscript (.pdf or Word; a "
+            "pre-print is fine), or the data may not be packaged as a single "
+            "ZIP the way the protocol asks. Please check that the data are "
+            "complete and packaged per the protocol, or let us know if it is "
+            "already final and we will take it from there."
         )
     return (
         "Our records show that nothing has been uploaded to the publication "

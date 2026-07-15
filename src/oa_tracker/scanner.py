@@ -56,25 +56,36 @@ def _folder_has_files(folder: Path) -> bool:
         return False
 
 
-def _package_state(folder: Path) -> tuple[bool, bool]:
-    """Detect the protocol package: ``(has_zip, has_readme)``.
+def _package_state(folder: Path) -> tuple[bool, bool, bool]:
+    """Detect the protocol package: ``(has_zip, has_readme, has_manuscript)``.
 
     The protocol asks contacts to upload a ``.zip`` of the datasets plus a
     ``README.txt``. In practice the README sometimes ends up only *inside*
     the zip (§2.4 of the protocol puts it in the folder that gets zipped),
     so a README found either beside the zip or inside any zip counts.
     Read-only: zip inspection reads the central directory, never extracts.
+
+    The manuscript (rule update 2026-07-15): a version of the paper —
+    often a pre-print — as ``.doc``/``.docx``/``.pdf``, required as its
+    OWN file beside the zip. Deliberately NOT accepted from inside the
+    zip: the rule is that it must be a separate third file. Word lock
+    files (``~$...``) and hidden files don't count.
     """
     has_zip = False
     has_readme = False
     try:
         files = [p for p in folder.rglob("*") if p.is_file()]
     except PermissionError:
-        return (False, False)
+        return (False, False, False)
     zips = [p for p in files if p.name.lower().endswith(".zip")]
     has_zip = bool(zips)
     has_readme = any(
         p.name.lower().startswith("readme") and p.name.lower().endswith(".txt")
+        for p in files
+    )
+    has_manuscript = any(
+        p.name.lower().endswith((".doc", ".docx", ".pdf"))
+        and not p.name.startswith("~$") and not p.name.startswith(".")
         for p in files
     )
     if has_zip and not has_readme:
@@ -91,7 +102,7 @@ def _package_state(folder: Path) -> tuple[bool, bool]:
                         break
             except (zipfile.BadZipFile, OSError):
                 continue
-    return (has_zip, has_readme)
+    return (has_zip, has_readme, has_manuscript)
 
 
 def _now() -> str:
@@ -199,11 +210,12 @@ def _scan_placeholder(
     appear. This is what keeps them off the missing-folder integrity list.
     """
     pub_id = existing["publication_id"]
-    has_zip, has_readme = _package_state(folder)
+    has_zip, has_readme, has_manuscript = _package_state(folder)
     updates: dict[str, Any] = {
         "last_seen_at": now,
         "package_has_zip": int(has_zip),
         "package_has_readme": int(has_readme),
+        "package_has_manuscript": int(has_manuscript),
         "package_checked_at": now,
     }
     if existing["unexpected_missing_folder"]:
@@ -274,10 +286,13 @@ def scan_folders(config: Config) -> ScanResult:
                     continue
                 found_ids.add(pub_id)
                 has_files = _folder_has_files(folder)
-                has_zip, has_readme = _package_state(folder) if has_files else (False, False)
+                has_zip, has_readme, has_manuscript = (
+                    _package_state(folder) if has_files else (False, False, False)
+                )
                 package_kw: dict[str, Any] = {
                     "package_has_zip": int(has_zip),
                     "package_has_readme": int(has_readme),
+                    "package_has_manuscript": int(has_manuscript),
                     "package_checked_at": now,
                 }
 

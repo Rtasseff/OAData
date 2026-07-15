@@ -62,6 +62,10 @@ Tables (minimum):
   Automation (v4):
   * `package_has_zip` / `package_has_readme` INTEGER NULL (0/1) — protocol
     package detected by the scanner (README counts beside the zip or inside it)
+  * `package_has_manuscript` INTEGER NULL (0/1) — v5, rule update 2026-07-15:
+    a manuscript version (`.doc`/`.docx`/`.pdf`, often a pre-print) beside the
+    zip (NOT accepted from inside it; `~$`/hidden files don't count).
+    Auto-QC requires it alongside zip + README.
   * `package_checked_at` DATETIME NULL
   * `user_done_flag` INTEGER DEFAULT 0, `user_done_at` DATETIME NULL — the
     Tracker "I think this is done" tick, persisted by the SharePoint pull

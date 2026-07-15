@@ -258,7 +258,13 @@ def _push_sharepoint(config: Config, ctx: _SpContext, result: AutoRunResult) -> 
 # ── Stage 3: advance archives ────────────────────────────────────────
 
 def package_complete(archive: dict) -> bool:
-    return bool(archive.get("package_has_zip")) and bool(archive.get("package_has_readme"))
+    # Rule update 2026-07-15: a manuscript version (.doc/.docx/.pdf, often
+    # a pre-print) is required beside the zip — auto-QC holds without it.
+    return (
+        bool(archive.get("package_has_zip"))
+        and bool(archive.get("package_has_readme"))
+        and bool(archive.get("package_has_manuscript"))
+    )
 
 
 def _data_required(archive: dict) -> bool:
@@ -302,7 +308,7 @@ def _advance(config: Config, result: AutoRunResult) -> None:
                 r, old_s, new_s = apply_single(
                     config, a["publication_id"], "qa_pass", done=1,
                     note="[auto] QC: Tracker 'done' confirmed and package "
-                         "(.zip + README.txt) detected in folder",
+                         "(.zip + README.txt + manuscript) detected in folder",
                 )
                 if r.applied and not r.errors:
                     result.auto_applied.append(
@@ -316,6 +322,8 @@ def _advance(config: Config, result: AutoRunResult) -> None:
                     missing.append(".zip")
                 if not a.get("package_has_readme"):
                     missing.append("README.txt")
+                if not a.get("package_has_manuscript"):
+                    missing.append("a manuscript (.doc/.docx/.pdf)")
                 result.mismatches.append(
                     f"{a['publication_id']}: user says done but folder is missing "
                     f"{' and '.join(missing)} — reminder text asks them to package; "

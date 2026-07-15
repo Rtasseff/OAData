@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -65,7 +65,10 @@ CREATE TABLE IF NOT EXISTS archives (
     user_done_flag           INTEGER NOT NULL DEFAULT 0,
     user_done_at             TEXT,
     zenodo_doi               TEXT,
-    zenodo_env               TEXT
+    zenodo_env               TEXT,
+    -- v5: manuscript rule — a .doc/.docx/.pdf beside the zip (a pre-print
+    -- version of the paper), required by the updated archiving rules
+    package_has_manuscript   INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -128,6 +131,13 @@ _V3_TO_V4_ALTERS = [
     "ALTER TABLE archives ADD COLUMN zenodo_env TEXT",
 ]
 
+# v4 → v5: manuscript rule. The updated archiving rules require a version
+# of the manuscript (often a pre-print: .doc/.docx/.pdf) as its own file
+# beside the zip; the scanner refreshes this like the other package flags.
+_V4_TO_V5_ALTERS = [
+    "ALTER TABLE archives ADD COLUMN package_has_manuscript INTEGER",
+]
+
 
 def init_db(path: Path) -> None:
     """Create the database and tables; run any pending migrations."""
@@ -154,6 +164,9 @@ def _migrate(conn: sqlite3.Connection, from_version: int) -> None:
             conn.execute(stmt)
     if from_version < 4:
         for stmt in _V3_TO_V4_ALTERS:
+            conn.execute(stmt)
+    if from_version < 5:
+        for stmt in _V4_TO_V5_ALTERS:
             conn.execute(stmt)
     conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
 

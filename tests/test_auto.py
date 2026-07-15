@@ -194,7 +194,7 @@ def test_auto_qc_advances_through_draft_and_upload(zen_config):
     reserved DOI + upload, stopping at DRAFT_CREATED for validation."""
     _folder_with_package(zen_config)
     _seed(zen_config, status=st.OPEN_ACTIVE, user_done_flag=1,
-          package_has_zip=1, package_has_readme=1)
+          package_has_zip=1, package_has_readme=1, package_has_manuscript=1)
     result = auto.AutoRunResult(started_at=NOW)
     auto._advance(zen_config, result)
     assert not result.errors
@@ -222,7 +222,7 @@ def test_auto_qc_mismatch_done_without_package(zen_config):
 
 def test_auto_qc_mismatch_package_without_done(zen_config):
     _seed(zen_config, status=st.OPEN_ACTIVE, user_done_flag=0,
-          package_has_zip=1, package_has_readme=1)
+          package_has_zip=1, package_has_readme=1, package_has_manuscript=1)
     result = auto.AutoRunResult(started_at=NOW)
     auto._advance(zen_config, result)
     with db.get_connection(zen_config.database) as conn:
@@ -232,7 +232,7 @@ def test_auto_qc_mismatch_package_without_done(zen_config):
 
 def test_auto_qc_requires_data_required_mandate(zen_config):
     _seed(zen_config, status=st.OPEN_ACTIVE, user_done_flag=1,
-          package_has_zip=1, package_has_readme=1,
+          package_has_zip=1, package_has_readme=1, package_has_manuscript=1,
           oa_data_required=0, oa_paper_required=1)
     result = auto.AutoRunResult(started_at=NOW)
     auto._advance(zen_config, result)
@@ -244,7 +244,7 @@ def test_auto_qc_requires_data_required_mandate(zen_config):
 def test_auto_qc_gate_off_does_nothing(zen_config):
     zen_config.automation.auto_qa_pass = False
     _seed(zen_config, status=st.OPEN_ACTIVE, user_done_flag=1,
-          package_has_zip=1, package_has_readme=1)
+          package_has_zip=1, package_has_readme=1, package_has_manuscript=1)
     result = auto.AutoRunResult(started_at=NOW)
     auto._advance(zen_config, result)
     with db.get_connection(zen_config.database) as conn:
@@ -329,6 +329,22 @@ def test_digest_written(zen_config):
 
 
 def test_package_complete_helper():
-    assert auto.package_complete({"package_has_zip": 1, "package_has_readme": 1})
-    assert not auto.package_complete({"package_has_zip": 1, "package_has_readme": 0})
+    assert auto.package_complete({"package_has_zip": 1, "package_has_readme": 1,
+                                  "package_has_manuscript": 1})
+    assert not auto.package_complete({"package_has_zip": 1, "package_has_readme": 0,
+                                      "package_has_manuscript": 1})
+    # Rule update 2026-07-15: no manuscript beside the zip → not complete.
+    assert not auto.package_complete({"package_has_zip": 1, "package_has_readme": 1})
     assert not auto.package_complete({})
+
+
+def test_auto_qc_mismatch_missing_manuscript(zen_config):
+    """zip + README but no manuscript beside the zip → auto-QC holds and
+    the digest names the missing manuscript."""
+    _seed(zen_config, status=st.OPEN_ACTIVE, user_done_flag=1,
+          package_has_zip=1, package_has_readme=1, package_has_manuscript=0)
+    result = auto.AutoRunResult(started_at=NOW)
+    auto._advance(zen_config, result)
+    with db.get_connection(zen_config.database) as conn:
+        assert db.get_archive(conn, "3290")["status"] == st.OPEN_ACTIVE
+    assert any("manuscript (.doc/.docx/.pdf)" in m for m in result.mismatches)

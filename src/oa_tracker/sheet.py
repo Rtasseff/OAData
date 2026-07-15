@@ -117,21 +117,26 @@ def proposal_row(
 
 def _package_note(archive: dict[str, Any]) -> str:
     """Cross-check the Tracker 'done' tick against the detected package
-    (.zip + README.txt) for OPEN_ACTIVE archives. Returns the operator
-    note for the QA row — empty when there's nothing noteworthy."""
+    (.zip + README.txt + manuscript) for OPEN_ACTIVE archives. Returns the
+    operator note for the QA row — empty when there's nothing noteworthy."""
     user_done = bool(archive.get("user_done_flag"))
     has_zip = bool(archive.get("package_has_zip"))
     has_readme = bool(archive.get("package_has_readme"))
-    complete = has_zip and has_readme
+    has_manuscript = bool(archive.get("package_has_manuscript"))
+    complete = has_zip and has_readme and has_manuscript
     if user_done and complete:
         return (
-            "Tracker 'done' + package (.zip + README) detected — auto-QC "
-            "eligible; if this row is still here, automation is off or the "
-            "mandate isn't data-required. Review and pass QA."
+            "Tracker 'done' + package (.zip + README + manuscript) detected — "
+            "auto-QC eligible; if this row is still here, automation is off "
+            "or the mandate isn't data-required. Review and pass QA."
         )
     if user_done and not complete:
         missing = " and ".join(
-            m for m, ok in ((".zip", has_zip), ("README.txt", has_readme)) if not ok
+            m for m, ok in (
+                (".zip", has_zip),
+                ("README.txt", has_readme),
+                ("a manuscript (.doc/.docx/.pdf)", has_manuscript),
+            ) if not ok
         )
         return (
             f"MISMATCH: user marked done on the Tracker but the folder is "
@@ -140,8 +145,9 @@ def _package_note(archive: dict[str, Any]) -> str:
         )
     if complete:
         return (
-            "Package (.zip + README) detected but the contact hasn't ticked "
-            "'done' on the Tracker — QA manually, or wait for their confirmation."
+            "Package (.zip + README + manuscript) detected but the contact "
+            "hasn't ticked 'done' on the Tracker — QA manually, or wait for "
+            "their confirmation."
         )
     return ""
 

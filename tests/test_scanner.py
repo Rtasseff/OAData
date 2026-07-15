@@ -601,6 +601,7 @@ def test_scan_detects_zip_and_readme(test_config):
         a = get_archive(conn, "4001")
     assert a["package_has_zip"] == 1
     assert a["package_has_readme"] == 1
+    assert a["package_has_manuscript"] == 0   # rule 2026-07-15: not present here
     assert a["package_checked_at"]
 
 
@@ -651,8 +652,57 @@ def test_rescan_updates_package_state(test_config):
 
     (folder / "data.zip").write_bytes(b"z")
     (folder / "readme.TXT").write_text("case-insensitive")
+    (folder / "Manuscript_preprint.PDF").write_bytes(b"%PDF-1.4")
     scan_folders(test_config)
     with get_connection(test_config.database) as conn:
         a = get_archive(conn, "4004")
     assert a["package_has_zip"] == 1
     assert a["package_has_readme"] == 1
+    assert a["package_has_manuscript"] == 1
+
+
+def test_scan_detects_manuscript_beside_zip(test_config):
+    from oa_tracker.scanner import scan_folders
+    from oa_tracker.db import get_archive, get_connection
+
+    cases = (
+        ("4005", "manuscript.pdf", 1),
+        ("4006", "accepted_version.docx", 1),
+        ("4007", "draft.doc", 1),
+        ("4008", "~$manuscript.docx", 0),   # Word lock file doesn't count
+    )
+    for pub, fname, _ in cases:
+        folder = test_config.sharepoint_root / pub
+        folder.mkdir()
+        (folder / "data.zip").write_bytes(b"z")
+        (folder / "README.txt").write_text("r")
+        (folder / fname).write_bytes(b"x")
+
+    scan_folders(test_config)
+    with get_connection(test_config.database) as conn:
+        for pub, fname, expect in cases:
+            a = get_archive(conn, pub)
+            assert a["package_has_manuscript"] == expect, (pub, fname)
+
+
+def test_manuscript_inside_zip_does_not_count(test_config):
+    """The rule requires the manuscript as its OWN file beside the zip —
+    a PDF only inside the zip is not accepted."""
+    import io
+    import zipfile
+    from oa_tracker.scanner import scan_folders
+    from oa_tracker.db import get_archive, get_connection
+
+    folder = test_config.sharepoint_root / "4009"
+    folder.mkdir()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("paper/manuscript.pdf", "pdf-inside")
+        zf.writestr("README.txt", "inside")
+    (folder / "data.zip").write_bytes(buf.getvalue())
+
+    scan_folders(test_config)
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "4009")
+    assert a["package_has_zip"] == 1
+    assert a["package_has_manuscript"] == 0
