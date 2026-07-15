@@ -222,6 +222,21 @@ def _apply_row(
             source, result, row_label,
         )
 
+    # Zenodo validate/confirm on a SYSTEM-created draft: because the system
+    # created the draft, it knows the record id — so the minted DOI and the
+    # public URL are deterministic and already implied. done=1 here means
+    # "I reviewed the draft and published it on Zenodo (in the UI)": verify
+    # it's actually published, then record the minted DOI + /records/ URL
+    # automatically — no hand entry, no API re-publish (that would
+    # double-publish). A hand-made draft (no zenodo_code) or an
+    # operator-supplied pid/url falls through to the normal path, where the
+    # distinct OPEN_ZENODO_DRAFT_VALIDATED stop + manual entry belong.
+    if task_code == "zenodo_validated" and not pid and not url \
+            and config.zenodo.enabled and archive.get("zenodo_code"):
+        return _confirm_zenodo_published(
+            conn, archive, note, now, config, source, result, row_label,
+        )
+
     # Warn if zenodo_published PID looks like a paper DOI
     if task_code == "zenodo_published" and pid and _looks_like_paper_doi(pid):
         result.warnings.append(
@@ -324,6 +339,78 @@ def _append_note(archive: dict, note: str, now: str) -> str:
     existing_notes = archive.get("notes") or ""
     separator = "\n" if existing_notes else ""
     return f"{existing_notes}{separator}[{now}] {note}"
+
+
+def _confirm_zenodo_published(
+    conn: sqlite3.Connection,
+    archive: dict,
+    note: str,
+    now: str,
+    config: Config,
+    source: str,
+    result: ApplyResult,
+    row_label: str,
+) -> tuple[bool, str | None, str | None]:
+    """Confirm an operator-published, system-created Zenodo draft.
+
+    The operator reviewed the draft on Zenodo and clicked Publish there.
+    We verify it is actually published (a published record answers at
+    ``/api/records/<code>``; an unpublished draft 404s), then record the
+    minted DOI and public URL — both deterministic from the record id the
+    system already stored, so nothing is typed by hand and the API is not
+    asked to publish again. Advances OPEN_ZENODO_DRAFT_CREATED straight to
+    OPEN_ZENODO_PUBLISHED.
+    """
+    from oa_tracker import zenodo
+
+    pub_id = archive["publication_id"]
+    old_status = archive["status"]
+    zset = config.zenodo
+    code = str(archive["zenodo_code"])
+
+    env = archive.get("zenodo_env")
+    if env and env != zset.environment:
+        result.errors.append(
+            f"{row_label} ({pub_id}): draft {code} lives on {env!r} but config "
+            f"environment is {zset.environment!r} — refusing to touch the wrong instance"
+        )
+        return (False, old_status, None)
+
+    try:
+        client = zenodo.get_client(zset)
+        record = zenodo.get_record(client, code)
+    except zenodo.ZenodoError as e:
+        if e.status == 404:
+            result.errors.append(
+                f"{row_label} ({pub_id}): Zenodo record {code} is not published yet — "
+                f"review the draft ({zenodo.record_ui_url(zset, code)}) and click "
+                "Publish on Zenodo, then re-apply this row."
+            )
+        else:
+            result.errors.append(f"{row_label} ({pub_id}): Zenodo [{e.kind}] {e}")
+        return (False, old_status, None)
+
+    doi = zenodo.record_doi(record, code) or archive.get("zenodo_doi")
+    final_url = zenodo.record_public_url(zset, code)
+    db.update_archive_status(
+        conn, pub_id, st.OPEN_ZENODO_PUBLISHED,
+        final_pid=doi, final_url=final_url, zenodo_doi=doi,
+        notes=_append_note(
+            archive,
+            note or (
+                f"Published on Zenodo ({zset.environment}): {doi} — operator-published "
+                f"in the UI; DOI/URL auto-recorded from record {code}."
+            ),
+            now,
+        ),
+    )
+    db.insert_event(
+        conn, pub_id, "zenodo_published", old_status, st.OPEN_ZENODO_PUBLISHED,
+        source, pid=doi, url=final_url,
+        note="operator-published draft confirmed; DOI/URL auto-recorded",
+    )
+    result.applied += 1
+    return (True, old_status, st.OPEN_ZENODO_PUBLISHED)
 
 
 def _apply_zenodo_row(

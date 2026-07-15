@@ -442,6 +442,28 @@ def record_ui_url(settings: ZenodoSettings, record_id: str) -> str:
     return f"{settings.base_url}/uploads/{record_id}"
 
 
+def record_public_url(settings: ZenodoSettings, record_id: str) -> str:
+    """The PUBLISHED record's public URL (``/records/``) — vs the draft's
+    ``/uploads/``. Deterministic from the record id, so it's the final
+    URL to record without scraping it back from Zenodo."""
+    return f"{settings.base_url}/records/{record_id}"
+
+
+def _extract_doi(body: dict, record_id: str) -> str:
+    """Pull the Zenodo DOI out of a draft/record/reserve response.
+
+    Zenodo puts it at the top-level ``doi`` (and ``metadata.doi``), NOT at
+    InvenioRDM's ``pids.doi.identifier`` — which stays null. Falls back to
+    the deterministic ``10.5281/zenodo.<id>`` so a quiet response never
+    loses the DOI."""
+    return (
+        body.get("doi")
+        or ((body.get("pids") or {}).get("doi") or {}).get("identifier")
+        or (body.get("metadata") or {}).get("doi")
+        or code_to_doi(record_id)
+    )
+
+
 def create_draft(client: ZenodoClient, payload: dict[str, Any]) -> DraftInfo:
     """Create a draft record and reserve its DOI. Returns id + reserved DOI.
 
@@ -463,12 +485,7 @@ def create_draft(client: ZenodoClient, payload: dict[str, Any]) -> DraftInfo:
     doi: str | None = code_to_doi(record_id)
     try:
         _, with_doi = client.request("POST", f"/api/records/{record_id}/draft/pids/doi")
-        doi = (
-            with_doi.get("doi")
-            or ((with_doi.get("pids") or {}).get("doi") or {}).get("identifier")
-            or (with_doi.get("metadata") or {}).get("doi")
-            or doi
-        )
+        doi = _extract_doi(with_doi, record_id)
     except ZenodoError:
         pass
     links = body.get("links") or {}
@@ -479,6 +496,20 @@ def create_draft(client: ZenodoClient, payload: dict[str, Any]) -> DraftInfo:
 def get_draft(client: ZenodoClient, record_id: str) -> dict:
     _, body = client.request("GET", f"/api/records/{record_id}/draft")
     return body
+
+
+def get_record(client: ZenodoClient, record_id: str) -> dict:
+    """Fetch the PUBLISHED record. Raises ``ZenodoError`` with
+    ``status == 404`` when the record isn't published yet (only a draft
+    exists) — the signal we use to confirm the operator actually clicked
+    Publish before recording it."""
+    _, body = client.request("GET", f"/api/records/{record_id}")
+    return body
+
+
+def record_doi(record: dict, record_id: str) -> str:
+    """The DOI of a fetched record (env-safe: read live, not derived)."""
+    return _extract_doi(record, record_id)
 
 
 def update_metadata(client: ZenodoClient, record_id: str, payload: dict[str, Any]) -> dict:
@@ -506,12 +537,7 @@ def publish(client: ZenodoClient, record_id: str) -> dict:
     ``final_pid`` for the permanent record; read all known locations and
     fall back to the deterministic Zenodo form so the DOI is never lost."""
     _, body = client.request("POST", f"/api/records/{record_id}/draft/actions/publish")
-    doi = (
-        body.get("doi")
-        or ((body.get("pids") or {}).get("doi") or {}).get("identifier")
-        or (body.get("metadata") or {}).get("doi")
-        or code_to_doi(record_id)
-    )
+    doi = _extract_doi(body, record_id)
     links = body.get("links") or {}
     return {"doi": doi, "html_url": links.get("self_html") or ""}
 

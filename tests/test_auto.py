@@ -142,6 +142,51 @@ def test_zenodo_env_mismatch_refused(zen_config):
     assert zen_config._fake_zenodo.published == set()
 
 
+# ── zenodo_validated: confirm an operator-published, system-made draft ──
+
+def test_zenodo_validated_confirms_operator_published(zen_config):
+    """System-created draft the operator reviewed + published in the UI.
+    done=1 verifies it's published and auto-records the DOI + /records/ URL
+    with NO hand entry and NO API re-publish."""
+    _seed(zen_config, status=st.OPEN_ZENODO_DRAFT_CREATED,
+          zenodo_code="100", zenodo_env="sandbox", zenodo_doi="10.5281/zenodo.100")
+    zen_config._fake_zenodo.published.add("100")   # operator clicked Publish
+    result, old_s, new_s = apply_single(zen_config, "3290", "zenodo_validated")
+    assert result.applied == 1 and not result.errors
+    assert (old_s, new_s) == (st.OPEN_ZENODO_DRAFT_CREATED, st.OPEN_ZENODO_PUBLISHED)
+    with db.get_connection(zen_config.database) as conn:
+        a = db.get_archive(conn, "3290")
+    assert a["final_pid"] == "10.5281/zenodo.100"
+    assert a["final_url"] == "https://sandbox.zenodo.org/records/100"
+    assert a["zenodo_doi"] == "10.5281/zenodo.100"
+    # It must NOT have called the publish action (operator did it in the UI).
+    assert ("POST", "/api/records/100/draft/actions/publish") \
+        not in zen_config._fake_zenodo.calls
+
+
+def test_zenodo_validated_refuses_when_not_yet_published(zen_config):
+    """done=1 but the operator hasn't actually clicked Publish → the
+    /records/ view 404s → refuse, no status change, no data invented."""
+    _seed(zen_config, status=st.OPEN_ZENODO_DRAFT_CREATED,
+          zenodo_code="100", zenodo_env="sandbox")   # not in fake.published
+    result, old_s, new_s = apply_single(zen_config, "3290", "zenodo_validated")
+    assert result.applied == 0 and result.errors
+    assert "not published yet" in result.errors[0]
+    with db.get_connection(zen_config.database) as conn:
+        assert db.get_archive(conn, "3290")["status"] == st.OPEN_ZENODO_DRAFT_CREATED
+
+
+def test_zenodo_validated_handmade_draft_uses_manual_path(zen_config):
+    """A draft the system did NOT create (no zenodo_code) falls through to
+    the normal transition to OPEN_ZENODO_DRAFT_VALIDATED — where pid/url
+    are entered by hand at the publish step. No API call."""
+    _seed(zen_config, status=st.OPEN_ZENODO_DRAFT_CREATED)   # no zenodo_code
+    result, old_s, new_s = apply_single(zen_config, "3290", "zenodo_validated")
+    assert result.applied == 1 and not result.errors
+    assert (old_s, new_s) == (st.OPEN_ZENODO_DRAFT_CREATED, st.OPEN_ZENODO_DRAFT_VALIDATED)
+    assert zen_config._fake_zenodo.calls == []   # never touched the API
+
+
 # ── auto engine: advance stage ───────────────────────────────────────
 
 def test_auto_qc_advances_through_draft_and_upload(zen_config):

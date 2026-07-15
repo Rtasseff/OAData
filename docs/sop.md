@@ -109,7 +109,7 @@ The `task_code` column in `action_sheet.tsv` identifies the **action you are bei
 | `OPEN_READY_FOR_ZENODO_DRAFT` | `zenodo_draft_created` | Create Zenodo draft deposit **by hand** and record it | `OPEN_ZENODO_DRAFT_CREATED` |
 | `OPEN_READY_FOR_ZENODO_DRAFT` | `zenodo_create_draft` | **API:** done=1 creates the draft (metadata + reserved DOI) | `OPEN_ZENODO_DRAFT_CREATED` |
 | `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_upload_files` | **API:** upload the package files to the draft | *(stays OPEN_ZENODO_DRAFT_CREATED)* |
-| `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_validated` | Validate Zenodo draft metadata and files (in the browser) | `OPEN_ZENODO_DRAFT_VALIDATED` |
+| `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_validated` | Review the draft on Zenodo and **click Publish there**; done=1 confirms it | `OPEN_ZENODO_PUBLISHED` *(system-made draft — DOI/URL auto-recorded)* · `OPEN_ZENODO_DRAFT_VALIDATED` *(hand-made draft)* |
 | `OPEN_ZENODO_DRAFT_VALIDATED` | `zenodo_published` | Record a **hand-published** Zenodo record (enter PID and URL) | `OPEN_ZENODO_PUBLISHED` |
 | `OPEN_ZENODO_DRAFT_VALIDATED` | `zenodo_publish` | **API:** done=1 publishes the draft and mints the DOI | `OPEN_ZENODO_PUBLISHED` |
 | `OPEN_ZENODO_PUBLISHED` | `db_updated` | Update internal publication DB with dataset DOI/URL | `OPEN_DB_UPDATED` |
@@ -120,6 +120,40 @@ enabled in `config.toml`; when a draft was made by hand or lives on a
 different Zenodo environment than the config, the manual codes appear
 instead. `zenodo_publish` is the deliberate human keystroke that mints
 the permanent DOI — it is never applied automatically.
+
+### Publishing a Zenodo draft (review → publish → confirm)
+
+Publishing is always your deliberate act. For a draft **the system
+created** (the common case — it created it, so it holds the record id),
+you never re-type identifiers we already have:
+
+1. Open the draft on Zenodo (the review link is in the `zenodo_validated`
+   row / the digest) and check it.
+2. If it's good, **click Publish on Zenodo** — you see it go live exactly
+   as you reviewed it. This mints the reserved DOI (same value; the
+   `10.5281/zenodo.<id>` reserved at draft creation *is* the minted DOI)
+   and the URL flips from `…/uploads/<id>` to `…/records/<id>`.
+3. Set **`done=1`** on the `zenodo_validated` row (leave `pid`/`url`
+   blank). `oa apply` verifies the record is actually published on Zenodo,
+   then **auto-records the minted DOI in `final_pid` and the `/records/`
+   URL in `final_url`**, and advances straight to `OPEN_ZENODO_PUBLISHED`.
+   No hand entry; no second publish step.
+   - Safety: if you set `done=1` **before** actually clicking Publish, the
+     apply refuses with *"record … is not published yet — publish it on
+     Zenodo, then re-apply."* Nothing is invented.
+
+Manual entry is required **only** for a draft the system did **not**
+create (a hand-made deposit — no record id on file). There the two-step
+manual path applies: `zenodo_validated` → `OPEN_ZENODO_DRAFT_VALIDATED`,
+then `zenodo_published` with the DOI in `pid` and the record URL in `url`.
+(The API-publish code `zenodo_publish` — where the tool clicks Publish for
+you — remains available for a system draft if you'd rather not publish in
+the UI; don't do both, or the second publish errors.)
+
+**After publish**, the archive is `OPEN_ZENODO_PUBLISHED` carrying the
+final DOI/URL, and the terminal manual chain follows: `db_updated` (enter
+the DOI/URL into the internal publication DB) → `folder_removed` (remove
+the SharePoint folder) → closes as `CLOSED_DATA_ARCHIVED`.
 
 ### Special actions (available from any OPEN status)
 

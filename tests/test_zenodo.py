@@ -70,6 +70,13 @@ class FakeZenodo:
             key = urllib.parse.unquote(path.split("/")[-1])
             del self.files[rid][key]
             return 204, {}
+        if method == "GET" and path.startswith("/api/records/") and path.count("/") == 3:
+            # Published-record view: 200 once published, 404 while a draft.
+            rid = path.split("/")[3]
+            if rid not in self.published:
+                raise zenodo.ZenodoError("data", "HTTP 404 from Zenodo: no record", 404)
+            return 200, {"doi": f"10.5281/zenodo.{rid}", "pids": None,
+                         "links": {"self_html": f"https://fake/records/{rid}"}}
         if method == "POST" and path.endswith("/actions/publish"):
             rid = path.split("/")[3]
             self.published.add(rid)
