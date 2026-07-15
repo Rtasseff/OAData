@@ -9,7 +9,7 @@ template_dir = "./templates"
 # Cadence loosened 2026-06-11 now that the OA Archive Tracker is a standing,
 # always-visible channel (and reminders that do go out point to it).
 first_reminder_days = 21      # days after became_active before first reminder
-reminder_interval_days = 21    # days between subsequent reminders
+reminder_interval_days = 14    # days between subsequent reminders
 max_reminders = 3
 
 [sharepoint]                  # parallel track — user-facing List (see docs/sharepoint_list_design.md)
@@ -37,7 +37,7 @@ enabled = true
 # SANDBOX FIRST: run 2–3 real archives against sandbox.zenodo.org and inspect
 # the drafts in the browser, then flip this to "production". Sandbox and
 # production need SEPARATE tokens (sandbox tokens come from sandbox.zenodo.org).
-environment = "sandbox"
+environment = "production"
 # The token file (mode 600, never in the repo):
 #   [zenodo]           ← production token
 #   token = ...
