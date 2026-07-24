@@ -315,8 +315,11 @@ def _apply_row(
     # out to the newly assigned data contact — the event clears the
     # pending handover (db.get_pending_handover) so the sheet row and the
     # regenerated handover_<pub>.eml draft stop appearing.
+    # completion_sent is the same idea for the completion/thank-you email:
+    # the event records that the operator sent completion_<pub>.eml, which
+    # stops the sheet row and draft from recurring for that archive.
     if task_code in (
-        "qa_hold", "mandate_missing", "handover_sent",
+        "qa_hold", "mandate_missing", "handover_sent", "completion_sent",
         "propose_data_contact", "propose_exemption", "propose_done", "user_note",
     ):
         extra: dict[str, Any] = {}

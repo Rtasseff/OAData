@@ -156,13 +156,36 @@ def _join_notes(*parts: str) -> str:
     return " ".join(p for p in parts if p)
 
 
+def _recorded_pid_url_suffix(archive: dict[str, Any]) -> str:
+    """A read-only ``[on record: ...]`` suffix for the task_text when the
+    archive already carries a recorded dataset DOI/URL (i.e. it has reached
+    OPEN_ZENODO_PUBLISHED). Lets the operator see what's captured without
+    mistaking the empty ``pid``/``url`` *input* columns for "nothing was
+    recorded". Deliberately surfaced in task_text — never in pid/url/note —
+    because ``apply`` ignores task_text; putting a value in the editable
+    pid/url columns would trip the done=1 fast-track branch and stop the
+    db_updated step from advancing, and a value in note would be appended
+    into the audit notes on every apply."""
+    final_pid = (archive.get("final_pid") or "").strip()
+    final_url = (archive.get("final_url") or "").strip()
+    if not final_pid and not final_url:
+        return ""
+    recorded = "; ".join(
+        part for part in (
+            f"DOI {final_pid}" if final_pid else "",
+            f"URL {final_url}" if final_url else "",
+        ) if part
+    )
+    return f"  [on record: {recorded}]"
+
+
 def _row(archive: dict[str, Any], task_code: str, task_text: str, note: str = "") -> dict[str, str]:
     """Build a sheet row dict with the standard column population."""
     return {
         "publication_id": archive["publication_id"],
         "current_status": archive["status"],
         "task_code": task_code,
-        "task_text": task_text,
+        "task_text": task_text + _recorded_pid_url_suffix(archive),
         "first_seen_at": archive.get("first_seen_at") or "",
         "next_reminder_at": archive.get("next_reminder_at") or "",
         "reminder_count": str(archive.get("reminder_count") or 0),
@@ -298,6 +321,25 @@ def generate_sheet(config: Config) -> Path:
                 meta = st.TASK_CODES[task]
                 rows.append(_row(
                     archive, task, meta["description"], note=note,
+                ))
+
+            # Completion email: once the dataset is published on Zenodo the
+            # operator owes the data contact a "your data is archived" note.
+            # oa emails writes completion_<pub>.eml; this row recurs until
+            # done=1 logs a completion_sent event — mirrors remind_sent /
+            # handover_sent so a generated email always has a matching
+            # "send it" action item.
+            if cur_status in (st.OPEN_ZENODO_PUBLISHED, st.OPEN_DB_UPDATED) \
+                    and archive.get("final_pid") \
+                    and db.get_last_event(conn, pub_id, "completion_sent") is None:
+                rows.append(_row(
+                    archive, "completion_sent",
+                    st.TASK_CODES["completion_sent"]["description"],
+                    note=(
+                        f"Draft ready: email_drafts/completion_{pub_id}.eml — "
+                        "send it, then done=1 records it as sent (this row "
+                        "recurs until then)."
+                    ),
                 ))
 
             # Reminders fire only when data is actually required by mandate

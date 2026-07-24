@@ -170,6 +170,7 @@ the SharePoint folder) → closes as `CLOSED_DATA_ARCHIVED`.
 | `remind_sent` | Send reminder email to data contact | *(no status change; updates reminder count)* |
 | `contact_pi_manual` | MAX reminder reached; manually contact PI | *(see "Final reminder" below)* |
 | `handover_sent` | Send handover notice to the new data contact | *(no status change; clears the pending handover — see §8.1b)* |
+| `completion_sent` | Send completion email to the data contact (data archived) | *(no status change; recurs while the archive is published-and-open until `done=1` logs it as sent)* |
 | `close_publication_only` | Close as publication-only (no data deposit needed) | `CLOSED_PUBLICATION_ONLY` |
 | `close_exception` | Close with exception (add note explaining why) | `CLOSED_EXCEPTION` |
 | `mandate_missing` | Confirm with PO/IT — mandate could not be derived | *(no status change; see §8.7)* |
@@ -418,10 +419,10 @@ Steps 1–4 are regeneration; steps 5–7 are the real weekly work.
 
 ### 8.3 Email handling and Zenodo cheat sheets
 
-* `oa emails` produces reminder drafts (from `templates/reminder.txt`) for every archive whose `next_reminder_at` is due **and** whose `reminder_count` is still below the manual-contact threshold — and completion drafts (from `templates/completion.txt`) for every archive at `OPEN_ZENODO_PUBLISHED`.
+* `oa emails` produces reminder drafts (from `templates/reminder.txt`) for every archive whose `next_reminder_at` is due **and** whose `reminder_count` is still below the manual-contact threshold — and completion drafts (from `templates/completion.txt`) for every archive that is published-and-open (`OPEN_ZENODO_PUBLISHED` or `OPEN_DB_UPDATED`) and hasn't been marked sent, plus a short window after closure to catch the `done=2` shortcut. Every such archive also carries a **`completion_sent`** row on the action sheet — the "send it, then tick it" companion to the draft, mirroring `remind_sent`/`handover_sent`. The row and the draft both stop recurring once you set `done=1` on the `completion_sent` row.
 * Reminders are suppressed for archives whose central mandate is paper-only, no-OA, or missing (the operator sheet still flags those — we just don't pester data contacts for data the mandate doesn't require).
 * Sending remains manual — `oa` never touches email directly.
-* After sending, record each sent email on the next action sheet by setting `done=1` on its `remind_sent` row.
+* After sending, record each sent email on the next action sheet by setting `done=1` on its `remind_sent` row (reminders) or `completion_sent` row (completion emails).
 * `oa emails` also writes a **Zenodo cheat sheet** to `output/zenodo_cheat/<pub_id>.txt` for every archive in `OPEN_READY_FOR_ZENODO_DRAFT`, `OPEN_ZENODO_DRAFT_CREATED`, or `OPEN_ZENODO_DRAFT_VALIDATED`. The cheat sheet consolidates publication metadata, OA-mandate flags, data-contact info, the central DB's existing repository reference, and the operator-managed Zenodo code — everything needed to create a Zenodo deposit by hand. (Future Stage 2.5 will automate the Zenodo creation itself; the cheat sheet is the manual interim.)
 
 #### When you create the Zenodo draft

@@ -77,6 +77,61 @@ def test_generates_correct_tasks_per_status(test_config):
         assert task_codes[pub_id] == expected_task, f"{pub_id} expected {expected_task}, got {task_codes.get(pub_id)}"
 
 
+def test_published_row_shows_recorded_doi_url_readonly(test_config):
+    """A published archive's db_updated row surfaces the stored DOI/URL
+    read-only in task_text, while the editable pid/url columns stay empty
+    so `apply` won't mistake them for operator input and fast-track the row."""
+    _insert(
+        test_config.database, "PUB777", OPEN_ZENODO_PUBLISHED,
+        final_pid="10.5281/zenodo.21379883",
+        final_url="https://zenodo.org/records/21379883",
+    )
+    rows = _read_sheet(generate_sheet(test_config))
+    row = next(r for r in rows if r["publication_id"] == "PUB777")
+    assert row["task_code"] == "db_updated"
+    assert "10.5281/zenodo.21379883" in row["task_text"]
+    assert "https://zenodo.org/records/21379883" in row["task_text"]
+    # The editable columns must stay empty — otherwise apply would fast-track.
+    assert row["pid"] == ""
+    assert row["url"] == ""
+
+
+def test_unpublished_row_has_no_recorded_suffix(test_config):
+    """No DOI on record → no [on record: ...] suffix, task_text unchanged."""
+    _insert(test_config.database, "PUB778", OPEN_ACTIVE)
+    rows = _read_sheet(generate_sheet(test_config))
+    row = next(r for r in rows if r["publication_id"] == "PUB778")
+    assert "on record" not in row["task_text"]
+
+
+def test_completion_row_appears_for_published_and_clears_when_sent(test_config):
+    """Any open, published archive (OPEN_ZENODO_PUBLISHED or OPEN_DB_UPDATED)
+    gets a completion_sent row so the generated completion email has a
+    matching 'send it' action item; the row clears once a completion_sent
+    event is logged — mirrors handover_sent."""
+    from oa_tracker.db import get_connection, insert_event
+    for i, status in enumerate((OPEN_ZENODO_PUBLISHED, OPEN_DB_UPDATED)):
+        pub = f"PUB78{i}"
+        _insert(
+            test_config.database, pub, status,
+            final_pid="10.5281/zenodo.999",
+            final_url="https://zenodo.org/records/999",
+        )
+        codes = [
+            r["task_code"] for r in _read_sheet(generate_sheet(test_config))
+            if r["publication_id"] == pub
+        ]
+        assert "completion_sent" in codes, f"{status} should emit completion_sent"
+
+        with get_connection(test_config.database) as conn:
+            insert_event(conn, pub, "completion_sent", status, status, "test")
+        codes_after = [
+            r["task_code"] for r in _read_sheet(generate_sheet(test_config))
+            if r["publication_id"] == pub
+        ]
+        assert "completion_sent" not in codes_after, f"{status} should clear once sent"
+
+
 def test_final_slot_generates_contact_pi_manual(test_config):
     """At reminder_count == max_reminders - 1, the row should be contact_pi_manual, not remind_sent."""
     max_rem = test_config.reminders.max_reminders

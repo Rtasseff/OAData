@@ -974,3 +974,33 @@ def test_handover_sent_row_clears_pending(test_config):
         assert get_pending_handover(conn, "PUB001") is None
         events = get_recent_events(conn, "2000-01-01T00:00:00")
         assert any(e["action_code"] == "handover_sent" for e in events)
+
+
+def test_completion_sent_row_records_send(test_config):
+    """done=1 on the completion_sent row logs a completion_sent event and
+    leaves status untouched (mirrors handover_sent)."""
+    _insert_active_archive(
+        test_config.database, "PUB001", status=OPEN_ZENODO_PUBLISHED
+    )
+    sheet = _write_sheet(test_config.output_dir, [{
+        "publication_id": "PUB001",
+        "current_status": OPEN_ZENODO_PUBLISHED,
+        "task_code": "completion_sent",
+        "task_text": "Send completion email to the data contact (data archived)",
+        "first_seen_at": "2026-01-01T00:00:00",
+        "next_reminder_at": "",
+        "reminder_count": "0",
+        "done": "1",
+        "pid": "",
+        "url": "",
+        "note": "",
+    }])
+    result = apply_actions(sheet, test_config)
+    assert result.applied == 1
+    assert result.errors == []
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB001")
+        assert archive["status"] == OPEN_ZENODO_PUBLISHED  # untouched
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+        assert any(e["action_code"] == "completion_sent" for e in events)

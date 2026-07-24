@@ -400,10 +400,16 @@ def generate_emails(config: Config) -> list[Path]:
                 _write_draft(drafts_dir / f"completion_{pub_id}", content, config)
             )
 
-        # 1) Archives published on Zenodo but not yet closed — operator
-        # is mid-flow and needs the email to send out.
-        for archive in db.get_all_archives(conn, status_filter=st.OPEN_ZENODO_PUBLISHED):
-            _write_completion_draft(archive)
+        # 1) Archives published on Zenodo but not yet closed (either the
+        # published or the db-updated step) — operator is mid-flow and needs
+        # the email to send out. Skip any the operator already marked sent
+        # (completion_sent event): the sheet row and this draft clear
+        # together, mirroring handover_sent.
+        for status in (st.OPEN_ZENODO_PUBLISHED, st.OPEN_DB_UPDATED):
+            for archive in db.get_all_archives(conn, status_filter=status):
+                if db.get_last_event(conn, archive["publication_id"], "completion_sent") is not None:
+                    continue
+                _write_completion_draft(archive)
 
         # 2) Archives that were fully closed (CLOSED_DATA_ARCHIVED) in the
         # recent window. Covers the done=2 shortcut path where the
