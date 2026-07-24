@@ -1488,7 +1488,22 @@ decision — and QC gets a mechanical fast path (below). 294 tests pass
 Items that don't fit cleanly into a single stage. To be expanded over time —
 this is the parking lot for "build out from there".
 
-- _(none yet — add here as ideas come up)_
+- **`zenodo_finalize` one-shot close (medium priority)** — proposed 2026-07-24.
+  Today, finishing a system-created draft the operator has already published
+  *and* fully cataloged (institutional DB updated, folder removed in one
+  sitting) takes either three `oa action` steps (`zenodo_validated` →
+  `db_updated` → `folder_removed`; auto-fills the DOI/URL but multi-step) or a
+  single `done=2` that requires hand-pasting the DOI (and mis-closes as
+  `CLOSED_EXCEPTION` if left blank). Neither gives "one action, no typing,
+  fully closed." Add a dedicated finalize shortcut — e.g. `oa action <id>
+  zenodo_finalize` — that, for an archive with a `zenodo_code` and no operator
+  pid: confirms the record is published (GET `/api/records/<code>`), derives
+  the minted DOI + `/records/` URL the same way `_confirm_zenodo_published`
+  does, and closes straight to `CLOSED_DATA_ARCHIVED`. Explicit code (do **not**
+  overload `done=2`, whose general no-PID→`CLOSED_EXCEPTION` behavior must
+  stay), routed through the same audited `apply_single` path. Rationale: once
+  publish-then-catalog-in-one-sitting is standard practice, the operator
+  shouldn't re-enter a DOI the system already knows. Requested by Ryan.
 
 ---
 
