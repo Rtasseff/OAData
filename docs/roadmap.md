@@ -1567,3 +1567,24 @@ Operator-return round (2026-09-17):
   Closed"; the report's "Reminders Due" lists author-owned statuses only.
 - Known and left as-is: a List reassignment naming the existing contact
   still queues a (pointless) self-handover notice.
+
+Web UI for operator hand-off (2026-09-17, branch `web-ui`):
+
+- `oa web` serves a small Django site (`src/oa_web/`, optional `.[web]`
+  extras): Papers list, live Actions sheet, Report, History, and a
+  per-paper page that explains each pending action and records it with a
+  button (QA pass/fail, "email sent", confirm-published, DB updated,
+  folder deleted, closures, change data contact). Details and running
+  instructions: [web_ui.md](web_ui.md).
+- Thin layer by design: buttons call `actions.apply_single` with
+  `source="web:<user>"`; no tracker-schema change; the action sheet /
+  `oa apply` / `oa auto` flow is unchanged and stays usable side by side
+  (web actions retire their `action_sheet.tsv` row into
+  `action_history.tsv`). Only refactor to existing modules: read-only
+  `sheet.build_rows` / `report.build_report` split out of the generators.
+- Email sending is still manual (drafts in `output/email_drafts/`, also
+  downloadable from the page); auto-send from another address is the next
+  planned change and will remove those confirm steps.
+- Not yet: exposing it to other machines (`--host 0.0.0.0` +
+  `[web] allowed_hosts`; plain HTTP), `oa reopen` / `done=2` /
+  proposals-file review on the web.

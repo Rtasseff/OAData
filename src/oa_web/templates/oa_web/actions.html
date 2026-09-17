@@ -1,0 +1,25 @@
+{% extends "oa_web/base.html" %}
+{% block title %}Actions — OA Archive Tracker{% endblock %}
+{% block content %}
+<h1>Actions</h1>
+<p class="sub">Everything waiting on the operator, in working order — the live action sheet. Click a row to see what to do and record it.</p>
+<div class="card flush">
+<table class="grid">
+  <thead><tr><th>Paper</th><th>Action</th><th>Status</th><th>Title</th><th>Note</th><th>Reminders</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr class="clickable" onclick="location.href='{% url 'paper' r.publication_id %}#{{ r.task_code }}'">
+    <td class="id">{{ r.publication_id }}</td>
+    <td class="nowrap"><a class="todo" href="{% url 'paper' r.publication_id %}#{{ r.task_code }}">{{ r.label }}</a></td>
+    <td><span class="badge s-{{ r.current_status }}">{{ r.archive.status_label }}</span></td>
+    <td class="title small">{{ r.archive.pub_title|default:"(title pending)"|truncatechars:90 }}</td>
+    <td class="small">{{ r.note_display|truncatechars:140 }}</td>
+    <td class="small nowrap">{{ r.reminder_count }}{% if r.next_reminder_at %} · next {{ r.next_reminder_at|slice:":10" }}{% endif %}</td>
+  </tr>
+  {% empty %}
+  <tr><td colspan="6" class="empty">Nothing to do right now.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

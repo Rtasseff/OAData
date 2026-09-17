@@ -390,6 +390,42 @@ def auto(
         raise typer.Exit(1)
 
 
+@app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", "--host", help="Address to listen on (0.0.0.0 = all interfaces)"),
+    port: int = typer.Option(8000, "--port", help="Port to listen on"),
+    config: Optional[str] = ConfigOption,
+):
+    """Serve the web UI (needs the "web" extras — see docs/web_ui.md).
+
+    Logins live in a separate oa_web.sqlite; create the first one with
+    `python -m oa_web createsuperuser`.
+    """
+    import os
+
+    if config:
+        os.environ["OA_CONFIG"] = str(Path(config).resolve())
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "oa_web.settings")
+    try:
+        import django
+        from django.core.management import call_command
+        from waitress import serve
+    except ImportError:
+        typer.echo("The web UI needs its extras: pip install -e '.[web]'")
+        raise typer.Exit(1)
+
+    django.setup()
+    call_command("migrate", interactive=False, verbosity=0)
+    from django.contrib.auth import get_user_model
+    if not get_user_model().objects.exists():
+        typer.echo("No logins yet — create one first: python -m oa_web createsuperuser")
+        raise typer.Exit(1)
+
+    from oa_web.wsgi import application
+    typer.echo(f"OA Archive Tracker web UI: http://{host}:{port}/  (Ctrl+C stops it)")
+    serve(application, host=host, port=port, threads=4)
+
+
 # ── SharePoint List parallel track ───────────────────────────────────
 
 sharepoint_app = typer.Typer(help="SharePoint List sync (parallel track).")

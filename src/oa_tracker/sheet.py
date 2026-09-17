@@ -197,10 +197,10 @@ def _row(archive: dict[str, Any], task_code: str, task_text: str, note: str = ""
     }
 
 
-def generate_sheet(config: Config) -> Path:
-    """Generate action_sheet.tsv for all OPEN archives and return the file path."""
-    config.output_dir.mkdir(parents=True, exist_ok=True)
-    sheet_path = config.output_dir / "action_sheet.tsv"
+def build_rows(config: Config) -> list[dict[str, str]]:
+    """The action rows for the current DB state, in sheet order. Read-only —
+    shared by ``generate_sheet`` (writes them to the TSV) and the web UI
+    (renders them live)."""
     now_str = datetime.now().isoformat(timespec="seconds")
 
     rows: list[dict[str, str]] = []
@@ -421,6 +421,15 @@ def generate_sheet(config: Config) -> Path:
                     "exists — delete it, then done=1 (the next scan also records it)."
                 ),
             ))
+
+    return rows
+
+
+def generate_sheet(config: Config) -> Path:
+    """Generate action_sheet.tsv for all OPEN archives and return the file path."""
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    sheet_path = config.output_dir / "action_sheet.tsv"
+    rows = build_rows(config)
 
     with open(sheet_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=SHEET_COLUMNS, delimiter="\t")

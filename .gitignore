@@ -24,7 +24,10 @@ env/
 output/
 email_drafts/
 action_history.tsv
+.oa_web_secret
 
 # Scratch debugging artifacts (Stage 2 webpage source dumps, etc.)
 tmp_*.html
 tmp_*.txt
+*.sqlite-shm
+*.sqlite-wal

@@ -1,0 +1,9 @@
+{% extends "oa_web/base.html" %}
+{% block title %}History — OA Archive Tracker{% endblock %}
+{% block content %}
+<h1>History</h1>
+<p class="sub">The audit trail — the latest {{ events|length }} recorded events, newest first. “By” shows where a change came from (web:&lt;user&gt;, cli, action_sheet, auto, scanner, sharepoint).</p>
+<div class="card flush">
+{% include "oa_web/_events.html" with show_pub=1 %}
+</div>
+{% endblock %}

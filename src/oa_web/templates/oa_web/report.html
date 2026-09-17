@@ -1,0 +1,10 @@
+{% extends "oa_web/base.html" %}
+{% block title %}Report — OA Archive Tracker{% endblock %}
+{% block content %}
+<div class="cols">
+  <div class="card prose">{{ report_html }}</div>
+  <div class="card prose">
+    {% if digest_html %}{{ digest_html }}{% else %}<h2>Automatic run</h2><p class="small">No digest from the automatic run yet.</p>{% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -107,6 +107,7 @@ safety rules, conventions, common tasks — and is not operator reading.)
 |------|--------------|-----------|
 | [`docs/rollout_checklist.md`](docs/rollout_checklist.md) | **Current working checklist** — sandbox validation, pending decisions, IT asks, cleanup. Temporary; delete when done. | **Right now**, until the automation rollout is finished. |
 | [`docs/sop.md`](docs/sop.md) | **Operating the tool** — status model, task-code semantics, `oa auto` cadence, weekly session, final-reminder handling, reopening. | You're running the tool. **Start here.** |
+| [`docs/web_ui.md`](docs/web_ui.md) | **The web UI (`oa web`)** — pages, how buttons map onto the CLI code paths, running it, adding logins. | You're handing the operator work to someone, or touching `src/oa_web/`. |
 | [`docs/techSpec.md`](docs/techSpec.md) | **Internals** — DB schema (per version), transition rules, apply semantics, CLI surface. Points at `db.py` / `status.py` as the executable truth. | You're changing code or schema. |
 | [`docs/roadmap.md`](docs/roadmap.md) | **The plan and its history** — stages, decisions, dated progress log. | You want to know why something is the way it is, or what's next. |
 | [`docs/zenodo_design.md`](docs/zenodo_design.md) | **Zenodo integration design** (Stages 2.5/3) + implementation deltas. | You're touching `zenodo.py` or the metadata rules. |

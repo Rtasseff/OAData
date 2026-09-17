@@ -1,0 +1,36 @@
+{% extends "oa_web/base.html" %}
+{% block content %}
+<h1>Papers</h1>
+<p class="sub">Every publication being tracked. Click an action to see what needs doing.</p>
+<div class="toolbar">
+  <div class="tabs">
+    <a href="?show=open{% if q %}&q={{ q|urlencode }}{% endif %}" class="{% if show == 'open' %}on{% endif %}">Open <span class="n">{{ counts.open }}</span></a>
+    <a href="?show=todo{% if q %}&q={{ q|urlencode }}{% endif %}" class="{% if show == 'todo' %}on{% endif %}">Needs action <span class="n">{{ counts.todo }}</span></a>
+    <a href="?show=closed{% if q %}&q={{ q|urlencode }}{% endif %}" class="{% if show == 'closed' %}on{% endif %}">Closed <span class="n">{{ counts.closed }}</span></a>
+    <a href="?show=all{% if q %}&q={{ q|urlencode }}{% endif %}" class="{% if show == 'all' %}on{% endif %}">All <span class="n">{{ counts.all }}</span></a>
+  </div>
+  <form method="get">
+    <input type="hidden" name="show" value="{{ show }}">
+    <input type="search" name="q" value="{{ q }}" placeholder="Search id, title, people…">
+  </form>
+</div>
+<div class="card flush">
+<table class="grid">
+  <thead><tr><th>Paper</th><th>Status</th><th>Action</th><th>Title</th><th>Data contact</th><th>Corresponding author</th></tr></thead>
+  <tbody>
+  {% for a in rows %}
+  <tr>
+    <td class="id"><a class="ext" href="{{ a.folder_url }}" target="_blank" rel="noopener" title="Open the SharePoint folder">{{ a.publication_id }}</a></td>
+    <td><span class="badge s-{{ a.status }}">{{ a.status_label }}</span></td>
+    <td>{% for r in a.pending %}<a class="todo" href="{% url 'paper' a.publication_id %}#{{ r.task_code }}">{{ r.label }}</a>{% empty %}<span class="dash">—</span>{% endfor %}</td>
+    <td class="title"><a href="{% url 'paper' a.publication_id %}">{{ a.pub_title|default:"(title pending)" }}</a></td>
+    <td class="small">{{ a.data_contact_name|default:"—" }}</td>
+    <td class="small">{{ a.corresponding_author_name|default:"—" }}</td>
+  </tr>
+  {% empty %}
+  <tr><td colspan="6" class="empty">Nothing matches.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

@@ -1,0 +1,153 @@
+{% extends "oa_web/base.html" %}
+{% block title %}{{ a.publication_id }} — OA Archive Tracker{% endblock %}
+{% block content %}
+<div class="crumbs"><a href="{% url 'papers' %}">Papers</a> / {{ a.publication_id }}</div>
+<div class="head">
+  <div>
+    <h1>{{ a.pub_title|default:"(title pending)" }}</h1>
+    <div class="small">Paper {{ a.publication_id }}{% if a.pub_journal %} · {{ a.pub_journal }}{% endif %}{% if a.pub_year %} · {{ a.pub_year }}{% endif %}</div>
+  </div>
+  <span class="badge s-{{ a.status }}">{{ a.status_label }}</span>
+</div>
+
+<div class="cols">
+<div>
+  {% for c in cards %}
+  <div class="card action" id="{{ c.row.task_code }}">
+    <span class="code">{{ c.row.task_code }}</span>
+    {% if c.spec %}
+    <h2>{{ c.spec.title }}</h2>
+    <ol>{% for s in c.spec.steps %}<li>{{ s }}</li>{% endfor %}</ol>
+    {% if c.row.note_display %}<div class="notebox">{{ c.row.note_display }}</div>{% endif %}
+
+    {% if "folder" in c.spec.links or "zenodo" in c.spec.links or "pubdb" in c.spec.links or c.drafts %}
+    <div class="linkrow">
+      {% if "zenodo" in c.spec.links and zen %}<a class="linkbtn ext" href="{{ zen.draft }}" target="_blank" rel="noopener">Open the Zenodo draft</a>{% endif %}
+      {% if "folder" in c.spec.links %}<a class="linkbtn ext" href="{{ a.folder_url }}" target="_blank" rel="noopener">Open the SharePoint folder</a>{% endif %}
+      {% if "pubdb" in c.spec.links and pub_db_url %}<a class="linkbtn ext" href="{{ pub_db_url }}" target="_blank" rel="noopener">Open the publication database</a>{% endif %}
+      {% for d in c.drafts %}<a class="linkbtn" href="{% url 'draft' a.publication_id d %}">⬇ {{ d }}</a>{% endfor %}
+    </div>
+    {% endif %}
+    {% if c.spec.email_stem and not c.drafts %}
+    <div class="notebox">No draft file for this email yet — it is written to output/email_drafts by the next automatic run{% if not a.data_contact_email or a.data_contact_email == "TBD" %} (this paper has no data contact; set one under Other actions){% endif %}.</div>
+    {% endif %}
+
+    {% if "doi" in c.spec.links %}
+    <dl class="kv" style="margin-bottom:14px">
+      <dt>Dataset DOI</dt><dd><span class="copy">{{ a.final_pid|default:"—" }}</span></dd>
+      <dt>Dataset URL</dt><dd>{% if a.final_url %}<span class="copy">{{ a.final_url }}</span> <a class="ext" href="{{ a.final_url }}" target="_blank" rel="noopener">open</a>{% else %}—{% endif %}</dd>
+      <dt>Paper DOI</dt><dd>{{ a.pub_doi|default:"—" }}</dd>
+    </dl>
+    {% endif %}
+
+    {% if c.row.task_code == "qa_pass" %}
+    <div class="pkg">
+      <span class="pill {% if a.package_has_zip %}yes{% else %}no{% endif %}">.zip {% if a.package_has_zip %}found{% else %}missing{% endif %}</span>
+      <span class="pill {% if a.package_has_readme %}yes{% else %}no{% endif %}">README {% if a.package_has_readme %}found{% else %}missing{% endif %}</span>
+      <span class="pill {% if a.package_has_manuscript %}yes{% else %}no{% endif %}">manuscript {% if a.package_has_manuscript %}found{% else %}missing{% endif %}</span>
+      <span class="pill {% if a.user_done_flag %}yes{% else %}no{% endif %}">“done” {% if a.user_done_flag %}ticked{% else %}not ticked{% endif %} by the contact</span>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'paper_action' a.publication_id %}">{% csrf_token %}
+      <input type="hidden" name="task_code" value="{{ c.row.task_code }}">
+      <input type="hidden" name="expected_status" value="{{ a.status }}">
+      <div class="fields">
+        {% if "zenodo_code" in c.spec.fields %}<div><label>Zenodo record id (numeric)</label><input type="text" name="zenodo_code" inputmode="numeric" required value="{{ a.zenodo_code|default:'' }}"></div>{% endif %}
+        {% if "pid" in c.spec.fields %}<div><label>Dataset DOI</label><input type="text" name="pid" placeholder="10.5281/zenodo.1234567" required></div>
+        <div><label>Dataset URL</label><input type="url" name="url" placeholder="https://zenodo.org/records/1234567" required></div>{% endif %}
+        <div><label>{{ c.spec.note_hint }}</label><textarea name="note" rows="2"></textarea></div>
+      </div>
+      <div class="btns">
+        {% for b in c.spec.buttons %}<button class="btn {{ b.style }}" type="submit" name="choice" value="{{ b.choice }}"{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}>{{ b.label }}</button>{% endfor %}
+      </div>
+    </form>
+    {% else %}
+    <h2>{{ c.row.task_text }}</h2>
+    <div class="notebox">This kind of action is handled from the command line ({{ c.row.task_code }}).</div>
+    {% endif %}
+  </div>
+  {% empty %}
+  <div class="card allclear">
+    <h2>Nothing to do right now</h2>
+    <p class="small" style="margin:0">{% if a.is_open %}{% if a.status == "OPEN_INACTIVE" or a.status == "OPEN_ACTIVE" %}Waiting on the data contact{% if a.next_reminder_at %} — the next reminder comes due on {{ a.next_reminder_at|slice:":10" }}{% endif %}.{% else %}The next step appears here as soon as it is due.{% endif %}{% else %}This archive is closed.{% endif %}</p>
+  </div>
+  {% endfor %}
+
+  {% if files is not None %}
+  <div class="card">
+    <h2>Folder contents <span class="small">(synced copy on this server, read-only)</span></h2>
+    {% if files %}<ul class="files">{% for f in files %}<li><span>{{ f.name }}</span><span class="sz">{% if f.size is not None %}{{ f.size|filesizeformat }}{% endif %}</span></li>{% endfor %}</ul>
+    {% else %}<p class="small" style="margin:0">The folder is empty.</p>{% endif %}
+  </div>
+  {% endif %}
+
+  <div class="card flush">
+    <h2 style="padding:16px 20px 0">History</h2>
+    {% include "oa_web/_events.html" %}
+  </div>
+</div>
+
+<div>
+  <div class="card">
+    <h2>Details</h2>
+    <dl class="kv">
+      <dt>SharePoint</dt><dd><a class="ext" href="{{ a.folder_url }}" target="_blank" rel="noopener">Open folder</a>{% if a.unexpected_missing_folder %} <span class="pill no">folder missing</span>{% endif %}</dd>
+      <dt>Data contact</dt><dd>{{ a.data_contact_name|default:"—" }}{% if a.data_contact_email %}<br><a href="mailto:{{ a.data_contact_email }}">{{ a.data_contact_email }}</a>{% endif %}</dd>
+      <dt>Corresp. author</dt><dd>{{ a.corresponding_author_name|default:"—" }}{% if a.corresponding_author_email %}<br><a href="mailto:{{ a.corresponding_author_email }}">{{ a.corresponding_author_email }}</a>{% endif %}</dd>
+      <dt>Paper DOI</dt><dd>{% if a.pub_doi %}<a class="ext" href="https://doi.org/{{ a.pub_doi }}" target="_blank" rel="noopener">{{ a.pub_doi }}</a>{% else %}—{% endif %}</dd>
+      <dt>Mandate</dt><dd>{% if a.oa_mandate_missing %}could not be derived{% elif a.oa_data_required == 1 %}open data required{% elif a.oa_paper_required == 1 %}paper only{% elif a.oa_data_required == 0 %}no OA mandate{% else %}not yet derived{% endif %}{% if a.max_embargo_months %} · embargo {{ a.max_embargo_months }} mo{% endif %}</dd>
+      {% if zen %}<dt>Zenodo</dt><dd>record {{ a.zenodo_code }}{% if a.zenodo_env and a.zenodo_env != "production" %} ({{ a.zenodo_env }}){% endif %} · <a class="ext" href="{% if a.final_pid %}{{ zen.record }}{% else %}{{ zen.draft }}{% endif %}" target="_blank" rel="noopener">open</a></dd>{% endif %}
+      {% if a.final_pid %}<dt>Dataset DOI</dt><dd><span class="copy">{{ a.final_pid }}</span></dd>{% endif %}
+      {% if a.final_url %}<dt>Dataset URL</dt><dd><a class="ext" href="{{ a.final_url }}" target="_blank" rel="noopener">{{ a.final_url }}</a></dd>{% endif %}
+      <dt>First seen</dt><dd>{{ a.first_seen_at|slice:":10" }}</dd>
+      <dt>Data arrived</dt><dd>{{ a.became_active_at|slice:":10"|default:"—" }}</dd>
+      <dt>Reminders sent</dt><dd>{{ a.reminder_count }}{% if a.last_notified_at %} (last {{ a.last_notified_at|slice:":10" }}){% endif %}</dd>
+    </dl>
+  </div>
+
+  {% if a.notes %}
+  <div class="card"><h2>Notes</h2><pre class="notes">{{ a.notes }}</pre></div>
+  {% endif %}
+
+  {% if a.is_open %}
+  <div class="card">
+    <h2>Other actions</h2>
+    <details class="other">
+      <summary>Change the data contact</summary>
+      <div class="body">
+        <form method="post" action="{% url 'paper_action' a.publication_id %}">{% csrf_token %}
+          <input type="hidden" name="form" value="data_contact">
+          <div class="fields">
+            <div><label>Name</label><input type="text" name="name"></div>
+            <div><label>Email</label><input type="email" name="email" required></div>
+            <label style="color:var(--ink)"><input type="checkbox" name="notify" value="1" checked> Prepare the assignment email for the new contact</label>
+          </div>
+          <button class="btn secondary" type="submit">Set data contact</button>
+        </form>
+      </div>
+    </details>
+    {% for code, spec in others.items %}
+    <details class="other">
+      <summary>{{ spec.title }}</summary>
+      <div class="body">
+        {% for s in spec.steps %}<p class="small" style="margin-top:0">{{ s }}</p>{% endfor %}
+        <form method="post" action="{% url 'paper_action' a.publication_id %}">{% csrf_token %}
+          <input type="hidden" name="task_code" value="{{ code }}">
+          <input type="hidden" name="other" value="1">
+          <input type="hidden" name="expected_status" value="{{ a.status }}">
+          <div class="fields">
+            {% if "pid" in spec.fields %}<div><label>PID / DOI in the other repository</label><input type="text" name="pid" required></div>
+            <div><label>URL</label><input type="url" name="url" required></div>{% endif %}
+            <div><label>{{ spec.note_hint }}</label><textarea name="note" rows="2"{% if spec.buttons.0.needs_note %} required{% endif %}></textarea></div>
+          </div>
+          {% for b in spec.buttons %}<button class="btn {{ b.style }}" type="submit" name="choice" value="{{ b.choice }}"{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}>{{ b.label }}</button>{% endfor %}
+        </form>
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+</div>
+{% endblock %}

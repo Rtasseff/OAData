@@ -46,12 +46,12 @@ def _done_tick_assessment(archive: dict[str, Any]) -> str:
     return "folder empty but data not mandated — review"
 
 
-def generate_report(config: Config) -> Path:
-    """Generate a weekly report and return the file path."""
-    config.output_dir.mkdir(parents=True, exist_ok=True)
+def build_report(config: Config) -> str:
+    """The weekly report as Markdown text, from the current DB state.
+    Read-only — shared by ``generate_report`` (writes the file) and the
+    web UI (renders it live)."""
     now = _now()
     week_ago = (now - timedelta(days=7)).isoformat(timespec="seconds")
-    report_path = config.output_dir / "weekly_report.md"
 
     with db.get_connection(config.database) as conn:
         all_archives = db.get_all_archives(conn)
@@ -269,5 +269,12 @@ def generate_report(config: Config) -> Path:
     lines.append(f"- Total tracked: {len(all_archives)}")
     lines.append("")
 
-    report_path.write_text("\n".join(lines))
+    return "\n".join(lines)
+
+
+def generate_report(config: Config) -> Path:
+    """Generate a weekly report and return the file path."""
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = config.output_dir / "weekly_report.md"
+    report_path.write_text(build_report(config))
     return report_path

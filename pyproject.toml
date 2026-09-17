@@ -9,11 +9,17 @@ description = "CLI tool for tracking Open Access publication data archiving work
 requires-python = ">=3.12"
 dependencies = ["typer>=0.9", "pymysql>=1.1"]
 
+[project.optional-dependencies]
+web = ["django>=5.1,<6", "markdown>=3.5", "whitenoise>=6.6", "waitress>=3.0"]
+
 [project.scripts]
 oa = "oa_tracker.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+oa_web = ["templates/**/*.html", "static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

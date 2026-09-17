@@ -35,6 +35,11 @@ src/oa_tracker/
     emails.py        — generate email drafts from templates
     zenodo.py        — Zenodo InvenioRDM API client + metadata builder (Stages 2.5/3)
     auto.py          — unattended automation engine behind `oa auto` (cron entry point)
+src/oa_web/          — Django web UI (`oa web`; optional extras `.[web]`) — docs/web_ui.md
+    guide.py         — per-task-code operator wording + buttons (follows the SOP)
+    tracker.py       — service layer: reads via sheet.build_rows/report.build_report,
+                       writes via actions.apply_single with source="web:<user>"
+    views.py, urls.py, settings.py, templates/, static/
 tests/
     conftest.py      — shared fixtures (tmp_db, tmp_sharepoint, test_config)
     test_*.py        — one test file per module
@@ -51,6 +56,7 @@ docs/                    — see the "Documentation map" table in README.md
 - Operator never edits SQLite directly; all changes go through `action_sheet.tsv` → `oa apply`. New code paths and new input sources also route through the action sheet at the start (validation phase), then graduate to auto-apply once an operator has seen them behave correctly — see `feedback_no_auto_state_changes.md` in the memory store.
 - Promoted auto-apply classes run via `oa auto` (`auto.py`), gated per class in `[automation]`; every automatic action uses the same `apply_single` path with `source="auto"` in the audit log. Zenodo publish and disputed QC decisions are never automated.
 - Zenodo work targets the current InvenioRDM API (`/api/records`); the dataset's DOI is reserved at draft creation and the paper DOI only ever appears as an `ispublishedin` related identifier. Token in `~/.zenodorc` (never in the repo). Sandbox-first: `zenodo_env` on the archive pins which instance a draft lives on.
+- The web UI (`src/oa_web/`) is a thin layer: it never writes the tracker DB except through `oa_tracker.actions`, keeps Django's own tables in a separate `oa_web.sqlite`, and must keep the action sheet/CLI flow working unchanged. New task codes need an entry in `oa_web/guide.py` to be actionable on the web.
 - Applied action rows are moved to `action_history.tsv` and removed from the active sheet.
 - `string.Template` is used for email templates (`${placeholder}` syntax).
 - The scanner is read-only against the folder tree — it only observes, never modifies.
@@ -80,7 +86,7 @@ All tests use temporary directories and databases (via `tmp_path` fixtures). Tes
 
 ## Common Tasks
 
-- **Adding a new status or task code**: update `src/oa_tracker/status.py` (constants, `TRANSITIONS`, `TASK_CODES`, `next_task_for_status`), then update `tests/test_sheet.py` and `tests/test_actions.py`.
+- **Adding a new status or task code**: update `src/oa_tracker/status.py` (constants, `TRANSITIONS`, `TASK_CODES`, `next_task_for_status`), then update `tests/test_sheet.py` and `tests/test_actions.py`; add its wording/buttons to `src/oa_web/guide.py` (`SPECS`, `SHORT_LABELS`, and `STATUS_LABELS` for a status).
 - **Changing the DB schema**: update `_SCHEMA_SQL` in `src/oa_tracker/db.py` and bump `_SCHEMA_VERSION`.
 - **Modifying email templates**: edit files in `templates/`. Placeholders use `${name}` syntax.
 - **Adding a CLI command**: add to `src/oa_tracker/cli.py` using the Typer `@app.command()` pattern. Use lazy imports inside the function body.
