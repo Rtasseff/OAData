@@ -654,6 +654,7 @@ def reconcile_closed_rows(
 
 REQUEST_STATUS_PENDING = "Received — pending review"
 REQUEST_STATUS_PROCESSED = "Received — processed"
+REQUEST_STATUS_NOT_DONE = "Returned — not done yet (see our email)"
 
 # Exemption category → the concrete closure task code applied (after the
 # operator confirms). "needs_evidence" categories require PID + URL. Maps
@@ -826,6 +827,30 @@ def write_proposal_feedback(
     elif item.proposals:
         body[name_for[D_REQSTATUS]] = REQUEST_STATUS_PENDING
     client.request("PATCH", f"/sites/{site_id}/lists/{list_id}/items/{item.item_id}/fields", body)
+
+
+def untick_done(
+    client, site_id: str, list_id: str, name_for: dict[str, str], item: dict,
+) -> bool:
+    """Clear a row's "I think this is done" tick after a rejected done.
+
+    Re-stamps ``IngestedSig`` with the unticked signature in the same
+    PATCH, so the next pull doesn't read our own edit as a user change
+    (which would re-emit the row's other proposals). Also sets the
+    user-visible Request status. Returns False when the row wasn't ticked
+    (nothing written)."""
+    fields = dict(item.get("fields") or {})
+    done_col = name_for[D_PDONE]
+    if not _is_true(fields.get(done_col)):
+        return False
+    fields[done_col] = False
+    body: dict[str, Any] = {
+        done_col: False,
+        name_for[D_INGESTED]: user_signature(fields, name_for),
+        name_for[D_REQSTATUS]: REQUEST_STATUS_NOT_DONE,
+    }
+    client.request("PATCH", f"/sites/{site_id}/lists/{list_id}/items/{item['id']}/fields", body)
+    return True
 
 
 def load_settings(cfg: Config) -> SharePointSettings:

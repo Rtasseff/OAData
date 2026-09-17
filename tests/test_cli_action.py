@@ -287,3 +287,38 @@ def test_action_mandate_missing_acknowledges_with_note(test_config, tmp_path):
         a = get_archive(conn, "PUB505")
     assert a["status"] == OPEN_ACTIVE  # unchanged
     assert "investigated" in (a["notes"] or "")
+
+
+def test_set_data_contact_queues_assignment_notice_by_default(test_config, tmp_path):
+    from oa_tracker.db import get_pending_handover
+    _insert(test_config.database, "PUB316", OPEN_INACTIVE, data_contact_email="TBD")
+    cfg_file = _write_config(tmp_path, test_config)
+
+    result = runner.invoke(
+        app,
+        ["action", "PUB316", "set_data_contact",
+         "--email", "flopez@cicbiomagune.es", "--name", "Fernando López Gallego",
+         "--config", str(cfg_file)],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "handover_PUB316.eml" in result.stdout
+
+    with get_connection(test_config.database) as conn:
+        archive = get_archive(conn, "PUB316")
+        assert archive["data_contact_email"] == "flopez@cicbiomagune.es"
+        assert archive["next_reminder_at"] > "2026-01-19T00:00:00"  # clock restarted
+        assert get_pending_handover(conn, "PUB316")["note"] == ""
+
+
+def test_set_data_contact_no_notify_queues_nothing(test_config, tmp_path):
+    from oa_tracker.db import get_pending_handover
+    _insert(test_config.database, "PUB316", OPEN_INACTIVE, data_contact_email="TBD")
+    cfg_file = _write_config(tmp_path, test_config)
+    result = runner.invoke(
+        app,
+        ["action", "PUB316", "set_data_contact", "--email", "a@b.es",
+         "--no-notify", "--config", str(cfg_file)],
+    )
+    assert result.exit_code == 0, result.stdout
+    with get_connection(test_config.database) as conn:
+        assert get_pending_handover(conn, "PUB316") is None

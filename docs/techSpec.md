@@ -199,6 +199,22 @@ Zenodo API codes (v4 — the apply IS the API call; see
   `OPEN_ZENODO_PUBLISHED`; publishes, records `final_pid`/`final_url`.
   Never emitted by the automation engine — operator keystroke only.
 
+Operator-return additions (2026-09-17):
+
+* `reject_done` — `OPEN_INACTIVE`/`OPEN_ACTIVE` only; clears the Tracker
+  "done" tick when a `checks.REJECT_RULES` rule applies (reasons are
+  recomputed at apply time; stale rows are skipped). Queues the List
+  untick (`done_unticked` event once done) and the
+  `reject_done_<pub>.eml` draft.
+* `reject_done_sent` — records that the rejection email went out.
+* `closed_folder_removed` — `CLOSED_*` only; confirms the SharePoint
+  folder of an already-closed archive is gone (skipped while the folder
+  still exists). The scanner writes the same event on its own, and
+  `closed_folder_present` when it first sees such a folder.
+* `set_data_contact` now also queues the assignment notice by default
+  (`data_contact_handover` event), like the List-driven reassignment;
+  `--no-notify` skips it.
+
 The executable source of truth for codes and transitions is
 `TASK_CODES` / `TRANSITIONS` in `src/oa_tracker/status.py`.
 

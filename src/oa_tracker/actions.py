@@ -151,6 +151,19 @@ def _apply_row(
         result.applied += 1
         return (True, old_status, st.CLOSED_DATA_ARCHIVED)
 
+    # ── reject_done / closed_folder_removed: no status change ──
+    # Handled before the fast-track block — a stray PID on these rows
+    # must not promote the archive.
+    if task_code in ("reject_done", "closed_folder_removed"):
+        try:
+            st.validate_transition(old_status, task_code)
+        except ValueError as e:
+            result.errors.append(f"{row_label} ({pub_id}): {e}")
+            return (False, old_status, None)
+        if task_code == "reject_done":
+            return _apply_reject_done(conn, archive, note, now, source, result, row_label)
+        return _apply_closed_folder_removed(conn, archive, note, now, source, result, row_label)
+
     # ── done=1 with PID/URL: fast-track to OPEN_ZENODO_PUBLISHED ──
     if (pid or url) and task_code not in ("remind_sent", "qa_hold"):
         if _looks_like_paper_doi(pid):
@@ -318,8 +331,10 @@ def _apply_row(
     # completion_sent is the same idea for the completion/thank-you email:
     # the event records that the operator sent completion_<pub>.eml, which
     # stops the sheet row and draft from recurring for that archive.
+    # reject_done_sent does the same for reject_done_<pub>.eml.
     if task_code in (
         "qa_hold", "mandate_missing", "handover_sent", "completion_sent",
+        "reject_done_sent",
         "propose_data_contact", "propose_exemption", "propose_done", "user_note",
     ):
         extra: dict[str, Any] = {}
@@ -367,6 +382,89 @@ def _append_note(archive: dict, note: str, now: str) -> str:
     existing_notes = archive.get("notes") or ""
     separator = "\n" if existing_notes else ""
     return f"{existing_notes}{separator}[{now}] {note}"
+
+
+def _apply_reject_done(
+    conn: sqlite3.Connection,
+    archive: dict,
+    note: str,
+    now: str,
+    source: str,
+    result: ApplyResult,
+    row_label: str,
+) -> tuple[bool, str | None, str | None]:
+    """Turn down the data contact's Tracker 'done' tick.
+
+    The reasons are recomputed from the archive's current state (never
+    taken from the row), so a stale row whose folder has since filled up
+    is skipped instead of sending a wrong email. Clears ``user_done_flag``
+    and records a ``reject_done`` event (note = the reasons) — that event
+    queues both the List untick (next ``oa auto`` push) and the
+    ``reject_done_<pub>.eml`` draft with its ``reject_done_sent`` row.
+    """
+    from oa_tracker.checks import reject_reasons
+
+    pub_id = archive["publication_id"]
+    old_status = archive["status"]
+    reasons = reject_reasons(archive)
+    if not reasons:
+        result.warnings.append(
+            f"{row_label} ({pub_id}): skipping reject_done — the 'done' tick is "
+            "not set or no rejection rule applies any more"
+        )
+        result.skipped += 1
+        return (False, old_status, None)
+    reason_text = "; ".join(reasons)
+    db.upsert_archive(
+        conn, publication_id=pub_id,
+        user_done_flag=0, user_done_at=None,
+        notes=_append_note(
+            archive, note or f"Tracker 'done' tick rejected: {reason_text}", now
+        ),
+    )
+    db.insert_event(
+        conn, pub_id, "reject_done", old_status, old_status, source, note=reason_text,
+    )
+    result.applied += 1
+    return (True, old_status, old_status)
+
+
+def _apply_closed_folder_removed(
+    conn: sqlite3.Connection,
+    archive: dict,
+    note: str,
+    now: str,
+    source: str,
+    result: ApplyResult,
+    row_label: str,
+) -> tuple[bool, str | None, str | None]:
+    """Confirm a closed archive's SharePoint folder is gone (close-out done).
+
+    Checked against the local sync of the folder tree (read-only); while
+    the folder is still there the row is skipped with a warning — OneDrive
+    can lag a few minutes behind a delete on SharePoint, and the next scan
+    records the removal by itself anyway.
+    """
+    pub_id = archive["publication_id"]
+    old_status = archive["status"]
+    folder = Path(archive["folder_path"])
+    if folder.is_dir():
+        result.warnings.append(
+            f"{row_label} ({pub_id}): skipping closed_folder_removed — the folder "
+            f"still exists at {folder}; delete it on SharePoint first (the local "
+            "sync can take a few minutes to catch up)"
+        )
+        result.skipped += 1
+        return (False, old_status, None)
+    if note:
+        db.upsert_archive(conn, publication_id=pub_id,
+                          notes=_append_note(archive, note, now))
+    db.insert_event(
+        conn, pub_id, "closed_folder_removed", old_status, old_status, source,
+        note=note or "SharePoint folder removed; close-out complete",
+    )
+    result.applied += 1
+    return (True, old_status, old_status)
 
 
 def _confirm_zenodo_published(
@@ -628,7 +726,7 @@ def _archive_or_error(conn: sqlite3.Connection, pub_id: str, result: ApplyResult
 
 def set_data_contact(
     config: Config, pub_id: str, email: str, name: str | None = None,
-    *, source: str = "cli", queue_handover: bool = False,
+    *, source: str = "cli", queue_handover: bool = True,
 ) -> ApplyResult:
     """Override the data-contact name/email and mark it as operator-managed.
 
@@ -636,12 +734,22 @@ def set_data_contact(
     called (which clears the override flag, letting the next scan re-seed
     from the central corresponding-author lookup).
 
-    ``queue_handover=True`` (the auto-apply path) additionally records a
+    ``queue_handover=True`` (the default — both the List auto-apply path
+    and ``oa action ... set_data_contact``; ``--no-notify`` turns it off)
+    additionally records a
     ``data_contact_handover`` event whose note is the PREVIOUS contact's
     name — that event drives the handover notice: ``oa emails`` writes
     ``handover_<pub>.eml`` for the new contact and the action sheet emits a
     ``handover_sent`` row until the operator marks the notice sent.
+
+    Replacing a placeholder contact ('TBD') is a first assignment: the
+    previous name is left blank (the notice says "first assigned data
+    contact") and, while the author still owes the data, the reminder
+    clock restarts from now — reminders scheduled for nobody never went
+    out, so the new contact gets the full first-reminder window.
     """
+    from oa_tracker.checks import has_data_contact
+
     result = ApplyResult()
     if not email:
         result.errors.append("set_data_contact requires --email")
@@ -650,7 +758,10 @@ def set_data_contact(
         archive = _archive_or_error(conn, pub_id, result)
         if archive is None:
             return result
-        previous_name = (archive.get("data_contact_name") or "").strip()
+        first_assignment = not has_data_contact(archive)
+        previous_name = (
+            "" if first_assignment else (archive.get("data_contact_name") or "").strip()
+        )
         updates = {
             "publication_id": pub_id,
             "data_contact_email": email,
@@ -658,6 +769,12 @@ def set_data_contact(
         }
         if name is not None:
             updates["data_contact_name"] = name
+        if first_assignment and archive["status"] in (st.OPEN_INACTIVE, st.OPEN_ACTIVE):
+            updates["reminder_count"] = 0
+            updates["last_notified_at"] = None
+            updates["next_reminder_at"] = (
+                datetime.now() + timedelta(days=config.reminders.first_reminder_days)
+            ).isoformat(timespec="seconds")
         db.upsert_archive(conn, **updates)
         db.insert_event(
             conn, pub_id, "set_data_contact",
@@ -807,13 +924,14 @@ def apply_single(
     pid: str = "",
     url: str = "",
     note: str = "",
+    source: str = "cli",
 ) -> tuple[ApplyResult, str | None, str | None]:
     """Apply a single action to one archive, as invoked from the CLI.
 
     Runs the same per-row logic used by apply_actions, but without TSV
     parsing / history append / sheet rewriting. Returns the accumulated
     ApplyResult plus the (old_status, new_status) tuple so the caller
-    can report the transition.
+    can report the transition. ``source`` is recorded on the audit event.
     """
     result = ApplyResult()
     now = _now()
@@ -827,6 +945,6 @@ def apply_single(
     }
     with db.get_connection(config.database) as conn:
         _, old_status, new_status = _apply_row(
-            conn, row, now, config, "cli", result, "Action"
+            conn, row, now, config, source, result, "Action"
         )
     return result, old_status, new_status

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from oa_tracker import db, status as st
+from oa_tracker.checks import has_data_contact, reject_reasons
 from oa_tracker.config import Config
 
 SHEET_COLUMNS = [
@@ -230,6 +231,33 @@ def generate_sheet(config: Config) -> Path:
                     ),
                 ))
 
+            # A rejected Tracker 'done' tick owes the data contact an email
+            # — same recurring-until-sent shape as the handover row.
+            if db.get_pending_reject_notice(conn, pub_id) is not None:
+                rows.append(_row(
+                    archive, "reject_done_sent",
+                    st.TASK_CODES["reject_done_sent"]["description"],
+                    note=(
+                        f"'Done' tick rejected — send email_drafts/reject_done_{pub_id}.eml "
+                        "(regenerates until sent); done=1 records it as sent."
+                    ),
+                ))
+
+            # A 'done' tick that a rejection rule turns down (checks.py).
+            # With [automation] auto_reject_done on, `oa auto` applies this
+            # itself and the row only shows between runs.
+            reasons = reject_reasons(archive)
+            if reasons:
+                rows.append(_row(
+                    archive, "reject_done",
+                    st.TASK_CODES["reject_done"]["description"],
+                    note=(
+                        f"Tracker 'done' ticked but {'; '.join(reasons)}. done=1 "
+                        "unticks it on the Tracker (next oa auto run) and drafts "
+                        f"email_drafts/reject_done_{pub_id}.eml for the data contact."
+                    ),
+                ))
+
             # Mandate-missing and explicit no-OA archives produce a single
             # actionable row each — nothing else (no pipeline progression,
             # no reminders) until the operator addresses the situation.
@@ -358,7 +386,14 @@ def generate_sheet(config: Config) -> Path:
                 ) >= config.reminders.max_reminders - 1
                 task = "contact_pi_manual" if reached_max else "remind_sent"
                 reminder_note = ""
-                if reached_max:
+                if not has_data_contact(archive):
+                    reminder_note = (
+                        "No data contact on record — no email draft was made. Set one "
+                        f"first: oa action {pub_id} set_data_contact --email <email> "
+                        "--name <name> (drafts the assignment notice and "
+                        "restarts the reminder clock)."
+                    )
+                elif reached_max:
                     n = (archive.get("reminder_count") or 0) + 1
                     reminder_note = (
                         f"Past-due draft: email_drafts/reminder_{pub_id}_{n}"
@@ -371,6 +406,21 @@ def generate_sheet(config: Config) -> Path:
                     archive, task, st.TASK_CODES[task]["description"],
                     note=reminder_note,
                 ))
+
+        # Closed archives whose SharePoint folder still exists: the last
+        # manual close-out step. The scanner clears it once the folder is
+        # gone; done=1 records it straight away.
+        for archive in db.get_closed_archives(conn):
+            if db.get_pending_folder_cleanup(conn, archive["publication_id"]) is None:
+                continue
+            rows.append(_row(
+                archive, "closed_folder_removed",
+                st.TASK_CODES["closed_folder_removed"]["description"],
+                note=(
+                    f"Closed as {archive['status']} but the SharePoint folder still "
+                    "exists — delete it, then done=1 (the next scan also records it)."
+                ),
+            ))
 
     with open(sheet_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=SHEET_COLUMNS, delimiter="\t")

@@ -1541,3 +1541,29 @@ Stage 2 shipped (2026-05-11):
   set_zenodo_code/reset_zenodo_code`.
 - New weekly-report section: "Mandate Issues — confirm with PO/IT"
   plus inline mandate labels on per-archive entries.
+
+Operator-return round (2026-09-17):
+
+- **Rejected "done" ticks** — `checks.py` holds `REJECT_RULES` (today one
+  rule: done ticked on an empty folder, data-required mandate). A hit
+  becomes a `reject_done` sheet row + digest line; `done=1` clears the
+  tick, the next `oa auto` push unticks it on the List (re-stamping
+  `IngestedSig` so it isn't read back as a user edit) and `oa emails`
+  drafts `reject_done_<pub>.eml` with a `reject_done_sent` row. Gate
+  `[automation] auto_reject_done` (default **off** — validation phase;
+  flip once the rows look right). New rules = one function each.
+- **Closed-folder close-out** — exemption / `done=2` closures skip the
+  folder-removal step. The scanner now flags a closed archive whose folder
+  still exists (`closed_folder_present` event) and records its removal;
+  the sheet carries a `closed_folder_removed` row and the report/digest
+  list it until the folder is gone.
+- **Missing data contact** surfaced in the report and digest; no reminder
+  draft is written to a `TBD` placeholder. `oa action <pub>
+  set_data_contact ...` now queues the assignment notice by default
+  (`handover_<pub>.eml`; `--no-notify` skips it); replacing a placeholder
+  restarts the reminder clock.
+- Fixes: events logged on already-closed archives (e.g. `completion_sent`)
+  no longer re-open the completion-draft window or show as "Recently
+  Closed"; the report's "Reminders Due" lists author-owned statuses only.
+- Known and left as-is: a List reassignment naming the existing contact
+  still queues a (pointless) self-handover notice.

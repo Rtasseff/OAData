@@ -62,6 +62,24 @@ TASK_CODES = {
         "description": "Send completion email to the data contact (data archived)",
         "changes_status": False,
     },
+    # Turning down a Tracker "done" tick that can't be right (rules in
+    # checks.py). reject_done clears the tick (the List is unticked on the
+    # next `oa auto` run) and queues an email; reject_done_sent records
+    # that the operator sent it — mirrors data_contact_handover/handover_sent.
+    "reject_done": {
+        "description": "Reject the Tracker 'done' tick (untick it + email the data contact)",
+        "changes_status": False,
+    },
+    "reject_done_sent": {
+        "description": "Send the 'not done yet' email to the data contact",
+        "changes_status": False,
+    },
+    # Close-out for archives that closed while their folder still existed
+    # (exemptions, done=2): the SharePoint folder is deleted by hand.
+    "closed_folder_removed": {
+        "description": "Delete the SharePoint folder (archive already closed), then confirm",
+        "changes_status": False,
+    },
     "qa_pass": {
         "description": "Review uploaded data and approve QA",
         "changes_status": True,
@@ -249,9 +267,25 @@ def validate_transition(current_status: str, task_code: str) -> str:
             )
         return current_status
 
+    # reject_done only makes sense while the author still owes the data;
+    # closed_folder_removed is the close-out step AFTER an archive closed.
+    if task_code == "reject_done":
+        if current_status not in (OPEN_INACTIVE, OPEN_ACTIVE):
+            raise ValueError(
+                f"reject_done needs {OPEN_INACTIVE!r} or {OPEN_ACTIVE!r}, "
+                f"not {current_status!r}"
+            )
+        return current_status
+    if task_code == "closed_folder_removed":
+        if current_status not in CLOSED_STATUSES:
+            raise ValueError(
+                f"closed_folder_removed needs a CLOSED status, not {current_status!r}"
+            )
+        return current_status
+
     if task_code in (
         "remind_sent", "qa_hold", "contact_pi_manual", "mandate_missing",
-        "handover_sent", "completion_sent",
+        "handover_sent", "completion_sent", "reject_done_sent",
         "propose_data_contact", "propose_exemption", "propose_done", "user_note",
     ):
         return current_status

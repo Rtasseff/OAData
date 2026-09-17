@@ -706,3 +706,45 @@ def test_manuscript_inside_zip_does_not_count(test_config):
         a = get_archive(conn, "4009")
     assert a["package_has_zip"] == 1
     assert a["package_has_manuscript"] == 0
+
+
+# ── Closed archives whose folder is still on disk ────────────────────
+
+def _insert_closed(db_path, pub_id, folder, status="CLOSED_PUBLICATION_ONLY"):
+    with get_connection(db_path) as conn:
+        upsert_archive(
+            conn, publication_id=pub_id, folder_path=str(folder),
+            first_seen_at="2026-01-01T00:00:00", last_seen_at="2026-01-01T00:00:00",
+            status=status,
+        )
+
+
+def test_closed_archive_with_folder_flagged_once_then_cleared(test_config):
+    from oa_tracker.db import get_pending_folder_cleanup
+    folder = test_config.sharepoint_root / "3296"
+    folder.mkdir()
+    _insert_closed(test_config.database, "3296", folder)
+
+    result = scan_folders(test_config)
+    assert result.closed_folder_present == ["3296"]
+    assert "Closed, folder still present: 1" in result.summary
+    with get_connection(test_config.database) as conn:
+        assert get_pending_folder_cleanup(conn, "3296") is not None
+        # Still CLOSED — the scanner never reopens.
+        assert get_archive(conn, "3296")["status"] == "CLOSED_PUBLICATION_ONLY"
+
+    # Second scan with the folder still there: no duplicate flag.
+    assert scan_folders(test_config).closed_folder_present == []
+
+    folder.rmdir()
+    result = scan_folders(test_config)
+    assert result.closed_folder_removed == ["3296"]
+    with get_connection(test_config.database) as conn:
+        assert get_pending_folder_cleanup(conn, "3296") is None
+
+
+def test_closed_archive_without_folder_is_not_flagged(test_config):
+    _insert_closed(test_config.database, "3117", test_config.sharepoint_root / "3117",
+                   status="CLOSED_EXCEPTION")
+    result = scan_folders(test_config)
+    assert result.closed_folder_present == [] and result.closed_folder_removed == []

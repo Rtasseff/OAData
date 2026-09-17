@@ -133,6 +133,10 @@ class AutomationSettings:
     # OPEN_DB_UPDATED + folder gone from the tree + PID on record →
     # close as CLOSED_DATA_ARCHIVED (the folder_removed transition).
     auto_close_on_folder_removed: bool = True
+    # Tracker "done" tick that a checks.REJECT_RULES rule turns down (today:
+    # empty folder) → reject_done applied directly (untick + email draft).
+    # New path (2026-09-17): off = a reject_done row on the sheet instead.
+    auto_reject_done: bool = False
 
 
 @dataclass
@@ -253,5 +257,6 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
                 "auto_apply_user_notes", auto_defaults.auto_apply_user_notes),
             auto_close_on_folder_removed=auto_raw.get(
                 "auto_close_on_folder_removed", auto_defaults.auto_close_on_folder_removed),
+            auto_reject_done=auto_raw.get("auto_reject_done", auto_defaults.auto_reject_done),
         ),
     )

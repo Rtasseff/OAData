@@ -31,6 +31,7 @@ src/oa_tracker/
     sheet.py         — generate action_sheet.tsv from DB state
     actions.py       — parse TSV, validate transitions, apply to DB (incl. Zenodo API codes)
     report.py        — generate weekly_report.md
+    checks.py        — shared archive checks: done-tick REJECT_RULES, has_data_contact
     emails.py        — generate email drafts from templates
     zenodo.py        — Zenodo InvenioRDM API client + metadata builder (Stages 2.5/3)
     auto.py          — unattended automation engine behind `oa auto` (cron entry point)

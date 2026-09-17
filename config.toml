@@ -76,6 +76,12 @@ auto_apply_data_contact = true    # List "suggest a new data contact" applies di
 auto_apply_exemptions = true      # categorized exemptions with evidence apply directly
 auto_apply_user_notes = true      # List notes recorded to the archive automatically
 auto_close_on_folder_removed = true  # OPEN_DB_UPDATED + folder gone + PID → closed
+# Tracker "done" ticked but a rejection rule applies (today: the folder is
+# empty) → untick it on the List + draft reject_done_<pub>.eml. Added
+# 2026-09-17 and still in validation: false puts a reject_done row on the
+# action sheet instead (done=1 does the same thing). Flip to true once
+# the rows have looked right for a few weeks.
+auto_reject_done = false
 # NOTE: there is deliberately no auto_publish switch — publishing mints a
 # permanent DOI and always waits for the operator (sheet row `zenodo_publish`).
 

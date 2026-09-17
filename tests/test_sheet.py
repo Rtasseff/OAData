@@ -2,7 +2,7 @@
 
 import csv
 
-from oa_tracker.db import get_connection, upsert_archive
+from oa_tracker.db import get_connection, insert_event, upsert_archive
 from oa_tracker.sheet import generate_sheet
 from oa_tracker.status import (
     OPEN_ACTIVE,
@@ -16,6 +16,7 @@ from oa_tracker.status import (
 
 
 def _insert(db_path, pub_id, status, **kwargs):
+    kwargs.setdefault("data_contact_email", "dc@cicbiomagune.es")
     with get_connection(db_path) as conn:
         upsert_archive(
             conn,
@@ -479,3 +480,69 @@ def test_no_handover_row_after_sent(test_config):
     path = generate_sheet(test_config)
     rows = _read_sheet(path)
     assert [r for r in rows if r["task_code"] == "handover_sent"] == []
+
+
+# ── Rejected done-ticks, missing contacts, closed-folder close-out ────
+
+def _done_ticked_empty(db_path, pub_id="PUB300", **over):
+    kw = dict(
+        user_done_flag=1, oa_data_required=1, oa_mandate_missing=0,
+        pub_db_last_refreshed_at="2026-01-15T00:00:00",
+    )
+    kw.update(over)
+    _insert(db_path, pub_id, OPEN_INACTIVE, **kw)
+
+
+def test_reject_done_row_for_done_tick_on_empty_folder(test_config):
+    _done_ticked_empty(test_config.database)
+    rows = [r for r in _read_sheet(generate_sheet(test_config)) if r["task_code"] == "reject_done"]
+    assert len(rows) == 1
+    assert "folder is still empty" in rows[0]["note"]
+    assert "reject_done_PUB300.eml" in rows[0]["note"]
+
+
+def test_no_reject_done_row_for_paper_only(test_config):
+    _done_ticked_empty(test_config.database, oa_data_required=0, oa_paper_required=1)
+    rows = _read_sheet(generate_sheet(test_config))
+    assert [r for r in rows if r["task_code"] == "reject_done"] == []
+
+
+def test_reject_done_sent_row_while_notice_pending(test_config):
+    _insert(test_config.database, "PUB300", OPEN_INACTIVE)
+    with get_connection(test_config.database) as conn:
+        insert_event(conn, "PUB300", "reject_done", OPEN_INACTIVE, OPEN_INACTIVE,
+                     "cli", note="the folder is empty")
+    rows = _read_sheet(generate_sheet(test_config))
+    sent = [r for r in rows if r["task_code"] == "reject_done_sent"]
+    assert len(sent) == 1 and "reject_done_PUB300.eml" in sent[0]["note"]
+    with get_connection(test_config.database) as conn:
+        insert_event(conn, "PUB300", "reject_done_sent", OPEN_INACTIVE, OPEN_INACTIVE, "cli")
+    rows = _read_sheet(generate_sheet(test_config))
+    assert [r for r in rows if r["task_code"] == "reject_done_sent"] == []
+
+
+def test_reminder_row_without_contact_says_set_one(test_config):
+    _insert(test_config.database, "PUB316", OPEN_INACTIVE,
+            data_contact_email="TBD", next_reminder_at="2020-01-01T00:00:00")
+    rows = [r for r in _read_sheet(generate_sheet(test_config)) if r["publication_id"] == "PUB316"]
+    assert len(rows) == 1
+    assert rows[0]["task_code"] == "remind_sent"
+    assert "No data contact on record" in rows[0]["note"]
+    assert "set_data_contact" in rows[0]["note"]
+
+
+def test_closed_folder_removed_row_while_folder_present(test_config):
+    _insert(test_config.database, "PUB296", "CLOSED_PUBLICATION_ONLY")
+    _insert(test_config.database, "PUB297", "CLOSED_PUBLICATION_ONLY")  # no flag → no row
+    with get_connection(test_config.database) as conn:
+        insert_event(conn, "PUB296", "closed_folder_present",
+                     "CLOSED_PUBLICATION_ONLY", "CLOSED_PUBLICATION_ONLY", "scanner")
+    rows = [r for r in _read_sheet(generate_sheet(test_config))
+            if r["task_code"] == "closed_folder_removed"]
+    assert [r["publication_id"] for r in rows] == ["PUB296"]
+    assert rows[0]["current_status"] == "CLOSED_PUBLICATION_ONLY"
+    with get_connection(test_config.database) as conn:
+        insert_event(conn, "PUB296", "closed_folder_removed",
+                     "CLOSED_PUBLICATION_ONLY", "CLOSED_PUBLICATION_ONLY", "scanner")
+    rows = _read_sheet(generate_sheet(test_config))
+    assert [r for r in rows if r["task_code"] == "closed_folder_removed"] == []

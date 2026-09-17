@@ -348,3 +348,98 @@ def test_auto_qc_mismatch_missing_manuscript(zen_config):
     with db.get_connection(zen_config.database) as conn:
         assert db.get_archive(conn, "3290")["status"] == st.OPEN_ACTIVE
     assert any("manuscript (.doc/.docx/.pdf)" in m for m in result.mismatches)
+
+
+# ── Rejected Tracker 'done' ticks ────────────────────────────────────
+
+def test_rejected_done_routes_to_sheet_when_gate_off(zen_config):
+    assert zen_config.automation.auto_reject_done is False  # validation-phase default
+    _seed(zen_config, pub_id="3259", status=st.OPEN_INACTIVE, user_done_flag=1)
+    result = auto.AutoRunResult(started_at=NOW)
+    auto._advance(zen_config, result)
+    assert any(m.startswith("3259: user says done but the publication folder is still empty")
+               for m in result.mismatches)
+    with db.get_connection(zen_config.database) as conn:
+        assert db.get_archive(conn, "3259")["user_done_flag"] == 1
+        assert db.get_last_event(conn, "3259", "reject_done") is None
+
+
+def test_rejected_done_applied_when_gate_on(zen_config):
+    zen_config.automation.auto_reject_done = True
+    _seed(zen_config, pub_id="3259", status=st.OPEN_INACTIVE, user_done_flag=1)
+    result = auto.AutoRunResult(started_at=NOW)
+    auto._advance(zen_config, result)
+    assert not result.errors
+    assert any("3259: 'done' tick rejected" in m for m in result.auto_applied)
+    with db.get_connection(zen_config.database) as conn:
+        assert db.get_archive(conn, "3259")["user_done_flag"] == 0
+        ev = db.get_last_event(conn, "3259", "reject_done")
+        assert ev["source"] == "auto"
+    assert any("reject_done_3259.eml" in w for w in result.awaiting_operator)
+    # Next run: tick already cleared → nothing more to reject.
+    again = auto.AutoRunResult(started_at=NOW)
+    auto._advance(zen_config, again)
+    assert not any("rejected" in m for m in again.auto_applied)
+
+
+def test_worklist_flags_missing_contact_and_closed_folder(zen_config):
+    _seed(zen_config, pub_id="3316", status=st.OPEN_INACTIVE, data_contact_email="TBD")
+    _seed(zen_config, pub_id="3296", status=st.CLOSED_PUBLICATION_ONLY)
+    with db.get_connection(zen_config.database) as conn:
+        db.insert_event(conn, "3296", "closed_folder_present",
+                        st.CLOSED_PUBLICATION_ONLY, st.CLOSED_PUBLICATION_ONLY, "scanner")
+    result = auto.AutoRunResult(started_at=NOW)
+    auto._advance(zen_config, result)
+    assert any(w.startswith("3316: no data contact on record") for w in result.awaiting_operator)
+    assert any(w.startswith("3296: closed (CLOSED_PUBLICATION_ONLY) but its SharePoint folder")
+               for w in result.awaiting_operator)
+
+
+def test_untick_rejected_clears_list_tick_once(zen_config):
+    from oa_tracker import sharepoint as sp_mod
+    from oa_tracker.config import SharePointSettings
+    from tests.test_sharepoint import SID, FakeGraph
+
+    g = FakeGraph()
+    lid, _, name_for = sp_mod.ensure_list(g, SID, SharePointSettings())
+    done_col = name_for[sp_mod.D_PDONE]
+    g.lists[lid]["items"]["I1"] = {"id": "I1", "fields": {
+        name_for[sp_mod.D_PUBID]: "3259", done_col: True,
+    }}
+    _seed(zen_config, pub_id="3259", status=st.OPEN_INACTIVE)
+    with db.get_connection(zen_config.database) as conn:
+        db.insert_event(conn, "3259", "reject_done", st.OPEN_INACTIVE,
+                        st.OPEN_INACTIVE, "cli", note="the folder is empty")
+
+    items = sp_mod.fetch_items(g, SID, lid, name_for[sp_mod.D_PUBID])
+    unticked, errors = auto.untick_rejected(zen_config, g, SID, lid, name_for, items)
+    assert unticked == ["3259"] and errors == []
+    fields = g.lists[lid]["items"]["I1"]["fields"]
+    assert fields[done_col] is False
+    assert fields[name_for[sp_mod.D_REQSTATUS]] == sp_mod.REQUEST_STATUS_NOT_DONE
+    # Our own edit doesn't read back as a user change on the next pull.
+    assert sp_mod.pull_proposals([g.lists[lid]["items"]["I1"]], name_for) == []
+    with db.get_connection(zen_config.database) as conn:
+        assert db.get_pending_untick(conn, "3259") is None
+
+    # Nothing pending any more → no second PATCH.
+    items = sp_mod.fetch_items(g, SID, lid, name_for[sp_mod.D_PUBID])
+    assert auto.untick_rejected(zen_config, g, SID, lid, name_for, items) == ([], [])
+
+
+def test_untick_rejected_records_when_row_already_clear(zen_config):
+    """A pending untick whose List row isn't ticked (or isn't on the List)
+    is closed out without a PATCH so it doesn't retry forever."""
+    _seed(zen_config, pub_id="3259", status=st.OPEN_INACTIVE)
+    with db.get_connection(zen_config.database) as conn:
+        db.insert_event(conn, "3259", "reject_done", st.OPEN_INACTIVE,
+                        st.OPEN_INACTIVE, "cli", note="x")
+
+    class NoCalls:
+        def request(self, *a, **k):
+            raise AssertionError("no Graph call expected")
+
+    unticked, errors = auto.untick_rejected(zen_config, NoCalls(), "S", "L", {}, {})
+    assert unticked == [] and errors == []
+    with db.get_connection(zen_config.database) as conn:
+        assert db.get_pending_untick(conn, "3259") is None

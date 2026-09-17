@@ -131,6 +131,11 @@ def action(
     email: str = typer.Option("", "--email", help="Email for set_data_contact"),
     name: str = typer.Option("", "--name", help="Name for set_data_contact"),
     code: str = typer.Option("", "--code", help="Code for set_zenodo_code"),
+    notify: bool = typer.Option(
+        True, "--notify/--no-notify",
+        help="set_data_contact only: draft the assignment notice for the new contact "
+             "(handover_<pub>.eml + a handover_sent sheet row). On by default.",
+    ),
     config: Optional[str] = ConfigOption,
     db: Optional[str] = DbOption,
 ):
@@ -169,8 +174,13 @@ def action(
     # Dispatch operator-override task codes to their dedicated handlers.
     if task_code in st.OVERRIDE_TASK_CODES:
         if task_code == "set_data_contact":
-            result = set_data_contact(cfg, pub_id, email=email, name=(name or None))
+            result = set_data_contact(cfg, pub_id, email=email, name=(name or None),
+                                      queue_handover=notify)
             ok_msg = f"Set data_contact on {pub_id}: {name or '?'} <{email}>"
+            if notify:
+                ok_msg += (f"\nAssignment notice queued: `oa emails` writes "
+                           f"handover_{pub_id}.eml; send it, then done=1 on the "
+                           "handover_sent row.")
         elif task_code == "reset_data_contact":
             result = reset_data_contact(cfg, pub_id)
             ok_msg = f"Reset data_contact override on {pub_id}; next scan will re-seed from the central DB."
@@ -429,8 +439,10 @@ def sharepoint_sync(
     import json
     from datetime import datetime
     from oa_tracker import sharepoint as sp_mod
+    from oa_tracker.auto import untick_rejected
     from oa_tracker.db import (
-        get_archive, get_connection, get_open_archives, insert_event, upsert_archive,
+        get_archive, get_connection, get_open_archives, get_pending_untick,
+        insert_event, upsert_archive,
     )
     from oa_tracker.sheet import SHEET_COLUMNS, proposal_row
 
@@ -496,6 +508,9 @@ def sharepoint_sync(
             if arch is None:
                 continue
             new_flag = 1 if pi.proposed_done else 0
+            # A rejected tick still on the List is ours to clear, not a new "done".
+            if new_flag and get_pending_untick(conn, pi.pub_id) is not None:
+                new_flag = 0
             if (arch.get("user_done_flag") or 0) != new_flag:
                 upsert_archive(
                     conn, publication_id=pi.pub_id,
@@ -539,6 +554,13 @@ def sharepoint_sync(
     # Stamp IngestedSig (+ RequestStatus where actionable) so edits aren't re-emitted.
     for pi in pulled:
         sp_mod.write_proposal_feedback(client, site_id, list_id, name_for, pi)
+
+    # Clear the "done" tick on rows whose tick was rejected (reject_done).
+    unticked, untick_errors = untick_rejected(cfg, client, site_id, list_id, name_for, items)
+    if unticked:
+        typer.echo(f"Cleared rejected 'done' ticks: {', '.join(unticked)}")
+    for e in untick_errors:
+        typer.echo(f"Warning: {e}")
 
     # Reconcile rows whose archive closed since the last sync: relabel to the
     # closed status once ("show Done"), then remove on the following sync (or

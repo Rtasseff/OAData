@@ -1,0 +1,32 @@
+To: ${data_contact_name} <${data_contact_email}>
+Subject: Publication ${publication_id}: data deposit not complete yet
+
+Dear ${data_contact_name},
+
+Thank you for marking publication ${publication_id} ("${publication_title}") as done on the OA Archive Tracker. However, ${reject_reasons}, so we cannot process the deposit yet. We have unticked "I think this is done" on the Tracker for now.
+
+Please upload the data as described in the archiving protocol (linked below): a single ZIP of the datasets, a README.txt next to it, and a copy of the manuscript as .pdf or Word file (a pre-print version is fine). Once everything is in the folder, tick "I think this is done" again and we will take it from there.
+
+Current status: ${oa_status}
+Open Access requirements: ${flags}
+
+You can check the status and respond yourself in the OA Archive Tracker. It opens to the publications where you are the data contact:
+
+  OA Archive Tracker - ${tracker_url}
+
+Open the row for this publication and you can:
+  - upload your data (use the Folder link there to open its SharePoint folder),
+  - tell us you believe it is already done,
+  - propose an exemption (e.g. the data are archived elsewhere, there is no new data, or this is a collaboration biomaGUNE did not lead), or
+  - suggest a different data contact if someone else should handle it.
+
+Helpful links:
+  Data folder for this publication - ${sharepoint_folder_url}
+  Archiving protocol (SOP) - ${protocol_url}
+
+If you believe the deposit is already complete, or you uploaded the data somewhere else, just reply to this email and we will help.
+
+Best regards,
+${sender_name}
+${sender_title}
+CIC biomaGUNE

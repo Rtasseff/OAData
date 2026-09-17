@@ -80,6 +80,11 @@ def tmp_templates(tmp_path):
         "<${data_contact_email}>. ${handover_line} "
         "Status: ${oa_status}. Flags: ${flags}."
     )
+    (tpl_dir / "reject_done.txt").write_text(
+        "Not done: ${publication_id} to ${data_contact_name} "
+        "<${data_contact_email}>. However, ${reject_reasons}. "
+        "Tracker: ${tracker_url}. Protocol: ${protocol_url}."
+    )
     (tpl_dir / "zenodo_cheat.txt").write_text(
         "Cheat for ${publication_id} (${publication_title}). "
         "DOI: ${publication_doi}. Contact: ${data_contact_email}. "

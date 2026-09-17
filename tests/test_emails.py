@@ -31,6 +31,7 @@ def test_reminder_email_generated(test_config):
             became_active_at="2026-01-05T00:00:00",
             status=OPEN_ACTIVE,
             next_reminder_at="2020-01-01T00:00:00",  # past → due
+            data_contact_email="dc@cicbiomagune.es",
         )
 
     paths = generate_emails(test_config)
@@ -58,6 +59,7 @@ def test_past_due_reminder_at_manual_contact_stage(test_config):
             became_active_at="2026-01-05T00:00:00",
             status=OPEN_ACTIVE,
             next_reminder_at="2020-01-01T00:00:00",  # due
+            data_contact_email="dc@cicbiomagune.es",
             reminder_count=max_rem - 1,
         )
 
@@ -85,6 +87,7 @@ def test_past_due_reminder_keeps_regenerating_beyond_max(test_config):
             became_active_at="2026-01-05T00:00:00",
             status=OPEN_ACTIVE,
             next_reminder_at="2020-01-01T00:00:00",  # due
+            data_contact_email="dc@cicbiomagune.es",
             reminder_count=max_rem + 2,
         )
 
@@ -104,6 +107,7 @@ def test_normal_reminder_has_no_past_due_marker(test_config):
             became_active_at="2026-01-05T00:00:00",
             status=OPEN_ACTIVE,
             next_reminder_at="2020-01-01T00:00:00",
+            data_contact_email="dc@cicbiomagune.es",
             reminder_count=0,
         )
 
@@ -148,6 +152,7 @@ def test_both_reminder_and_completion(test_config):
             became_active_at="2026-01-05T00:00:00",
             status=OPEN_ACTIVE,
             next_reminder_at="2020-01-01T00:00:00",
+            data_contact_email="dc@cicbiomagune.es",
         )
         upsert_archive(
             conn,
@@ -172,6 +177,7 @@ def test_both_reminder_and_completion(test_config):
 
 def _enriched_archive(db_path, pub_id, status, **enrichment):
     enrichment.setdefault("pub_db_last_refreshed_at", "2026-05-07T00:00:00")
+    enrichment.setdefault("data_contact_email", "dc@cicbiomagune.es")
     with get_connection(db_path) as conn:
         upsert_archive(
             conn,
@@ -245,6 +251,7 @@ def test_legacy_archive_still_reminded(test_config):
             became_active_at="2026-01-05T00:00:00",
             status=OPEN_ACTIVE,
             next_reminder_at="2020-01-01T00:00:00",
+            data_contact_email="dc@cicbiomagune.es",
         )
     paths = generate_emails(test_config)
     assert any("reminder_LEGACY1" in p.name for p in paths)
@@ -626,3 +633,95 @@ def test_handover_draft_stops_after_sent(test_config):
                      OPEN_ACTIVE, OPEN_ACTIVE, "sheet", note=None)
     paths = generate_emails(test_config)
     assert [p for p in paths if "handover" in p.name] == []
+
+
+# ── No data contact → no reminder draft ──────────────────────────────
+
+def test_no_reminder_draft_without_data_contact(test_config):
+    """A 'TBD' placeholder has nobody to write to — no draft (the sheet row
+    and the digest ask the operator to set a contact instead)."""
+    with get_connection(test_config.database) as conn:
+        upsert_archive(
+            conn, publication_id="PUB316", folder_path="/tmp/pub316",
+            first_seen_at="2026-07-29T07:00:02", last_seen_at="2026-09-17T07:00:00",
+            status=OPEN_INACTIVE, data_contact_email="TBD",
+            next_reminder_at="2020-01-01T00:00:00",
+        )
+    paths = generate_emails(test_config)
+    assert all("PUB316" not in p.name for p in paths)
+
+
+# ── Rejected 'done' tick → "not done yet" notice ─────────────────────
+
+def _archive_with_rejection(db_path, reasons="the publication folder is still empty"):
+    from oa_tracker.db import insert_event
+    with get_connection(db_path) as conn:
+        upsert_archive(
+            conn, publication_id="PUB259", folder_path="/tmp/pub259",
+            first_seen_at="2026-04-20T15:33:29", last_seen_at="2026-09-17T07:00:00",
+            status=OPEN_INACTIVE,
+            data_contact_name="Lucía Cardo", data_contact_email="lcardo@cicbiomagune.es",
+        )
+        insert_event(conn, "PUB259", "reject_done", OPEN_INACTIVE, OPEN_INACTIVE,
+                     "cli", note=reasons)
+
+
+def test_reject_notice_draft_quotes_reasons(test_config):
+    _archive_with_rejection(test_config.database)
+    paths = [p for p in generate_emails(test_config) if "reject_done_PUB259" in p.name]
+    assert len(paths) == 1
+    content = paths[0].read_text()
+    assert "lcardo@cicbiomagune.es" in content
+    assert "However, the publication folder is still empty." in content
+    assert "Tracker: https://" in content and "Protocol: https://" in content
+    assert "${" not in content
+
+
+def test_reject_notice_draft_stops_after_sent(test_config):
+    from oa_tracker.db import insert_event
+    _archive_with_rejection(test_config.database)
+    with get_connection(test_config.database) as conn:
+        insert_event(conn, "PUB259", "reject_done_sent", OPEN_INACTIVE, OPEN_INACTIVE, "cli")
+    paths = generate_emails(test_config)
+    assert all("reject_done" not in p.name for p in paths)
+
+
+def test_real_reject_template_renders_cleanly(test_config):
+    """The shipped templates/reject_done.txt has no unfilled placeholders."""
+    import dataclasses
+    from pathlib import Path
+    real_templates = Path(__file__).resolve().parent.parent / "templates"
+    cfg = dataclasses.replace(test_config, template_dir=real_templates)
+    _archive_with_rejection(cfg.database)
+    paths = [p for p in generate_emails(cfg) if "reject_done_PUB259" in p.name]
+    assert len(paths) == 1
+    content = paths[0].read_bytes().decode("utf-8", errors="replace")
+    assert "${" not in content
+
+
+def test_completion_draft_not_regenerated_by_events_on_closed_archive(test_config):
+    """Regression (2026-09-17): recording completion_sent on an archive closed
+    weeks ago logged an event with new_status CLOSED_DATA_ARCHIVED, which
+    re-opened the 14-day window and re-created the (already sent) draft."""
+    from oa_tracker.db import insert_event
+    from oa_tracker.status import CLOSED_DATA_ARCHIVED
+    _insert_closed_archive(test_config.database, "PUB801", "10.5281/zenodo.112",
+                           "2026-07-24T13:24:28")
+    with get_connection(test_config.database) as conn:
+        insert_event(conn, "PUB801", "completion_sent",
+                     CLOSED_DATA_ARCHIVED, CLOSED_DATA_ARCHIVED, "cli")
+    paths = generate_emails(test_config)
+    assert all("completion_PUB801" not in p.name for p in paths)
+
+
+def test_completion_draft_skipped_when_already_sent(test_config):
+    from datetime import datetime, timedelta
+    from oa_tracker.db import insert_event
+    from oa_tracker.status import CLOSED_DATA_ARCHIVED
+    recent = (datetime.now() - timedelta(days=2)).isoformat(timespec="seconds")
+    _insert_closed_archive(test_config.database, "PUB802", "10.5281/zenodo.113", recent)
+    with get_connection(test_config.database) as conn:
+        insert_event(conn, "PUB802", "completion_sent",
+                     CLOSED_DATA_ARCHIVED, CLOSED_DATA_ARCHIVED, "cli")
+    paths = generate_emails(test_config)
+    assert all("completion_PUB802" not in p.name for p in paths)

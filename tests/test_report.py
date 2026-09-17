@@ -190,3 +190,64 @@ def test_report_inline_annotation_shows_mandate_label(test_config):
     content = path.read_text()
     # Annotation appears under New This Week / Newly Active entries
     assert "mandate: Open Data Required" in content
+
+
+def test_report_done_ticks_contacts_and_closed_folders(test_config):
+    with get_connection(test_config.database) as conn:
+        base = dict(first_seen_at=_days_ago(40), last_seen_at=_now_iso(),
+                    oa_data_required=1, oa_mandate_missing=0,
+                    pub_db_last_refreshed_at=_now_iso())
+        upsert_archive(conn, publication_id="3259", folder_path="/tmp/3259",
+                       status=OPEN_INACTIVE, user_done_flag=1,
+                       user_done_at="2026-07-13T17:41:37",
+                       data_contact_email="lcardo@cicbiomagune.es", **base)
+        upsert_archive(conn, publication_id="3194", folder_path="/tmp/3194",
+                       status=OPEN_ACTIVE, became_active_at=_days_ago(40),
+                       user_done_flag=1, package_has_zip=1, package_has_readme=1,
+                       package_has_manuscript=0,
+                       data_contact_email="pblesio@cicbiomagune.es", **base)
+        upsert_archive(conn, publication_id="3316", folder_path="/tmp/3316",
+                       status=OPEN_INACTIVE, data_contact_email="TBD", **base)
+        upsert_archive(conn, publication_id="3296", folder_path="/tmp/3296",
+                       status="CLOSED_PUBLICATION_ONLY", **base)
+        insert_event(conn, "3296", "closed_folder_present",
+                     "CLOSED_PUBLICATION_ONLY", "CLOSED_PUBLICATION_ONLY", "scanner")
+
+    content = generate_report(test_config).read_text()
+    done = content.split("## Tracker 'Done' Ticked — Needs Review")[1].split("##")[0]
+    assert "**3259**" in done and "reject — the publication folder is still empty" in done
+    assert "**3194**" in done and "missing manuscript" in done
+    contacts = content.split("## Missing Data Contact")[1].split("##")[0]
+    assert "**3316**" in contacts and "**3259**" not in contacts
+    cleanup = content.split("## Closed — SharePoint Folder Still to Delete")[1].split("##")[0]
+    assert "**3296**" in cleanup
+
+
+def test_report_new_sections_empty(test_config):
+    content = generate_report(test_config).read_text()
+    for heading in ("## Tracker 'Done' Ticked — Needs Review", "## Missing Data Contact",
+                    "## Closed — SharePoint Folder Still to Delete"):
+        assert content.split(heading)[1].split("##")[0].strip() == "_None_"
+
+
+def test_recently_closed_ignores_events_on_already_closed_archives(test_config):
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="3249", folder_path="/tmp/3249",
+                       first_seen_at=_days_ago(200), last_seen_at=_days_ago(60),
+                       status=CLOSED_DATA_ARCHIVED)
+        insert_event(conn, "3249", "completion_sent",
+                     CLOSED_DATA_ARCHIVED, CLOSED_DATA_ARCHIVED, "cli")
+    content = generate_report(test_config).read_text()
+    closed = content.split("## Recently Closed")[1].split("##")[0]
+    assert "3249" not in closed
+
+
+def test_reminders_due_lists_only_author_owned_statuses(test_config):
+    with get_connection(test_config.database) as conn:
+        for pid, status in (("3302", OPEN_ACTIVE), ("3194", "OPEN_ZENODO_DRAFT_CREATED")):
+            upsert_archive(conn, publication_id=pid, folder_path=f"/tmp/{pid}",
+                           first_seen_at=_days_ago(90), last_seen_at=_now_iso(),
+                           status=status, next_reminder_at=_days_ago(5))
+    content = generate_report(test_config).read_text()
+    due = content.split("## Reminders Due")[1].split("##")[0]
+    assert "**3302**" in due and "3194" not in due

@@ -11,6 +11,7 @@ from string import Template
 from typing import Any
 
 from oa_tracker import db, status as st
+from oa_tracker.checks import has_data_contact
 from oa_tracker.config import Config
 
 
@@ -340,6 +341,10 @@ def generate_emails(config: Config) -> list[Path]:
     handover_tpl = (
         Template(handover_tpl_path.read_text()) if handover_tpl_path.exists() else None
     )
+    reject_tpl_path = config.template_dir / "reject_done.txt"
+    reject_tpl = (
+        Template(reject_tpl_path.read_text()) if reject_tpl_path.exists() else None
+    )
 
     # Publications where the data contact already responded on the Tracker and
     # we haven't applied it yet — hold their reminders so we don't nag someone
@@ -365,6 +370,10 @@ def generate_emails(config: Config) -> list[Path]:
             # Hold the reminder if a Tracker response for this publication is
             # still awaiting operator review (see pending_response_pubs).
             if pub_id in pending:
+                continue
+            # No data contact (placeholder 'TBD') → nobody to write to; the
+            # sheet row and the digest ask the operator to set one.
+            if not has_data_contact(archive):
                 continue
             # Manual-contact stage (reminder_count at/past max): the action
             # sheet emits a contact_pi_manual row, and the draft here is the
@@ -424,16 +433,22 @@ def generate_emails(config: Config) -> list[Path]:
         cutoff = (datetime.now() - timedelta(days=_RECENT_CLOSURE_DAYS)).isoformat(
             timespec="seconds"
         )
+        # Only real transitions INTO the closed state count — events logged
+        # on an already-closed archive (completion_sent, folder close-out)
+        # carry new_status == old_status and must not restart the window.
         recent_close_events = db.get_recent_events(conn, cutoff)
         recently_closed_pubs = {
             e["publication_id"] for e in recent_close_events
             if e["new_status"] == st.CLOSED_DATA_ARCHIVED
+            and e["old_status"] != st.CLOSED_DATA_ARCHIVED
         }
         for archive in db.get_all_archives(conn, status_filter=st.CLOSED_DATA_ARCHIVED):
             if archive["publication_id"] not in recently_closed_pubs:
                 continue
             if not archive.get("final_pid"):
                 continue  # nothing to communicate to the data contact
+            if db.get_last_event(conn, archive["publication_id"], "completion_sent") is not None:
+                continue  # already sent
             _write_completion_draft(archive)
 
         # Handover notices — one per OPEN archive with a pending
@@ -459,6 +474,24 @@ def generate_emails(config: Config) -> list[Path]:
                 content = handover_tpl.safe_substitute(**vars_)
                 generated.extend(
                     _write_draft(drafts_dir / f"handover_{pub_id}", content, config)
+                )
+
+        # "Not done yet" notices — one per OPEN archive whose Tracker 'done'
+        # tick was rejected and whose email hasn't been marked sent. The
+        # reasons come from the reject_done event.
+        if reject_tpl is not None:
+            for archive in db.get_open_archives(conn):
+                pub_id = archive["publication_id"]
+                rejected = db.get_pending_reject_notice(conn, pub_id)
+                if rejected is None:
+                    continue
+                vars_ = _common_template_vars(archive, config)
+                vars_["reject_reasons"] = (rejected.get("note") or "").strip() or (
+                    "the deposit is not complete yet"
+                )
+                content = reject_tpl.safe_substitute(**vars_)
+                generated.extend(
+                    _write_draft(drafts_dir / f"reject_done_{pub_id}", content, config)
                 )
 
         # Zenodo cheat sheets — one per archive in any draft-stage status.

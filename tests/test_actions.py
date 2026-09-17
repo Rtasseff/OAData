@@ -931,17 +931,20 @@ def test_set_data_contact_queue_handover_records_previous_name(test_config):
         assert pending["source"] == "auto"
 
 
-def test_set_data_contact_cli_path_queues_no_handover(test_config):
-    """The plain CLI override (oa action set_data_contact) is unchanged —
-    no handover notice is queued unless explicitly requested."""
+def test_set_data_contact_queues_handover_by_default(test_config):
+    """Assigning a contact notifies them by default (operator decision
+    2026-09-17); queue_handover=False (CLI --no-notify) opts out."""
     from oa_tracker.db import get_pending_handover
     _insert_active_archive(test_config.database, "PUB001")
-    r = set_data_contact(test_config, "PUB001", email="new@biomagune.es",
-                         name="New Contact")
+    _insert_active_archive(test_config.database, "PUB002")
+    set_data_contact(test_config, "PUB001", email="new@biomagune.es", name="New Contact")
+    r = set_data_contact(test_config, "PUB002", email="new@biomagune.es",
+                         name="New Contact", queue_handover=False)
     assert r.applied == 1
 
     with get_connection(test_config.database) as conn:
-        assert get_pending_handover(conn, "PUB001") is None
+        assert get_pending_handover(conn, "PUB001") is not None
+        assert get_pending_handover(conn, "PUB002") is None
 
 
 def test_handover_sent_row_clears_pending(test_config):
@@ -1004,3 +1007,142 @@ def test_completion_sent_row_records_send(test_config):
         assert archive["status"] == OPEN_ZENODO_PUBLISHED  # untouched
         events = get_recent_events(conn, "2000-01-01T00:00:00")
         assert any(e["action_code"] == "completion_sent" for e in events)
+
+
+# ── Rejected Tracker 'done' ticks (reject_done / reject_done_sent) ────
+
+def _insert_done_ticked_empty(db_path, pub_id="PUB300", **over):
+    row = dict(
+        publication_id=pub_id, folder_path=f"/tmp/{pub_id}",
+        first_seen_at="2026-01-01T00:00:00", last_seen_at="2026-01-15T00:00:00",
+        status="OPEN_INACTIVE", user_done_flag=1, user_done_at="2026-07-13T17:41:37",
+        oa_data_required=1, oa_mandate_missing=0,
+        pub_db_last_refreshed_at="2026-01-15T00:00:00",
+        data_contact_name="Lucía Cardo", data_contact_email="lcardo@cicbiomagune.es",
+    )
+    row.update(over)
+    with get_connection(db_path) as conn:
+        upsert_archive(conn, **row)
+
+
+def test_reject_done_clears_tick_and_queues_notice(test_config):
+    from oa_tracker.actions import apply_single
+    from oa_tracker.db import get_pending_reject_notice, get_pending_untick
+    _insert_done_ticked_empty(test_config.database)
+    r, old_s, new_s = apply_single(test_config, "PUB300", "reject_done")
+    assert r.applied == 1 and not r.errors
+    assert old_s == new_s == "OPEN_INACTIVE"
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB300")
+        assert a["user_done_flag"] == 0 and a["user_done_at"] is None
+        assert "folder is still empty" in a["notes"]
+        notice = get_pending_reject_notice(conn, "PUB300")
+        assert notice is not None and "folder is still empty" in notice["note"]
+        assert get_pending_untick(conn, "PUB300") is not None
+
+
+def test_reject_done_skipped_when_no_rule_applies(test_config):
+    """Stale row: files arrived since the sheet was made — no rejection."""
+    from oa_tracker.actions import apply_single
+    _insert_done_ticked_empty(test_config.database, status=OPEN_ACTIVE)
+    r, _, _ = apply_single(test_config, "PUB300", "reject_done")
+    assert r.applied == 0 and r.skipped == 1 and not r.errors
+    assert any("no rejection rule applies" in w for w in r.warnings)
+    with get_connection(test_config.database) as conn:
+        assert get_archive(conn, "PUB300")["user_done_flag"] == 1
+
+
+def test_reject_done_refused_past_author_owned_status(test_config):
+    from oa_tracker.actions import apply_single
+    _insert_done_ticked_empty(test_config.database, status=OPEN_READY_FOR_ZENODO_DRAFT)
+    r, _, _ = apply_single(test_config, "PUB300", "reject_done")
+    assert r.applied == 0
+    assert any("reject_done needs" in e for e in r.errors)
+
+
+def test_reject_done_ignores_stray_pid(test_config):
+    """A PID on a reject_done row must not fast-track the archive."""
+    from oa_tracker.actions import apply_single
+    _insert_done_ticked_empty(test_config.database)
+    r, _, new_s = apply_single(test_config, "PUB300", "reject_done", pid="10.5281/zenodo.1")
+    assert r.applied == 1 and new_s == "OPEN_INACTIVE"
+
+
+def test_reject_done_sent_clears_pending_notice(test_config):
+    from oa_tracker.actions import apply_single
+    from oa_tracker.db import get_pending_reject_notice
+    _insert_done_ticked_empty(test_config.database)
+    apply_single(test_config, "PUB300", "reject_done")
+    r, _, new_s = apply_single(test_config, "PUB300", "reject_done_sent")
+    assert r.applied == 1 and new_s == "OPEN_INACTIVE"
+    with get_connection(test_config.database) as conn:
+        assert get_pending_reject_notice(conn, "PUB300") is None
+
+
+# ── Close-out for closed archives whose folder remained ───────────────
+
+def test_closed_folder_removed_skipped_while_folder_exists(test_config, tmp_path):
+    from oa_tracker.actions import apply_single
+    folder = tmp_path / "PUB400"
+    folder.mkdir()
+    _insert_active_archive(test_config.database, "PUB400", status="CLOSED_PUBLICATION_ONLY")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB400", folder_path=str(folder))
+    r, _, _ = apply_single(test_config, "PUB400", "closed_folder_removed")
+    assert r.applied == 0 and r.skipped == 1
+    assert any("still exists" in w for w in r.warnings)
+
+
+def test_closed_folder_removed_records_close_out(test_config, tmp_path):
+    from oa_tracker.actions import apply_single
+    from oa_tracker.db import get_pending_folder_cleanup, insert_event
+    _insert_active_archive(test_config.database, "PUB400", status="CLOSED_PUBLICATION_ONLY")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB400", folder_path=str(tmp_path / "gone"))
+        insert_event(conn, "PUB400", "closed_folder_present",
+                     "CLOSED_PUBLICATION_ONLY", "CLOSED_PUBLICATION_ONLY", "scanner")
+    r, old_s, new_s = apply_single(test_config, "PUB400", "closed_folder_removed")
+    assert r.applied == 1 and old_s == new_s == "CLOSED_PUBLICATION_ONLY"
+    with get_connection(test_config.database) as conn:
+        assert get_pending_folder_cleanup(conn, "PUB400") is None
+
+
+def test_closed_folder_removed_refused_on_open_archive(test_config):
+    from oa_tracker.actions import apply_single
+    _insert_active_archive(test_config.database, "PUB400")
+    r, _, _ = apply_single(test_config, "PUB400", "closed_folder_removed")
+    assert any("needs a CLOSED status" in e for e in r.errors)
+
+
+# ── First data-contact assignment (replacing the 'TBD' placeholder) ───
+
+def test_first_assignment_restarts_reminder_clock_and_blanks_previous(test_config):
+    from datetime import datetime
+    from oa_tracker.db import get_pending_handover
+    _insert_active_archive(test_config.database, "PUB500", status="OPEN_INACTIVE")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB500", data_contact_email="TBD",
+                       data_contact_name="Placeholder Name", reminder_count=1,
+                       next_reminder_at="2026-08-19T07:00:01")
+    r = set_data_contact(test_config, "PUB500", email="flopez@cicbiomagune.es",
+                         name="Fernando López Gallego", queue_handover=True)
+    assert r.applied == 1
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB500")
+        assert a["reminder_count"] == 0
+        due = datetime.fromisoformat(a["next_reminder_at"])
+        days = (due - datetime.now()).days
+        assert test_config.reminders.first_reminder_days - 1 <= days <= test_config.reminders.first_reminder_days
+        assert get_pending_handover(conn, "PUB500")["note"] == ""
+
+
+def test_reassignment_keeps_reminder_clock(test_config):
+    _insert_active_archive(test_config.database, "PUB501")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB501", data_contact_email="old@x.es",
+                       reminder_count=2)
+    set_data_contact(test_config, "PUB501", email="new@x.es", name="New")
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB501")
+        assert a["reminder_count"] == 2
+        assert a["next_reminder_at"] == "2026-01-19T00:00:00"

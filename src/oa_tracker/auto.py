@@ -11,6 +11,9 @@ recorded in the digest and the remaining stages still run):
    route everything else to ``sharepoint_proposals.tsv`` for the operator
    exactly as before.
 3. **Advance** archives:
+   - rejected done-ticks: a Tracker "done" that a ``checks.REJECT_RULES``
+     rule turns down (e.g. empty folder) → ``reject_done`` when
+     ``auto_reject_done`` is on, else a sheet row + digest line;
    - auto-QC: OPEN_ACTIVE + Tracker "done" + detected package
      (``.zip`` + ``README.txt``) + data-required mandate → ``qa_pass``;
    - Zenodo: READY archives get a draft (metadata + reserved DOI) and the
@@ -18,7 +21,8 @@ recorded in the digest and the remaining stages still run):
      operator-confirmed;
    - closure: OPEN_DB_UPDATED + folder gone + PID on record →
      ``folder_removed`` (CLOSED_DATA_ARCHIVED).
-4. **Push** fresh statuses back to the List (+ closed-row reconcile).
+4. **Push** fresh statuses back to the List (+ closed-row reconcile), and
+   untick the List's "done" for every rejected tick not yet cleared.
 
 Everything applied automatically goes through the same ``apply_single``
 path the operator uses, with ``source="auto"`` in the audit log, and is
@@ -39,6 +43,7 @@ from datetime import datetime
 from pathlib import Path
 
 from oa_tracker import db, status as st
+from oa_tracker.checks import has_data_contact, reject_reasons
 from oa_tracker.config import Config
 
 
@@ -111,6 +116,10 @@ def _pull_sharepoint(config: Config, result: AutoRunResult) -> _SpContext | None
             if arch is None:
                 continue
             new_flag = 1 if pi.proposed_done else 0
+            # A rejected tick still showing on the List (untick pending) is
+            # our own leftover, not a fresh "done" — keep the flag cleared.
+            if new_flag and db.get_pending_untick(conn, pi.pub_id) is not None:
+                new_flag = 0
             if (arch.get("user_done_flag") or 0) != new_flag:
                 db.upsert_archive(
                     conn, publication_id=pi.pub_id,
@@ -242,6 +251,13 @@ def _push_sharepoint(config: Config, ctx: _SpContext, result: AutoRunResult) -> 
     open_ids = {a["publication_id"] for a in archives}
     items = sp_mod.fetch_items(ctx.client, ctx.site_id, ctx.list_id,
                                ctx.name_for[sp_mod.D_PUBID])
+    unticked, untick_errors = untick_rejected(
+        config, ctx.client, ctx.site_id, ctx.list_id, ctx.name_for, items,
+    )
+    result.auto_applied.extend(
+        f"{pid}: 'done' tick cleared on the Tracker (rejected)" for pid in unticked
+    )
+    result.errors.extend(untick_errors)
     non_open = [pid for pid in items if pid not in open_ids]
     archive_by_id: dict = {}
     if non_open:
@@ -253,6 +269,41 @@ def _push_sharepoint(config: Config, ctx: _SpContext, result: AutoRunResult) -> 
         archive_by_id, now,
     )
     result.errors.extend(rec.warnings)
+
+
+def untick_rejected(
+    config: Config, client, site_id: str, list_id: str,
+    name_for: dict, items: dict,
+) -> tuple[list[str], list[str]]:
+    """Clear the List "done" tick for every ``reject_done`` not yet
+    followed by a ``done_unticked`` event. ``items`` is PubId → fetched
+    list item. Returns ``(unticked_pub_ids, errors)``; a failed PATCH stays
+    pending and is retried on the next run."""
+    from oa_tracker import sharepoint as sp_mod
+
+    unticked: list[str] = []
+    errors: list[str] = []
+    with db.get_connection(config.database) as conn:
+        for a in db.get_open_archives(conn):
+            pub_id = a["publication_id"]
+            if db.get_pending_untick(conn, pub_id) is None:
+                continue
+            item = items.get(pub_id)
+            try:
+                changed = item is not None and sp_mod.untick_done(
+                    client, site_id, list_id, name_for, item,
+                )
+            except Exception as e:
+                errors.append(f"{pub_id}: could not clear the Tracker 'done' tick: {e}")
+                continue
+            db.insert_event(
+                conn, pub_id, "done_unticked", a["status"], a["status"], "sharepoint",
+                note=("Tracker 'done' tick cleared after rejection" if changed
+                      else "rejected tick was already clear on the Tracker"),
+            )
+            if changed:
+                unticked.append(pub_id)
+    return unticked, errors
 
 
 # ── Stage 3: advance archives ────────────────────────────────────────
@@ -299,10 +350,41 @@ def _advance(config: Config, result: AutoRunResult) -> None:
                 else:
                     result.errors.extend(r.errors)
 
-    # 3b. Auto-QC: Tracker "done" + package + data-required mandate.
+    # 3b. Rejected done-ticks: a rule in checks.REJECT_RULES says the tick
+    # can't be right. Handled here and skipped by auto-QC below.
+    rejected: set[str] = set()
+    for a in archives:
+        reasons = reject_reasons(a)
+        if not reasons:
+            continue
+        pub_id = a["publication_id"]
+        rejected.add(pub_id)
+        why = "; ".join(reasons)
+        if gates.auto_reject_done:
+            r, _, _ = apply_single(
+                config, pub_id, "reject_done", done=1, source="auto",
+                note=f"[auto] Tracker 'done' tick rejected: {why}",
+            )
+            if r.applied and not r.errors:
+                result.auto_applied.append(
+                    f"{pub_id}: 'done' tick rejected ({why}) — send "
+                    f"email_drafts/reject_done_{pub_id}.eml via the sheet's "
+                    "reject_done_sent row"
+                )
+            else:
+                result.errors.extend(r.errors)
+        else:
+            result.mismatches.append(
+                f"{pub_id}: user says done but {why} — reject_done row on the "
+                "sheet (done=1 unticks it on the Tracker and drafts the email)"
+            )
+
+    # 3c. Auto-QC: Tracker "done" + package + data-required mandate.
     if gates.auto_qa_pass:
         for a in archives:
             if a["status"] != st.OPEN_ACTIVE or not a.get("user_done_flag"):
+                continue
+            if a["publication_id"] in rejected:
                 continue
             if package_complete(a) and _data_required(a):
                 r, old_s, new_s = apply_single(
@@ -344,7 +426,7 @@ def _advance(config: Config, result: AutoRunResult) -> None:
                 "Tracker 'done' tick — QA manually or wait for confirmation"
             )
 
-    # 3c. Zenodo drafts + uploads for READY archives.
+    # 3d. Zenodo drafts + uploads for READY archives.
     if config.zenodo.enabled and gates.auto_zenodo_draft:
         with db.get_connection(config.database) as conn:
             ready = db.get_all_archives(conn, status_filter=st.OPEN_READY_FOR_ZENODO_DRAFT)
@@ -376,7 +458,7 @@ def _advance(config: Config, result: AutoRunResult) -> None:
             else:
                 result.errors.extend(r.errors or [f"{pub_id}: draft creation did not apply"])
 
-    # 3d. Retry uploads for drafts created earlier whose upload never
+    # 3e. Retry uploads for drafts created earlier whose upload never
     # succeeded (idempotent — checksummed against the draft's files).
     if config.zenodo.enabled and gates.auto_zenodo_upload:
         with db.get_connection(config.database) as conn:
@@ -432,6 +514,24 @@ def _advance(config: Config, result: AutoRunResult) -> None:
                 result.awaiting_operator.append(
                     f"{pub_id}: DB updated — remove the SharePoint folder "
                     "(auto-closes on the next run)"
+                )
+            if s in (st.OPEN_INACTIVE, st.OPEN_ACTIVE) and not has_data_contact(a):
+                result.awaiting_operator.append(
+                    f"{pub_id}: no data contact on record — nobody gets reminders; "
+                    f"set one: oa action {pub_id} set_data_contact --email <email> "
+                    "--name <name>"
+                )
+            if db.get_pending_reject_notice(conn, pub_id) is not None:
+                result.awaiting_operator.append(
+                    f"{pub_id}: send email_drafts/reject_done_{pub_id}.eml "
+                    "('done' tick rejected), then reject_done_sent"
+                )
+        for a in db.get_closed_archives(conn):
+            if db.get_pending_folder_cleanup(conn, a["publication_id"]) is not None:
+                result.awaiting_operator.append(
+                    f"{a['publication_id']}: closed ({a['status']}) but its SharePoint "
+                    "folder still exists — delete it to finish the close-out "
+                    "(recorded on the next run, or closed_folder_removed on the sheet)"
                 )
 
 

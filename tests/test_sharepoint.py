@@ -546,3 +546,27 @@ def test_pulled_archived_elsewhere_closes_data_archived_via_apply(test_config):
         a = get_archive(conn, "3001")
         assert a["status"] == "CLOSED_DATA_ARCHIVED"
         assert a["final_pid"] == "10.5061/dryad.x"
+
+
+# ── Untick after a rejected done ─────────────────────────────────────
+
+def test_untick_done_clears_tick_and_restamps_signature():
+    from oa_tracker.sharepoint import D_PDONE, REQUEST_STATUS_NOT_DONE, untick_done
+    g = FakeGraph()
+    lid, _, name_for = ensure_list(g, SID, SharePointSettings())
+    item = _item(pub_id="3259", ingested="old", ProposedDone=True, UserNotes="hi")
+    g.lists[lid]["items"]["I1"] = item
+    assert untick_done(g, SID, lid, name_for, item) is True
+    f = g.lists[lid]["items"]["I1"]["fields"]
+    assert f[name_for[D_PDONE]] is False
+    assert f[name_for[D_REQSTATUS]] == REQUEST_STATUS_NOT_DONE
+    assert f[name_for[D_INGESTED]] == user_signature(f, name_for)
+
+
+def test_untick_done_noop_when_not_ticked():
+    from oa_tracker.sharepoint import untick_done
+    g = FakeGraph()
+    lid, _, name_for = ensure_list(g, SID, SharePointSettings())
+    calls_before = len(g.calls)
+    assert untick_done(g, SID, lid, name_for, _item(pub_id="3259")) is False
+    assert len(g.calls) == calls_before

@@ -171,9 +171,13 @@ the SharePoint folder) → closes as `CLOSED_DATA_ARCHIVED`.
 | `contact_pi_manual` | MAX reminder reached; manually contact PI | *(see "Final reminder" below)* |
 | `handover_sent` | Send handover notice to the new data contact | *(no status change; clears the pending handover — see §8.1b)* |
 | `completion_sent` | Send completion email to the data contact (data archived) | *(no status change; recurs while the archive is published-and-open until `done=1` logs it as sent)* |
+| `reject_done` | Reject the Tracker 'done' tick (untick it + email the data contact) | *(no status change; see §8.1b — only offered when a rejection rule applies, e.g. the folder is empty)* |
+| `reject_done_sent` | Send the 'not done yet' email to the data contact | *(no status change; recurs until `done=1` after `reject_done`)* |
 | `close_publication_only` | Close as publication-only (no data deposit needed) | `CLOSED_PUBLICATION_ONLY` |
 | `close_exception` | Close with exception (add note explaining why) | `CLOSED_EXCEPTION` |
 | `mandate_missing` | Confirm with PO/IT — mandate could not be derived | *(no status change; see §8.7)* |
+
+One row applies to a **closed** archive: `closed_folder_removed` ("Delete the SharePoint folder (archive already closed), then confirm"). Exemption and `done=2` closures skip the folder-removal step, so the scanner flags a closed archive whose folder still exists; delete the folder in SharePoint, then `done=1` (skipped with a warning while the local sync still shows the folder — the next scan records the removal by itself either way). Until then the archive is listed under "Closed — SharePoint Folder Still to Delete" in the report and in the digest's operator worklist.
 
 ### Stage-2 mandate-aware behavior
 
@@ -220,7 +224,14 @@ oa action <pub_id> reset_zenodo_code
 ```
 
 `set_*` marks the field as operator-managed; the next scan does not
-overwrite it. `reset_*` clears that flag so the next scan re-seeds
+overwrite it. `set_data_contact` also drafts the assignment notice for
+the new contact (`handover_<pub>.eml` + a `handover_sent` row) — add
+`--no-notify` to skip it (e.g. when correcting a typo in an address). When the
+previous contact was the `TBD` placeholder, the notice reads "first
+assigned data contact" and the reminder clock restarts (first reminder
+`first_reminder_days` from now). Archives with no data contact get no
+reminder drafts; the report ("Missing Data Contact") and the digest list
+them. `reset_*` clears that flag so the next scan re-seeds
 from the central DB (corresponding author for the data contact, or
 the Zenodo record code if the central DB lists Zenodo as the
 repository). Each writes an event to the audit log with `source="cli"`.
@@ -359,7 +370,18 @@ unattended and advances what it safely can:
    `handover_sent` row (with the file path in its note) until you send
    the email and mark the row `done=1`. The digest lists both the
    reassignment and the drafted notice.
-3. Advance — auto-QC (done tick + complete package incl. manuscript +
+3. Advance — rejected done-ticks first: when a rule in
+   `src/oa_tracker/checks.py` says the "done" tick can't be right (today:
+   the folder is still empty on a data-required publication), the sheet
+   gets a `reject_done` row and the digest says so. `done=1` clears the
+   tick; the next `oa auto` run unticks it on the List (Request status
+   "Returned — not done yet") and `oa emails` drafts
+   `reject_done_<pub>.eml` (the reasons + protocol/Tracker/folder links)
+   with a `reject_done_sent` row. With `[automation] auto_reject_done =
+   true` the engine does this without the row (still off while the path
+   is being validated). The weekly report lists every open done-tick
+   under "Tracker 'Done' Ticked — Needs Review". Then auto-QC (done tick
+   + complete package incl. manuscript +
    data-required mandate → `qa_pass`), then Zenodo draft with reserved
    DOI + package upload (stops at `OPEN_ZENODO_DRAFT_CREATED`), and
    closure of `OPEN_DB_UPDATED` archives whose folder you already

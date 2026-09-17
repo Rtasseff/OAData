@@ -234,6 +234,14 @@ def get_open_archives(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def get_closed_archives(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Return all archives with CLOSED status."""
+    rows = conn.execute(
+        "SELECT * FROM archives WHERE status LIKE 'CLOSED_%' ORDER BY publication_id"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_reminders_due(conn: sqlite3.Connection, now: str | None = None) -> list[dict[str, Any]]:
     """Return archives where a reminder is due."""
     now = now or _now()
@@ -256,13 +264,46 @@ def get_pending_handover(
     carries the PREVIOUS contact's name (may be empty for a first
     assignment) — the handover email names who handed over.
     """
-    handover = get_last_event(conn, publication_id, "data_contact_handover")
-    if handover is None:
+    return get_pending_event(conn, publication_id, "data_contact_handover", "handover_sent")
+
+
+def get_pending_event(
+    conn: sqlite3.Connection, publication_id: str, opened_by: str, closed_by: str
+) -> dict[str, Any] | None:
+    """The latest ``opened_by`` event, unless a ``closed_by`` event was
+    recorded after it — the events-as-state pattern behind pending
+    handovers, rejected done-ticks and closed-folder clean-ups."""
+    opened = get_last_event(conn, publication_id, opened_by)
+    if opened is None:
         return None
-    sent = get_last_event(conn, publication_id, "handover_sent")
-    if sent is not None and sent["event_id"] > handover["event_id"]:
+    closed = get_last_event(conn, publication_id, closed_by)
+    if closed is not None and closed["event_id"] > opened["event_id"]:
         return None
-    return handover
+    return opened
+
+
+def get_pending_reject_notice(
+    conn: sqlite3.Connection, publication_id: str
+) -> dict[str, Any] | None:
+    """A ``reject_done`` event whose email hasn't been sent yet. Its note
+    carries the rejection reasons the email quotes."""
+    return get_pending_event(conn, publication_id, "reject_done", "reject_done_sent")
+
+
+def get_pending_untick(
+    conn: sqlite3.Connection, publication_id: str
+) -> dict[str, Any] | None:
+    """A ``reject_done`` event whose List tick hasn't been cleared yet."""
+    return get_pending_event(conn, publication_id, "reject_done", "done_unticked")
+
+
+def get_pending_folder_cleanup(
+    conn: sqlite3.Connection, publication_id: str
+) -> dict[str, Any] | None:
+    """A closed archive whose SharePoint folder the scanner still sees."""
+    return get_pending_event(
+        conn, publication_id, "closed_folder_present", "closed_folder_removed"
+    )
 
 
 def get_last_event(

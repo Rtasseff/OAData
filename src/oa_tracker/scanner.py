@@ -19,6 +19,8 @@ class ScanResult:
     changed: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
+    closed_folder_present: list[str] = field(default_factory=list)
+    closed_folder_removed: list[str] = field(default_factory=list)
     skipped_non_numeric: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -37,6 +39,14 @@ class ScanResult:
             parts.append(f"  Missing:        {len(self.missing)}")
         if self.unchanged:
             parts.append(f"  Unchanged:      {len(self.unchanged)}")
+        if self.closed_folder_present:
+            parts.append(
+                f"  Closed, folder still present: {len(self.closed_folder_present)}"
+            )
+        if self.closed_folder_removed:
+            parts.append(
+                f"  Closed, folder now removed:   {len(self.closed_folder_removed)}"
+            )
         if self.skipped_non_numeric:
             parts.append(
                 f"  Skipped (non-numeric folder names): {len(self.skipped_non_numeric)}"
@@ -408,6 +418,29 @@ def scan_folders(config: Config) -> ScanResult:
                         note="Folder not found during scan",
                     )
                     result.missing.append(pid)
+
+            # Closed archives whose folder is still on disk (closed by an
+            # exemption or done=2 before anyone deleted it): the close-out
+            # isn't finished until the SharePoint folder is gone. Flag it
+            # once; record the removal when the folder disappears.
+            for archive in db.get_closed_archives(conn):
+                pid = archive["publication_id"]
+                pending = db.get_pending_folder_cleanup(conn, pid) is not None
+                if pid in found_ids and not pending:
+                    db.insert_event(
+                        conn, pid, "closed_folder_present",
+                        archive["status"], archive["status"], "scanner",
+                        note="Archive is closed but its SharePoint folder still "
+                             "exists — delete it to finish the close-out",
+                    )
+                    result.closed_folder_present.append(pid)
+                elif pid not in found_ids and pending:
+                    db.insert_event(
+                        conn, pid, "closed_folder_removed",
+                        archive["status"], archive["status"], "scanner",
+                        note="SharePoint folder removed; close-out complete",
+                    )
+                    result.closed_folder_removed.append(pid)
     finally:
         if pub_conn is not None:
             try:
