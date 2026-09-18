@@ -8,6 +8,7 @@ An optional ``[web]`` section in it tunes the server:
     allowed_hosts = ["localhost", "127.0.0.1", "my-pc.cicbiomagune.es"]
     database = "./oa_web.sqlite"        # logins + sessions only
     pub_db_url_template = "https://intranet/.../{pub_id}"   # optional link
+    sharepoint_push = true               # push each changed row to the List at once
 """
 
 from __future__ import annotations
@@ -26,6 +27,10 @@ if OA_CONFIG_PATH.exists():
         _web = tomllib.load(_f).get("web", {})
 
 OA_PUB_DB_URL_TEMPLATE = _web.get("pub_db_url_template", "")
+# After a button press, push that paper's row to the SharePoint List in the
+# background (needs [sharepoint] enabled and a valid cached token). Off →
+# the List catches up at the next `oa auto` / `oa sharepoint sync`.
+OA_SHAREPOINT_PUSH = bool(_web.get("sharepoint_push", True))
 
 
 def _secret_key() -> str:

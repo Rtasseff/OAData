@@ -608,3 +608,42 @@ def test_untick_done_noop_when_not_ticked():
     calls_before = len(g.calls)
     assert untick_done(g, SID, lid, name_for, _item(pub_id="3259")) is False
     assert len(g.calls) == calls_before
+
+
+# ── Single-row push (web UI, after a button press) ───────────────────
+
+class _FakeClient(FakeGraph):
+    def get_site_id(self, site):
+        return SID
+
+    def resolve_users(self, site_id):
+        return {}
+
+
+def test_push_one_creates_then_relabels_then_removes(test_config, monkeypatch):
+    from oa_tracker import auto, sharepoint as sp_mod
+    from oa_tracker.actions import apply_single
+    from oa_tracker.db import get_connection, upsert_archive
+
+    g = _FakeClient()
+    monkeypatch.setattr(sp_mod, "GraphClient", lambda sp, interactive=True: g)
+    monkeypatch.setattr(sp_mod, "load_settings", lambda cfg: SharePointSettings())
+    lid, _, name_for = ensure_list(g, SID, SharePointSettings())
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="3001", folder_path="/t/3001",
+                       first_seen_at="2026-01-01T00:00:00",
+                       last_seen_at="2026-01-01T00:00:00", status="OPEN_ACTIVE")
+
+    assert auto.push_one(test_config, "3001") == "row created"
+    items = fetch_items(g, SID, lid, name_for[D_PUBID])
+    assert items["3001"]["fields"][name_for[D_STATUS]] == status_label("OPEN_ACTIVE")
+
+    apply_single(test_config, "3001", "qa_pass")
+    assert auto.push_one(test_config, "3001") == "row updated"
+    items = fetch_items(g, SID, lid, name_for[D_PUBID])
+    assert items["3001"]["fields"][name_for[D_STATUS]] == status_label("OPEN_READY_FOR_ZENODO_DRAFT")
+
+    apply_single(test_config, "3001", "close_exception", note="x")
+    assert auto.push_one(test_config, "3001") == "row relabelled as closed"
+    assert auto.push_one(test_config, "3001") == "closed row removed"
+    assert auto.push_one(test_config, "3001") == "no row on the List (already removed)"

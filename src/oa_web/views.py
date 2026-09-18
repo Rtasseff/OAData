@@ -120,6 +120,7 @@ def paper(request, pub_id: str):
         "show_folder": show_folder,
         "pub_db_url": tracker.pub_db_url(pub_id),
         "events": tracker.events_for(config, pub_id),
+        "last_push": tracker.LAST_PUSH.get(pub_id),
         "nav": "papers",
     })
 

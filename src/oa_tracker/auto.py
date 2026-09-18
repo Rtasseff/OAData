@@ -272,6 +272,59 @@ def _push_sharepoint(config: Config, ctx: _SpContext, result: AutoRunResult) -> 
     result.errors.extend(rec.warnings)
 
 
+def push_one(config: Config, pub_id: str) -> str:
+    """Push ONE archive's row to the SharePoint List right away (the web
+    UI calls this after a button press, so the List doesn't wait for the
+    morning run). Same operations as the auto push, scoped to one row:
+    open → create/patch; closed → relabel/remove; a rejected 'done' tick
+    → untick. Never prompts (headless token). Returns a one-line summary;
+    raises on failure — the caller decides how loudly to report it, and
+    the next `oa auto` reconciles anyway."""
+    from oa_tracker import sharepoint as sp_mod
+
+    sp = sp_mod.load_settings(config)
+    client = sp_mod.GraphClient(sp, interactive=False)
+    site_id = client.get_site_id(sp.site)
+    lst = sp_mod.get_list(client, site_id, sp.list_name)
+    if lst is None:
+        raise RuntimeError(f"SharePoint list {sp.list_name!r} not provisioned")
+    list_id = lst["id"]
+    name_for = sp_mod.resolve_names(client, site_id, list_id)
+    now = _now()
+    with db.get_connection(config.database) as conn:
+        archive = db.get_archive(conn, pub_id)
+    if archive is None:
+        raise RuntimeError(f"{pub_id} is not tracked")
+
+    if archive["status"].startswith("OPEN_"):
+        email_to_lookup = client.resolve_users(site_id)
+        push = sp_mod.push_archives(
+            client, site_id, list_id, sp, name_for, email_to_lookup, [archive], now,
+        )
+        problems = push.errors + push.warnings
+        if problems:
+            raise RuntimeError("; ".join(problems))
+        items = sp_mod.fetch_items(client, site_id, list_id, name_for[sp_mod.D_PUBID])
+        unticked, errors = untick_rejected(config, client, site_id, list_id, name_for, items)
+        if errors:
+            raise RuntimeError("; ".join(errors))
+        what = "row created" if push.created else "row updated"
+        if pub_id in unticked:
+            what += ", 'done' tick cleared"
+        return what
+
+    items = sp_mod.fetch_items(client, site_id, list_id, name_for[sp_mod.D_PUBID])
+    if pub_id not in items:
+        return "no row on the List (already removed)"
+    rec = sp_mod.reconcile_closed_rows(
+        client, site_id, list_id, sp, name_for, {pub_id: items[pub_id]},
+        {pub_id: archive}, now,
+    )
+    if rec.warnings:
+        raise RuntimeError("; ".join(rec.warnings))
+    return "row relabelled as closed" if rec.relabeled else "closed row removed"
+
+
 def untick_rejected(
     config: Config, client, site_id: str, list_id: str,
     name_for: dict, items: dict,

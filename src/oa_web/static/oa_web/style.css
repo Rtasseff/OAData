@@ -32,6 +32,7 @@ h2 { font-size: 16px; margin: 0 0 12px; }
 .msg { padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; border: 1px solid; }
 .msg.success { background: var(--ok-bg); border-color: #b9dfc8; color: var(--ok); }
 .msg.warning { background: var(--warn-bg); border-color: #efd999; color: var(--warn); }
+.msg.info { background: var(--info-bg); border-color: #b7d1ea; color: #1a5a92; }
 .msg.error { background: var(--err-bg); border-color: #efc1c1; color: var(--err); }
 
 /* toolbar */

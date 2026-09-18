@@ -10,6 +10,7 @@
   <span class="badge s-{{ a.status }}">{{ a.status_label }}</span>
 </div>
 
+{% if last_push %}<div class="msg {% if last_push.ok %}success{% elif last_push.ok is None %}info{% else %}warning{% endif %}">{{ last_push.text }} <span class="small">({{ last_push.when }}{% if last_push.ok is None %} — reload to see the result{% endif %})</span></div>{% endif %}
 <div class="cols">
 <div>
   {% for c in cards %}

@@ -69,6 +69,15 @@ Not in the UI (CLI only): `oa reopen`, the `reset_*` overrides,
   `oa auto`, acting at once). DOI/URL inputs are only accepted on the
   steps that ask for them, so the `done=1`+PID fast-track can't be
   tripped by accident.
+* **SharePoint List.** After each button press the changed paper's row is
+  pushed to the List in the background (create/patch, relabel or remove
+  for closures, clear a rejected "done" tick) — the same operations as
+  the `oa auto` push, scoped to one row, using the cached headless token.
+  The page shows the result on reload ("SharePoint List: row updated" or
+  a warning); a failed push never undoes the recorded action and the next
+  `oa auto` / `oa sharepoint sync` reconciles anyway. The *pull* side
+  (proposals data contacts make on the List) stays with `oa auto` /
+  `sync`. Turn the push off with `sharepoint_push = false` under `[web]`.
 * **Never writes to the SharePoint sync.** The QA view lists the
   folder's top-level files read-only; "folder deleted" buttons only
   record that the operator deleted it on SharePoint.
@@ -81,8 +90,7 @@ Not in the UI (CLI only): `oa reopen`, the `reset_*` overrides,
 ```bash
 source .venv/bin/activate
 pip install -e '.[web]'                 # Django, markdown, whitenoise, waitress (once)
-python -m oa_web migrate                # creates oa_web.sqlite (once; `oa web` also does it)
-python -m oa_web createsuperuser        # first login (once)
+python -m oa_web createsuperuser        # first login (once; creates oa_web.sqlite as needed)
 oa web                                  # http://127.0.0.1:8000/
 ```
 
@@ -102,6 +110,7 @@ Host headers):
 allowed_hosts = ["localhost", "127.0.0.1", "my-pc.cicbiomagune.es", "10.0.0.12"]
 # pub_db_url_template = "https://…/{pub_id}"   # adds an "Open the publication database" link on the db_updated step
 # database = "./oa_web.sqlite"
+# sharepoint_push = true     # push each changed row to the List at once (default)
 ```
 
 It is plain HTTP — fine on the internal network, not for the internet.

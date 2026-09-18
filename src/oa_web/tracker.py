@@ -16,6 +16,9 @@ from typing import Any
 
 from django.conf import settings
 
+import logging
+import threading
+
 from oa_tracker import actions, db, status as st
 from oa_tracker.config import Config, load_config
 from oa_tracker.emails import _folder_url, generate_emails
@@ -150,6 +153,40 @@ def pub_db_url(pub_id: str) -> str:
     return tpl.format(pub_id=pub_id) if tpl else ""
 
 
+# ── SharePoint push (background, best effort) ────────────────────────
+
+log = logging.getLogger("oa_web")
+
+# pub_id → {"when", "ok", "text"}: the last push attempt, shown on the paper
+# page. In-memory only; the morning `oa auto` reconciles regardless.
+LAST_PUSH: dict[str, dict[str, Any]] = {}
+
+
+def push_to_sharepoint(config: Config, pub_id: str) -> None:
+    """Push this paper's List row now, without making the page wait."""
+    if not (settings.OA_SHAREPOINT_PUSH and config.sharepoint.enabled):
+        return
+    LAST_PUSH[pub_id] = {"when": _now(), "ok": None, "text": "updating the SharePoint List…"}
+
+    def run() -> None:
+        from oa_tracker.auto import push_one
+        try:
+            text = push_one(config, pub_id)
+            LAST_PUSH[pub_id] = {"when": _now(), "ok": True, "text": f"SharePoint List: {text}"}
+        except Exception as e:  # network/token/Graph — never breaks the recorded action
+            log.warning("SharePoint push for %s failed: %s", pub_id, e)
+            LAST_PUSH[pub_id] = {
+                "when": _now(), "ok": False,
+                "text": f"SharePoint List not updated ({e}) — the next automatic run will do it.",
+            }
+
+    threading.Thread(target=run, name=f"sp-push-{pub_id}", daemon=True).start()
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="minutes").replace("T", " ")
+
+
 # ── Writes ────────────────────────────────────────────────────────────
 
 @dataclass
@@ -258,6 +295,7 @@ def perform(
 
     _retire_sheet_row(config, archive, task_code, apply_code, note, pid, url,
                       drop_all=status_changed)
+    push_to_sharepoint(config, pub_id)
     # Keep output/email_drafts current (e.g. the completion draft right
     # after a publish is confirmed) — same generator as `oa emails`.
     try:
@@ -334,6 +372,7 @@ def set_data_contact(config: Config, username: str, pub_id: str,
     if res.applied and not res.errors:
         out.ok = True
         out.messages.append(f"Data contact set to {name or email}.")
+        push_to_sharepoint(config, pub_id)
         try:
             generate_emails(config)
         except Exception as e:

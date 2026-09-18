@@ -228,3 +228,39 @@ def test_system_draft_shows_the_identifiers_it_will_record(client, test_config):
     card = page.split('id="zenodo_validated"')[1].split("</form>")[0]
     assert "DOI to record" in card
     assert 'name="pid"' not in card          # nothing to type at the confirm step
+
+
+def test_button_press_pushes_that_row_to_sharepoint(test_config, monkeypatch):
+    """The push runs in the background, scoped to the changed paper, and a
+    failure never undoes the recorded action."""
+    from django.conf import settings as dj
+    from oa_tracker import auto
+    from oa_tracker.config import SharePointSettings
+
+    test_config.sharepoint = SharePointSettings(enabled=True)
+    monkeypatch.setattr(dj, "OA_SHAREPOINT_PUSH", True)
+    pushed = []
+    monkeypatch.setattr(auto, "push_one", lambda cfg, pub: pushed.append(pub) or "row updated")
+    threads = []
+    import threading
+    real_thread = threading.Thread
+    monkeypatch.setattr(tracker.threading, "Thread",
+                        lambda **kw: threads.append(real_thread(**kw)) or threads[-1])
+
+    _insert(test_config.database, "100", OPEN_ACTIVE)
+    assert tracker.perform(test_config, "alice", "100", "qa_pass", "pass", OPEN_ACTIVE).ok
+    for t in threads:
+        t.join(5)
+    assert pushed == ["100"]
+    assert tracker.LAST_PUSH["100"]["ok"] is True
+
+    def boom(cfg, pub):
+        raise RuntimeError("token expired")
+    monkeypatch.setattr(auto, "push_one", boom)
+    assert tracker.perform(test_config, "alice", "100", "zenodo_draft_created", "done",
+                           OPEN_READY_FOR_ZENODO_DRAFT, zenodo_code="4242").ok
+    for t in threads:
+        t.join(5)
+    assert tracker.LAST_PUSH["100"]["ok"] is False
+    assert "token expired" in tracker.LAST_PUSH["100"]["text"]
+    assert _status(test_config, "100") == "OPEN_ZENODO_DRAFT_CREATED"
