@@ -101,13 +101,13 @@ point elsewhere with `oa web --config PATH` / `OA_CONFIG=PATH`.
 Ordinary users need no staff/superuser flag. `python -m oa_web
 changepassword <user>` resets a password.
 
-**Other machines:** `oa web --host 0.0.0.0` and list the names/addresses
-people will type in an optional config section (Django refuses unknown
-Host headers):
+**Other machines:** `oa web --host 0.0.0.0`. Any host name/address is
+accepted by default (internal network); the optional config section can
+restrict that and tune the rest:
 
 ```toml
 [web]
-allowed_hosts = ["localhost", "127.0.0.1", "my-pc.cicbiomagune.es", "10.0.0.12"]
+# allowed_hosts = ["localhost", "my-pc.cicbiomagune.es"]   # default: any
 # pub_db_url_template = "https://…/{pub_id}"   # adds an "Open the publication database" link on the db_updated step
 # database = "./oa_web.sqlite"
 # sharepoint_push = true     # push each changed row to the List at once (default)
@@ -116,6 +116,13 @@ allowed_hosts = ["localhost", "127.0.0.1", "my-pc.cicbiomagune.es", "10.0.0.12"]
 It is plain HTTP — fine on the internal network, not for the internet.
 The serving machine needs what the CLI needs: the OneDrive sync,
 `~/.zenodorc`, and DB/VPN access for Zenodo draft creation.
+
+**WSL note:** Windows reaches a server inside WSL through `localhost`
+port forwarding — but only if nothing on the Windows side already owns
+that port. If `localhost:<port>` answers with a dropped connection or
+the wrong app, check with `netstat -ano | findstr :<port>` in
+PowerShell and pick another port (`oa web --port 8080`), or use the WSL
+address (`hostname -I`) directly.
 
 **Trying it safely:** copy `oa_tracker.sqlite`, `output/` and
 `config.toml` to a scratch folder, set `enabled = false` under

@@ -5,7 +5,7 @@ config.toml; default ``./config.toml``) — the same file the CLI reads.
 An optional ``[web]`` section in it tunes the server:
 
     [web]
-    allowed_hosts = ["localhost", "127.0.0.1", "my-pc.cicbiomagune.es"]
+    allowed_hosts = ["localhost", "my-pc.cicbiomagune.es"]   # default: any host
     database = "./oa_web.sqlite"        # logins + sessions only
     pub_db_url_template = "https://intranet/.../{pub_id}"   # optional link
     sharepoint_push = true               # push each changed row to the List at once
@@ -47,7 +47,10 @@ def _secret_key() -> str:
 
 SECRET_KEY = _secret_key()
 DEBUG = os.environ.get("OA_WEB_DEBUG", "") == "1"
-ALLOWED_HOSTS = list(_web.get("allowed_hosts", ["localhost", "127.0.0.1", "[::1]"]))
+# Internal tool on a private network: accept any Host header by default
+# (the machine's name, its WSL address, localhost). Restrict with
+# [web] allowed_hosts if you ever put it somewhere less private.
+ALLOWED_HOSTS = list(_web.get("allowed_hosts", ["*"]))
 
 INSTALLED_APPS = [
     "django.contrib.admin",
