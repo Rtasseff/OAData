@@ -121,6 +121,7 @@ def paper(request, pub_id: str):
         "a": archive, "cards": cards, "zen": zen,
         "zenodo_enabled": config.zenodo.enabled,
         "others": guide.OTHER if archive["is_open"] else {},
+        "exemptions": guide.EXEMPTIONS if archive["can_exempt"] else (),
         "files": tracker.folder_listing(archive) if show_folder else None,
         "show_folder": show_folder,
         "pub_db_url": tracker.pub_db_url(pub_id),
@@ -140,6 +141,12 @@ def paper_action(request, pub_id: str):
             config, request.user.get_username(), pub_id,
             name=p.get("name", ""), email=p.get("email", ""),
             notify=p.get("notify") == "1",
+        )
+    elif p.get("form") == "exemption":
+        out = tracker.apply_exemption(
+            config, request.user.get_username(), pub_id,
+            key=p.get("exemption", ""), expected_status=p.get("expected_status", ""),
+            note=p.get("note", ""), pid=p.get("pid", ""), url=p.get("url", ""),
         )
     else:
         out = tracker.perform(

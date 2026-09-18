@@ -1604,3 +1604,11 @@ Exemption semantics fixed (2026-09-18, branch `web-ui`):
 - Two List choices reworded; `ensure_list` now patches an existing choice
   column's options, so `oa sharepoint provision` (or `sync`) applies the
   new wording to the live List. Old wordings still route.
+- Web UI (same day): *Apply an exemption* card on every open paper
+  before the Zenodo deposit — the List's five categories with the List's
+  routing, so an exemption the data contact gives the operator directly
+  lands the same way; the Papers list shows *Apply exemption* where it
+  used to show "—". "Other" there closes as an exception with a required
+  note. Also: the pre-filled Zenodo DOI/URL on the review step can be
+  corrected (the sheet's `pid`/`url` fast-track), and each web action
+  pushes its row to the List in the background.

@@ -392,6 +392,12 @@ Two kinds of exemption, deliberately different:
 | Collaborative consultation only (no biomaGUNE data AND no biomaGUNE lead) | `close_exception` → `CLOSED_EXCEPTION` | `closed_folder_removed` | true exemption; the conjunction is deliberate — wording must not let everyone on a collaboration self-exempt |
 | Other — needs explanation (free text in `ProposalDetail`) | none (operator-routed) | — | never auto-applies |
 
+The web UI's *Apply an exemption* card offers this same list and
+routing to the operator (`oa_web/guide.py` `EXEMPTIONS` is built from
+`EXEMPTION_CHOICES` / `EXEMPTION_ROUTING`); there "Other" closes as an
+exception with a required explanation, since the operator is the one
+routing it — see [web_ui.md](web_ui.md).
+
 Rows still carrying the pre-2026-09-18 wordings ("All data deposited in
 another archive", "Collaborative project AND no biomaGUNE data or lead")
 route identically (`sharepoint._LEGACY_EXEMPTIONS`).

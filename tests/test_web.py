@@ -299,3 +299,90 @@ def test_button_press_pushes_that_row_to_sharepoint(test_config, monkeypatch):
     assert tracker.LAST_PUSH["100"]["ok"] is False
     assert "token expired" in tracker.LAST_PUSH["100"]["text"]
     assert _status(test_config, "100") == "OPEN_ZENODO_DRAFT_CREATED"
+
+
+# ── Exemptions (same list and routing as the Tracker List) ────────────
+
+def test_exemptions_mirror_the_tracker_list():
+    from oa_tracker import sharepoint as sp
+    from oa_web import guide
+    assert [e.text for e in guide.EXEMPTIONS] == sp.EXEMPTION_CHOICES
+    for e in guide.EXEMPTIONS:
+        if e.text != sp.EXEMPTION_OTHER:
+            assert e.apply_code == sp.EXEMPTION_ROUTING[e.text][0]
+
+
+@pytest.mark.parametrize("key,status", [
+    ("no_share", "CLOSED_EXCEPTION"),
+    ("no_data", "CLOSED_PUBLICATION_ONLY"),
+    ("consult", "CLOSED_EXCEPTION"),
+])
+def test_true_exemptions_close_with_the_category_on_record(test_config, key, status):
+    _insert(test_config.database, "100", OPEN_INACTIVE)
+    out = tracker.apply_exemption(test_config, "alice", "100", key, OPEN_INACTIVE,
+                                  note="PI replied by email",
+                                  pid="10.5281/zenodo.1", url="https://zenodo.org/records/1")
+    assert out.ok, out.errors
+    a = tracker.get_archive(test_config, "100")
+    assert a["status"] == status
+    assert a["final_pid"] is None                 # a stray PID never rides along
+    ev = tracker.events_for(test_config, "100")[0]
+    assert ev["source"] == "web:alice"
+    assert ev["note"].startswith("Exemption: ") and ev["note"].endswith("PI replied by email")
+
+
+def test_external_exemption_needs_pid_and_url_and_keeps_the_later_steps(test_config):
+    _insert(test_config.database, "100", OPEN_INACTIVE)
+    out = tracker.apply_exemption(test_config, "alice", "100", "external", OPEN_INACTIVE,
+                                  pid="10.1234/collab.9")
+    assert not out.ok and _status(test_config, "100") == OPEN_INACTIVE
+
+    out = tracker.apply_exemption(test_config, "alice", "100", "external", OPEN_INACTIVE,
+                                  pid="10.1234/collab.9", url="https://repo.example.org/9")
+    assert out.ok, out.errors
+    a = tracker.get_archive(test_config, "100")
+    assert a["status"] == OPEN_ZENODO_PUBLISHED
+    assert (a["final_pid"], a["final_url"]) == ("10.1234/collab.9", "https://repo.example.org/9")
+    assert tracker.events_for(test_config, "100")[0]["action_code"] == "archived_external"
+    assert [r["task_code"] for r in tracker.pending_by_pub(test_config)["100"]] == \
+        ["db_updated", "completion_sent"]
+
+
+def test_other_exemption_needs_an_explanation(test_config):
+    _insert(test_config.database, "100", OPEN_ACTIVE)
+    assert not tracker.apply_exemption(test_config, "alice", "100", "other", OPEN_ACTIVE).ok
+    assert tracker.events_for(test_config, "100") == []
+    assert tracker.apply_exemption(test_config, "alice", "100", "other", OPEN_ACTIVE,
+                                   note="data under a court order").ok
+    assert _status(test_config, "100") == "CLOSED_EXCEPTION"
+
+
+def test_exemption_refused_after_the_deposit_or_on_a_stale_page(test_config):
+    _insert(test_config.database, "100", OPEN_ZENODO_PUBLISHED,
+            final_pid="10.5281/zenodo.1", final_url="https://zenodo.org/records/1")
+    assert not tracker.apply_exemption(test_config, "alice", "100", "no_data",
+                                       OPEN_ZENODO_PUBLISHED).ok
+    _insert(test_config.database, "200", OPEN_ACTIVE)
+    assert not tracker.apply_exemption(test_config, "alice", "200", "no_data", OPEN_INACTIVE).ok
+    assert not tracker.apply_exemption(test_config, "alice", "200", "bogus", OPEN_ACTIVE).ok
+    assert _status(test_config, "200") == OPEN_ACTIVE
+
+
+def test_list_offers_exemption_where_there_is_no_action(client, test_config):
+    _insert(test_config.database, "100", OPEN_INACTIVE)            # waiting, nothing due
+    _insert(test_config.database, "200", "CLOSED_EXCEPTION")
+    page = client.get("/?show=all").content.decode()
+    assert page.count("Apply exemption") == 1
+    assert 'href="/paper/100/#exemption"' in page
+
+    paper = client.get("/paper/100/").content.decode()
+    assert '<details class="exempt" open>' in paper
+    assert "Collaborative consultation only" in paper
+    assert 'id="exemption"' not in client.get("/paper/200/").content.decode()
+
+    r = client.post("/paper/100/do/", {
+        "form": "exemption", "exemption": "no_data", "expected_status": OPEN_INACTIVE,
+    })
+    assert r.status_code == 302 and r["Location"] == "/paper/100/"
+    assert _status(test_config, "100") == "CLOSED_PUBLICATION_ONLY"
+    assert 'id="exemption"' not in client.get("/paper/100/").content.decode()

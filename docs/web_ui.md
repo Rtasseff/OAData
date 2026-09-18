@@ -9,7 +9,7 @@ page covers only running the site and how it fits with the CLI.
 
 | Page | Shows | CLI equivalent |
 |---|---|---|
-| **Papers** | One row per publication: id (links to the SharePoint folder), status, pending action(s), title, data contact, corresponding author. Tabs: Open / Needs action / Closed / All, plus search. | `oa status` |
+| **Papers** | One row per publication: id (links to the SharePoint folder), status, pending action(s), title, data contact, corresponding author. An open paper with nothing pending before the Zenodo deposit shows *Apply exemption* instead of "—". Tabs: Open / Needs action / Closed / All, plus search. | `oa status` |
 | **Actions** | Every pending action, in working order — the action sheet, live. | `oa sheet` |
 | **Report** | The weekly report, live, beside the latest `oa auto` digest. | `oa report` |
 | **History** | The audit trail (`events` table), newest first. | — |
@@ -29,17 +29,35 @@ records them as entered, without the Zenodo check (the CLI's `pid`/`url`
 on that row — see [sop.md](sop.md) §7). Everything else is a single
 confirm button.
 
+**Apply an exemption.** Every open paper before the Zenodo deposit
+(waiting for data, data uploaded, QA passed) has an *Apply an exemption*
+card: the same five choices as the Tracker List's "Propose exemption"
+column, applied through the same routing (`sharepoint.EXEMPTION_ROUTING`;
+the table in [sharepoint_list_design.md](sharepoint_list_design.md) §
+*Exemption categories* is canonical). Data contacts should normally use
+the List; this is for when they tell the operator instead. The card is
+open when nothing else is pending (the Papers list links straight to it)
+and folded under the pending action otherwise. The category is written
+into the note (`Exemption: <category>. <your note>`), like the List's
+`User-proposed exemption: …`.
+
+- *All data is deposited externally* asks for the external PID/DOI and
+  URL and applies `archived_external`: not a closure — the Zenodo
+  steps are skipped and the completion email, institutional-DB entry
+  and folder deletion still follow as actions.
+- *No data shareable*, *No data generated* and *Collaborative
+  consultation only* close at once (`close_exception` /
+  `close_publication_only`); only the folder deletion remains.
+- *Other — needs explanation*: on the List it never applies by itself;
+  here the operator is the one routing it, so it closes as an exception
+  and the note is required.
+
 **Deposited elsewhere.** The normal workflow never asks anyone to make a
 Zenodo draft by hand. Where the system would create one (QA pass, and
-the create-draft step) there is a folded-away alternative, *Deposited
-elsewhere — record its DOI and URL*, for a deposit made by hand or data
-that lives in another repository (common in collaborations, and not
-necessarily Zenodo). It applies `archived_external` (the same code the
-Tracker List's "deposited externally" exemption routes to): the archive
-jumps to *Published — update database* and the completion email,
-institutional-DB entry and folder removal still follow as steps. True
-exemptions (no data shareable / generated, consultation only) close at
-once and leave only the folder deletion as an action.
+the create-draft step) there is also a folded-away *Deposited elsewhere
+— record its DOI and URL*: the same `archived_external` as the external
+exemption, kept there for the rare deposit made by hand after the data
+was uploaded.
 The manual *record id* / *DOI + URL* inputs only appear when the system
 cannot act itself (Zenodo integration off, non-numeric id); they are
 pre-filled whenever the record is known.

@@ -103,6 +103,32 @@
   </div>
   {% endfor %}
 
+  {% if exemptions %}
+  <div class="card" id="exemption">
+    <details class="exempt"{% if not cards %} open{% endif %}>
+      <summary>Apply an exemption</summary>
+      <p class="small">The same choices as the “Propose exemption” column on the SharePoint Tracker List, applied the same way. The data contact would normally set it there; use this when they told you directly.</p>
+      <form method="post" action="{% url 'paper_action' a.publication_id %}" class="exempt-form">{% csrf_token %}
+        <input type="hidden" name="form" value="exemption">
+        <input type="hidden" name="expected_status" value="{{ a.status }}">
+        <div class="choices">
+          {% for e in exemptions %}
+          <label class="choice"><input type="radio" name="exemption" value="{{ e.key }}" required><span><span class="ctext">{{ e.text }}</span><span class="small">{{ e.effect }}</span></span></label>
+          {% endfor %}
+        </div>
+        <div class="fields ext-only">
+          <div><label>PID / DOI in the external repository</label><input type="text" name="pid" placeholder="10.1234/…"></div>
+          <div><label>URL of the external record</label><input type="url" name="url" placeholder="https://…"></div>
+        </div>
+        <div class="fields">
+          <div><label>Note (recorded in the audit log with the exemption; required for “Other”)</label><textarea name="note" rows="2"></textarea></div>
+        </div>
+        <div class="btns"><button class="btn secondary" type="submit" onclick="return confirm('Apply the selected exemption to paper {{ a.publication_id|escapejs }}?')">Apply exemption</button></div>
+      </form>
+    </details>
+  </div>
+  {% endif %}
+
   {% if files is not None %}
   <div class="card">
     <h2>Folder contents <span class="small">(synced copy on this server, read-only)</span></h2>

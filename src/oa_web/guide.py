@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from oa_tracker import sharepoint as sp
+from oa_tracker import status as st
+
 
 @dataclass(frozen=True)
 class Button:
@@ -285,13 +288,71 @@ OTHER: dict[str, ActionSpec] = {
         steps=("All the data is in another repository AND the publication "
                "database is already updated and the folder removed. Record that "
                "repository's PID and URL; the archive closes at once as “data "
-               "archived”. If those steps are still to do, use “Deposited "
-               "elsewhere” on the QA / Zenodo action instead.",),
+               "archived”. If those steps are still to do, use the "
+               "“deposited externally” exemption (or “Deposited elsewhere” on "
+               "the QA / Zenodo action) instead.",),
         buttons=(Button("done", "Close as archived elsewhere", style="danger",
                         needs_pid_url=True,
                         confirm="Close this archive as archived elsewhere?"),),
     ),
 }
+
+
+
+# ── Exemptions ────────────────────────────────────────────────────────
+# The same closed list as the Tracker List's "Propose exemption" column,
+# applied the same way (sharepoint.EXEMPTION_ROUTING), so a data contact
+# who tells the operator instead of using the List gets the identical
+# result. Offered up to the Zenodo deposit — afterwards the data is
+# archived and only the "Other actions" closures make sense.
+
+@dataclass(frozen=True)
+class Exemption:
+    key: str            # posted back as "exemption"
+    text: str           # the List's wording, verbatim
+    apply_code: str
+    effect: str         # what happens, in the operator's terms
+    needs_pid_url: bool = False
+    needs_note: bool = False
+
+
+def _routed(text: str) -> str:
+    return sp.EXEMPTION_ROUTING[text][0]
+
+
+EXEMPTIONS: tuple[Exemption, ...] = (
+    Exemption(
+        "external", sp.EXEMPTION_EXTERNAL, _routed(sp.EXEMPTION_EXTERNAL),
+        "Not a closure: the external PID/DOI and URL are recorded and the "
+        "Zenodo steps are skipped. The completion email, publication-database "
+        "entry and folder deletion still follow as actions.",
+        needs_pid_url=True,
+    ),
+    Exemption(
+        "no_share", sp.EXEMPTION_NO_SHARE, _routed(sp.EXEMPTION_NO_SHARE),
+        "Closes at once as an exception. Only the folder deletion remains.",
+    ),
+    Exemption(
+        "no_data", sp.EXEMPTION_NO_DATA, _routed(sp.EXEMPTION_NO_DATA),
+        "Closes at once as publication-only. Only the folder deletion remains.",
+    ),
+    Exemption(
+        "consult", sp.EXEMPTION_CONSULT, _routed(sp.EXEMPTION_CONSULT),
+        "Closes at once as an exception. Only the folder deletion remains.",
+    ),
+    # On the List "Other" never applies by itself — the operator routes
+    # it. Here the operator IS routing it: an explained exception.
+    Exemption(
+        "other", sp.EXEMPTION_OTHER, "close_exception",
+        "Closes at once as an exception, with your explanation in the note "
+        "(required). Only the folder deletion remains.",
+        needs_note=True,
+    ),
+)
+
+EXEMPTION_STATUSES = frozenset({
+    st.OPEN_INACTIVE, st.OPEN_ACTIVE, st.OPEN_READY_FOR_ZENODO_DRAFT,
+})
 
 STATUS_LABELS = {
     "OPEN_INACTIVE": "Waiting for data",

@@ -51,6 +51,7 @@ def decorate(archive: dict[str, Any], config: Config) -> dict[str, Any]:
     """Add the display-only fields the templates use."""
     archive["status_label"] = guide.STATUS_LABELS.get(archive["status"], archive["status"])
     archive["is_open"] = archive["status"] in st.OPEN_STATUSES
+    archive["can_exempt"] = archive["status"] in guide.EXEMPTION_STATUSES
     archive["folder_url"] = _folder_url(archive, config)
     return archive
 
@@ -262,7 +263,6 @@ def perform(
         pid = url = ""
 
     apply_code = button.apply_code or task_code
-    source = f"web:{username}"
 
     if "zenodo_code" in spec.fields and not button.needs_pid_url:
         if not zenodo_code.isdigit():
@@ -273,8 +273,72 @@ def perform(
             out.errors.extend(res.errors)
             return out
 
+    return _record(config, username, archive, task_code, apply_code, button.label,
+                   note, pid, url, out)
+
+
+def apply_exemption(
+    config: Config,
+    username: str,
+    pub_id: str,
+    key: str,
+    expected_status: str,
+    note: str = "",
+    pid: str = "",
+    url: str = "",
+) -> Outcome:
+    """Apply one of the Tracker List's exemption categories on the
+    operator's say-so — the same task code the List's "Propose exemption"
+    routes to, with the category carried in the note as the List does."""
+    out = Outcome()
+    archive = get_archive(config, pub_id)
+    if archive is None:
+        out.errors.append(f"Publication {pub_id} is not tracked.")
+        return out
+    if archive["status"] != expected_status:
+        out.errors.append(
+            "This paper changed while the page was open (someone else, or the "
+            "automatic run, got there first). Nothing was recorded — the page "
+            "now shows the current state."
+        )
+        return out
+    if not archive["can_exempt"]:
+        out.errors.append(
+            "Exemptions apply only before the Zenodo deposit — use “Other "
+            "actions” for this paper instead."
+        )
+        return out
+    ex = next((e for e in guide.EXEMPTIONS if e.key == key), None)
+    if ex is None:
+        out.errors.append("Choose one of the exemptions.")
+        return out
+
+    note, pid, url = (s.strip() for s in (note, pid, url))
+    if ex.needs_note and not note:
+        out.errors.append("Explain the exemption in the note — it is required for “Other”.")
+        return out
+    if ex.needs_pid_url:
+        if not pid or not url:
+            out.errors.append("Both the external PID/DOI and the URL are required.")
+            return out
+    else:
+        pid = url = ""  # a stray PID must not fast-track a closure
+    note = f"Exemption: {ex.text}." + (f" {note}" if note else "")
+    return _record(config, username, archive, ex.apply_code, ex.apply_code,
+                   f"Exemption — {ex.text}", note, pid, url, out)
+
+
+def _record(
+    config: Config, username: str, archive: dict[str, Any], row_code: str,
+    apply_code: str, label: str, note: str, pid: str, url: str, out: Outcome,
+) -> Outcome:
+    """Apply through the CLI's path, then keep the files and the List in
+    step: retire the sheet row, push the row to SharePoint, regenerate
+    the email drafts."""
+    pub_id = archive["publication_id"]
     result, old_status, new_status = actions.apply_single(
-        config, pub_id, apply_code, done=1, pid=pid, url=url, note=note, source=source,
+        config, pub_id, apply_code, done=1, pid=pid, url=url, note=note,
+        source=f"web:{username}",
     )
     out.warnings = [_clean(w) for w in result.warnings]
     out.errors = [_clean(e) for e in result.errors]
@@ -287,13 +351,13 @@ def perform(
     status_changed = bool(new_status) and new_status != old_status
     if status_changed:
         out.messages.append(
-            f"Recorded: {button.label}. Status is now "
+            f"Recorded: {label}. Status is now "
             f"“{guide.STATUS_LABELS.get(new_status, new_status)}”."
         )
     else:
-        out.messages.append(f"Recorded: {button.label}.")
+        out.messages.append(f"Recorded: {label}.")
 
-    _retire_sheet_row(config, archive, task_code, apply_code, note, pid, url,
+    _retire_sheet_row(config, archive, row_code, apply_code, note, pid, url,
                       drop_all=status_changed)
     push_to_sharepoint(config, pub_id)
     # Keep output/email_drafts current (e.g. the completion draft right

@@ -212,6 +212,14 @@ routing). Two kinds, deliberately different:
   scanner flags the closed archive while its folder exists and the sheet
   carries a `closed_folder_removed` row until it is gone.
 
+If the data contact tells you instead of using the List, apply the same
+category from the web UI's *Apply an exemption* card (any open paper
+before the Zenodo deposit — see [web_ui.md](web_ui.md)), or by hand with
+the routed code and the category in the note, e.g. `oa action <pub>
+close_publication_only --note "Exemption: No data generated …"`. "Other"
+needs your decision: close it as an exception with the explanation in
+the note.
+
 `close_archived_external` (and `done=2` with a PID) remain as the
 shortcut for an external deposit whose DB entry and folder removal are
 *already* done.
