@@ -190,10 +190,10 @@ def test_button_returns_to_the_paper_showing_the_next_step(client, test_config):
     assert tracker.events_for(test_config, "100")[0]["source"] == "web:alice"
 
 
-def test_deposited_elsewhere_at_qa_fast_tracks_to_published(test_config):
-    """The 'deposited elsewhere' button is the sheet's done=1 + DOI/URL
-    shortcut: straight to OPEN_ZENODO_PUBLISHED, with the DB-update and
-    folder steps still to come — no Zenodo draft is created."""
+def test_deposited_elsewhere_at_qa_records_external_deposit(test_config):
+    """The 'deposited elsewhere' button applies archived_external: straight
+    to OPEN_ZENODO_PUBLISHED with the DB-update and folder steps still to
+    come — no Zenodo draft is created."""
     _insert(test_config.database, "100", OPEN_ACTIVE)
     out = tracker.perform(test_config, "alice", "100", "qa_pass", "elsewhere", OPEN_ACTIVE)
     assert not out.ok and "DOI" in out.errors[0]
@@ -204,7 +204,7 @@ def test_deposited_elsewhere_at_qa_fast_tracks_to_published(test_config):
     assert a["status"] == OPEN_ZENODO_PUBLISHED
     assert (a["final_pid"], a["final_url"]) == ("10.1234/other.repo.1", "https://repo.example.org/1")
     assert a["zenodo_code"] is None
-    assert tracker.events_for(test_config, "100")[0]["action_code"] == "fast_track_published"
+    assert tracker.events_for(test_config, "100")[0]["action_code"] == "archived_external"
     assert [r["task_code"] for r in tracker.pending_by_pub(test_config)["100"]] == \
         ["db_updated", "completion_sent"]
 

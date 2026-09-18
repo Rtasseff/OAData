@@ -156,7 +156,8 @@ def _pull_sharepoint(config: Config, result: AutoRunResult) -> _SpContext | None
                 else:
                     result.errors.extend(r.errors)
             elif prop.task_code in ("close_publication_only", "close_exception",
-                                    "close_archived_external") and gates.auto_apply_exemptions:
+                                    "close_archived_external", "archived_external") \
+                    and gates.auto_apply_exemptions:
                 r, old_s, new_s = apply_single(
                     config, pi.pub_id, prop.task_code, done=1,
                     pid=prop.pid, url=prop.url,

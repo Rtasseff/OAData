@@ -61,7 +61,7 @@ STAGED_ROWS = [
         "status": st.OPEN_ACTIVE,
         "journal": "Demo J. Mol. Imaging", "year": 2026,
         "data_required": 1, "embargo": 6, "doi": None, "zenodo": None,
-        "tests": "Exemption 'All data deposited in another archive' (needs External PID + URL)",
+        "tests": "Exemption 'All data is deposited externally (…)' (needs External PID + URL)",
     },
     {
         "pub_id": "990003",
@@ -69,7 +69,7 @@ STAGED_ROWS = [
         "status": st.OPEN_ACTIVE,
         "journal": "Demo Collab. Reports", "year": 2025,
         "data_required": 1, "embargo": 0, "doi": None, "zenodo": None,
-        "tests": "Exemption 'Collaborative AND no biomaGUNE data or lead' · leave a Note",
+        "tests": "Exemption 'Collaborative consultation only (…)' · leave a Note",
     },
     {
         "pub_id": "990004",

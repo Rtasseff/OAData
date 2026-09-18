@@ -35,12 +35,13 @@ class ActionSpec:
 
 # Offered wherever the normal path would have the system create the
 # Zenodo draft: the deposit was made by hand, or the data lives in another
-# repository (collaborations). Same as done=1 + DOI/URL on the sheet: the
-# archive jumps to "Published — update database" and the completion email,
-# institutional-DB entry and folder removal still follow as steps.
+# repository (collaborations). Applies archived_external: an exemption
+# from OUR deposit, not from the process — the archive jumps to
+# "Published — update database" and the completion email, institutional-DB
+# entry and folder removal still follow as steps.
 ELSEWHERE = Button(
     "elsewhere", "Record the DOI and URL — deposited elsewhere",
-    style="secondary", needs_pid_url=True,
+    apply_code="archived_external", style="secondary", needs_pid_url=True,
 )
 ELSEWHERE_STEP = (
     "If the data is already deposited somewhere else — a Zenodo record made "

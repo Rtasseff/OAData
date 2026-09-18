@@ -16,6 +16,7 @@ from oa_tracker.sharepoint import (
     COLUMNS, D_PUBID, D_CONTACT, D_CORR, D_INGESTED, D_REQSTATUS, D_STATUS,
     EXEMPTION_CHOICES, Proposal, PulledItem,
     build_system_fields, data_archiving_label, diff_against_list,
+    EXEMPTION_CHOICES, EXEMPTION_EXTERNAL, D_PEXEMPT,
     ensure_list, fetch_items, folder_url, pull_proposals, push_archives,
     reconcile_closed_rows, status_label, user_signature, write_proposal_feedback,
 )
@@ -101,7 +102,10 @@ class FakeGraph:
                 if rest[1:] == ["columns"]:
                     if method == "GET":
                         return 200, {"value": [
-                            {"name": n, "displayName": d} for d, n in lst["columns"].items()
+                            {"id": f"col-{n}", "name": n, "displayName": d,
+                             **({"choice": {"choices": list(lst["choices"][d])}}
+                                if d in lst.setdefault("choices", {}) else {})}
+                            for d, n in lst["columns"].items()
                         ]}
                     if method == "POST":
                         if json_body["displayName"] in self.conflict_displays:
@@ -110,7 +114,15 @@ class FakeGraph:
                                 io.BytesIO(b'{"error":{"code":"nameAlreadyExists"}}'),
                             )
                         lst["columns"][json_body["displayName"]] = json_body["name"]
+                        if "choice" in json_body:
+                            lst.setdefault("choices", {})[json_body["displayName"]] = \
+                                list(json_body["choice"]["choices"])
                         return 201, {"name": json_body["name"], "displayName": json_body["displayName"]}
+                if len(rest) == 3 and rest[1] == "columns" and method == "PATCH":
+                    internal = rest[2].removeprefix("col-")
+                    display = next(d for d, n in lst["columns"].items() if n == internal)
+                    lst["choices"][display] = list(json_body["choice"]["choices"])
+                    return 200, json_body
                 if rest[1:] == ["items"]:
                     if method == "GET":
                         return 200, {"value": list(lst["items"].values())}
@@ -376,26 +388,30 @@ def test_pull_exemption_no_data_generated_maps_to_publication_only():
 def test_pull_exemption_sensitivity_and_collaborative_map_to_exception():
     nf = _name_for()
     for choice in ("No data shareable (sensitivity/confidentiality)",
-                   "Collaborative project AND no biomaGUNE data or lead"):
+                   "Collaborative consultation only (no biomaGUNE data AND no biomaGUNE lead)",
+                   "Collaborative project AND no biomaGUNE data or lead"):   # pre-2026-09-18 wording
         assert _codes(pull_proposals([_item(ProposedExemption=choice)], nf)[0]) == ["close_exception"]
 
 
-def test_pull_archived_elsewhere_with_evidence_maps_to_close_archived_external():
+def test_pull_deposited_externally_with_evidence_maps_to_archived_external():
+    """The external-deposit exemption is NOT a closure: the PID/URL are
+    recorded and the DB-entry + folder-removal steps still follow."""
     nf = _name_for()
-    item = _item(
-        ProposedExemption="All data deposited in another archive",
-        ExtArchivePid="10.5061/dryad.x",
-        ExtArchiveUrl={"Url": "https://datadryad.org/x"},   # hyperlink shape
-    )
-    prop = pull_proposals([item], nf)[0].proposals[0]
-    assert prop.task_code == "close_archived_external"
-    assert prop.pid == "10.5061/dryad.x"
-    assert prop.url == "https://datadryad.org/x"
+    for choice in (EXEMPTION_EXTERNAL, "All data deposited in another archive"):
+        item = _item(
+            ProposedExemption=choice,
+            ExtArchivePid="10.5061/dryad.x",
+            ExtArchiveUrl={"Url": "https://datadryad.org/x"},   # hyperlink shape
+        )
+        prop = pull_proposals([item], nf)[0].proposals[0]
+        assert prop.task_code == "archived_external"
+        assert prop.pid == "10.5061/dryad.x"
+        assert prop.url == "https://datadryad.org/x"
 
 
 def test_pull_archived_elsewhere_missing_evidence_falls_back_to_propose():
     nf = _name_for()
-    item = _item(ProposedExemption="All data deposited in another archive")
+    item = _item(ProposedExemption=EXEMPTION_EXTERNAL)
     prop = pull_proposals([item], nf)[0].proposals[0]
     assert prop.task_code == "propose_exemption"   # not closed without evidence
     assert prop.pid == "" and prop.url == ""
@@ -524,9 +540,10 @@ def test_pulled_exemption_closes_archive_via_apply(test_config):
         assert get_archive(conn, "3000")["status"] == "CLOSED_PUBLICATION_ONLY"
 
 
-def test_pulled_archived_elsewhere_closes_data_archived_via_apply(test_config):
+def test_pulled_external_deposit_records_pid_and_keeps_the_tail_steps(test_config):
     from oa_tracker.actions import apply_actions
     from oa_tracker.db import get_archive, get_connection, upsert_archive
+    from oa_tracker.sheet import build_rows
 
     with get_connection(test_config.database) as conn:
         upsert_archive(conn, publication_id="3001", folder_path="/t/3001",
@@ -534,7 +551,7 @@ def test_pulled_archived_elsewhere_closes_data_archived_via_apply(test_config):
                        last_seen_at="2026-01-01T00:00:00", status="OPEN_ACTIVE")
 
     item = _item(
-        pub_id="3001", ProposedExemption="All data deposited in another archive",
+        pub_id="3001", ProposedExemption=EXEMPTION_EXTERNAL,
         ExtArchivePid="10.5061/dryad.x", ExtArchiveUrl={"Url": "https://datadryad.org/x"},
     )
     pulled = pull_proposals([item], _name_for())[0]
@@ -544,8 +561,29 @@ def test_pulled_archived_elsewhere_closes_data_archived_via_apply(test_config):
     assert res.applied == 1 and res.errors == []
     with get_connection(test_config.database) as conn:
         a = get_archive(conn, "3001")
-        assert a["status"] == "CLOSED_DATA_ARCHIVED"
+        assert a["status"] == "OPEN_ZENODO_PUBLISHED"     # Zenodo skipped, not closed
         assert a["final_pid"] == "10.5061/dryad.x"
+        assert a["final_url"] == "https://datadryad.org/x"
+    # The publication-DB entry (then folder removal) is still owed.
+    assert [r["task_code"] for r in build_rows(test_config)] == ["db_updated", "completion_sent"]
+    assert status_label("OPEN_ZENODO_PUBLISHED", a) == "Deposited externally — recorded"
+
+
+def test_ensure_list_updates_reworded_choices_on_existing_column():
+    g = FakeGraph()
+    lid, _, _ = ensure_list(g, SID, SharePointSettings())
+    g.lists[lid]["choices"][D_PEXEMPT] = [
+        "All data deposited in another archive",
+        "No data shareable (sensitivity/confidentiality)",
+        "No data generated (review/theory/perspective)",
+        "Collaborative project AND no biomaGUNE data or lead",
+        "Other — needs explanation",
+    ]
+    ensure_list(g, SID, SharePointSettings())
+    assert g.lists[lid]["choices"][D_PEXEMPT] == EXEMPTION_CHOICES
+    n_patches = len(g.calls)
+    ensure_list(g, SID, SharePointSettings())
+    assert not any(c[0] == "PATCH" and "columns" in c[1] for c in g.calls[n_patches:])
 
 
 # ── Untick after a rejected done ─────────────────────────────────────

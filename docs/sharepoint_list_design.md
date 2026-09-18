@@ -363,22 +363,38 @@ All inbound signals start **operator-confirmed** (action-sheet row,
 | Task code | Emitted when (pull) | Apply effect (after operator `done=1`) |
 |---|---|---|
 | `propose_data_contact` | `ProposedDataContact` set and differs from `IngestedSig` | resolve the proposed person to name+email, set `data_contact_*`, mark `data_contact_overridden=1` (same effect as `set_data_contact`). No status change. |
-| `propose_exemption` | `ProposedExemption` Choice set | routes by category to a closure (table below), carrying the category in the note; for "archived elsewhere" it carries `ExtArchivePid`/`ExtArchiveUrl` and applies as `close_archived_external`. |
+| `propose_exemption` | `ProposedExemption` Choice set | routes by category (table below), carrying the category in the note; for "deposited externally" it carries `ExtArchivePid`/`ExtArchiveUrl` and applies as `archived_external` (not a closure — see below). |
 | `propose_done` | `ProposedDone = Yes` | acknowledgment/investigation row (like `mandate_missing`): it does **not** close the archive. It tells the operator "the data contact believes this is done — verify, then run the real closure." Closure stays the operator's deliberate step. |
 
-### Exemption categories → closure (locked 2026-06-02)
+### Exemption categories → what the tracker does (locked 2026-06-02; wording and routing revised 2026-09-18)
 
-The closed list for `ProposedExemption`, with the closure each maps to
-when an operator approves. "Other / needs explanation" is always present
-and **never** auto-applies.
+The closed list for `ProposedExemption` (the exact strings live in
+`sharepoint.EXEMPTION_CHOICES`; `oa sharepoint provision` / `sync`
+updates the live column's options when they change). "Other / needs
+explanation" is always present and **never** auto-applies.
 
-| Category (user-facing label) | Closes as | Notes |
-|---|---|---|
-| All data deposited in another archive | **`CLOSED_DATA_ARCHIVED`** via `close_archived_external` | requires `ExtArchivePid` + `ExtArchiveUrl`; the external PID becomes `final_pid`, the URL `final_url`. Counts as a completed archive. |
-| No data shareable (sensitivity/confidentiality) | `CLOSED_EXCEPTION` | operator-reviewed |
-| No data generated (review/theory/perspective) | `CLOSED_PUBLICATION_ONLY` | no data archiving applicable |
-| Collaborative project AND no biomaGUNE data or lead | `CLOSED_EXCEPTION` | conjunction is deliberate — wording must not let everyone on a collaboration self-exempt; operator-reviewed regardless |
-| Other — needs explanation (free text in `ProposalDetail`) | none (operator-routed) | never auto-applies |
+Two kinds of exemption, deliberately different:
+
+- **Exemption from *our* deposit only** — the data *is* archived, just
+  not by us. The process continues: the external PID/URL are recorded
+  and the operator still has to enter them in the institutional
+  publication DB and then delete the SharePoint folder.
+- **True exemptions** — nothing is deposited. The archive closes at
+  once; the one remaining action is deleting the SharePoint folder (the
+  scanner flags a closed archive whose folder still exists and the sheet
+  / web UI carry a `closed_folder_removed` action until it is gone).
+
+| Category (user-facing label) | Applies as | Then | Notes |
+|---|---|---|---|
+| All data is deposited externally (e.g. collaboration; must fill in external PID and URL) | `archived_external` → **`OPEN_ZENODO_PUBLISHED`** | `db_updated` → `folder_removed` → `CLOSED_DATA_ARCHIVED` | requires `ExtArchivePid` + `ExtArchiveUrl` (→ `final_pid` / `final_url`); Zenodo stages skipped; the List shows "Deposited externally — recorded". Counts as a completed archive once closed. |
+| No data shareable (sensitivity/confidentiality) | `close_exception` → `CLOSED_EXCEPTION` | `closed_folder_removed` | true exemption |
+| No data generated (review/theory/perspective) | `close_publication_only` → `CLOSED_PUBLICATION_ONLY` | `closed_folder_removed` | true exemption; no data archiving applicable |
+| Collaborative consultation only (no biomaGUNE data AND no biomaGUNE lead) | `close_exception` → `CLOSED_EXCEPTION` | `closed_folder_removed` | true exemption; the conjunction is deliberate — wording must not let everyone on a collaboration self-exempt |
+| Other — needs explanation (free text in `ProposalDetail`) | none (operator-routed) | — | never auto-applies |
+
+Rows still carrying the pre-2026-09-18 wordings ("All data deposited in
+another archive", "Collaborative project AND no biomaGUNE data or lead")
+route identically (`sharepoint._LEGACY_EXEMPTIONS`).
 
 ### New task codes to add in `status.py`
 
@@ -396,7 +412,13 @@ and **never** auto-applies.
 - `close_archived_external` — `changes_status: True`, `requires_pid:
   True` (mirrors `zenodo_published`); a new **wildcard** transition
   (any OPEN → `CLOSED_DATA_ARCHIVED`) added to `_WILDCARD_TASKS`-style
-  handling, validated to require PID + URL.
+  handling, validated to require PID + URL. Since 2026-09-18 this is
+  only the "everything already done" shortcut (like `done=2`); the List
+  exemption routes to `archived_external` instead.
+- `archived_external` (2026-09-18) — `changes_status: True`,
+  `requires_pid: True`; wildcard any OPEN → `OPEN_ZENODO_PUBLISHED`
+  with the external PID/URL, so `db_updated` and `folder_removed`
+  still follow.
 - `set_corresponding_author` / `reset_corresponding_author` — CLI-only
   overrides (not emitted on the sheet), mirroring
   `set_data_contact` / `reset_data_contact`; write
@@ -410,7 +432,7 @@ next sync updates `RequestStatus` to `Applied` / `Declined: <reason>`.
 ### Promotion order (action-sheet-routed → auto-apply)
 
 1. `propose_data_contact` — unambiguous, easily reversed. First.
-2. "Archived elsewhere" exemption (`close_archived_external`) — a real,
+2. "Deposited externally" exemption (`archived_external`) — a real,
    verifiable PID/URL is the strongest evidence we get; with a PID
    heuristic check it's a strong auto-apply candidate.
 3. Other `propose_exemption` categories (closed list only) — the closed

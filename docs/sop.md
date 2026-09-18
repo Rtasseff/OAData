@@ -173,11 +173,43 @@ the SharePoint folder) → closes as `CLOSED_DATA_ARCHIVED`.
 | `completion_sent` | Send completion email to the data contact (data archived) | *(no status change; recurs while the archive is published-and-open until `done=1` logs it as sent)* |
 | `reject_done` | Reject the Tracker 'done' tick (untick it + email the data contact) | *(no status change; see §8.1b — only offered when a rejection rule applies, e.g. the folder is empty)* |
 | `reject_done_sent` | Send the 'not done yet' email to the data contact | *(no status change; recurs until `done=1` after `reject_done`)* |
+| `archived_external` | Record the external deposit (PID + URL); publication-DB entry and folder removal still follow | `OPEN_ZENODO_PUBLISHED` (Zenodo stages skipped — see "Exemptions" below) |
+| `close_archived_external` | Close as archived elsewhere — only when the DB entry and folder removal are already done | `CLOSED_DATA_ARCHIVED` |
 | `close_publication_only` | Close as publication-only (no data deposit needed) | `CLOSED_PUBLICATION_ONLY` |
 | `close_exception` | Close with exception (add note explaining why) | `CLOSED_EXCEPTION` |
 | `mandate_missing` | Confirm with PO/IT — mandate could not be derived | *(no status change; see §8.7)* |
 
 One row applies to a **closed** archive: `closed_folder_removed` ("Delete the SharePoint folder (archive already closed), then confirm"). Exemption and `done=2` closures skip the folder-removal step, so the scanner flags a closed archive whose folder still exists; delete the folder in SharePoint, then `done=1` (skipped with a warning while the local sync still shows the folder — the next scan records the removal by itself either way). Until then the archive is listed under "Closed — SharePoint Folder Still to Delete" in the report and in the digest's operator worklist.
+
+### Exemptions (from the Tracker List, the web UI, or by hand)
+
+Data contacts can propose an exemption on the SharePoint Tracker (the
+closed list is in [sharepoint_list_design.md](sharepoint_list_design.md)
+§ *Exemption categories*, which is canonical for the wording and the
+routing). Two kinds, deliberately different:
+
+- **"All data is deposited externally (e.g. collaboration; must fill in
+  external PID and URL)"** is an exemption from *our Zenodo deposit*, not
+  from the process. It applies as `archived_external`: the external
+  PID/URL are recorded and the archive jumps to `OPEN_ZENODO_PUBLISHED`
+  — the Zenodo draft/review/publish stages are skipped, but you still
+  **must** enter the PID/URL in the institutional publication DB
+  (`db_updated`) and then delete the SharePoint folder
+  (`folder_removed`), which closes it as `CLOSED_DATA_ARCHIVED`. The
+  same code is behind the web UI's "Deposited elsewhere" option and can
+  be applied by hand: `oa action <pub> archived_external --pid <pid>
+  --url <url>`.
+- **"No data shareable"**, **"No data generated"** and **"Collaborative
+  consultation only (no biomaGUNE data AND no biomaGUNE lead)"** are true
+  exemptions: nothing is deposited and nothing goes into the publication
+  DB. They close at once (`close_exception` / `close_publication_only`).
+  The one remaining action is deleting the SharePoint folder — the
+  scanner flags the closed archive while its folder exists and the sheet
+  carries a `closed_folder_removed` row until it is gone.
+
+`close_archived_external` (and `done=2` with a PID) remain as the
+shortcut for an external deposit whose DB entry and folder removal are
+*already* done.
 
 ### Stage-2 mandate-aware behavior
 
@@ -300,7 +332,7 @@ Example: an `OPEN_ACTIVE` archive where you did everything at once. Set `done=1`
 
 This does NOT apply to `remind_sent` or `qa_hold` rows — those are handled normally even if a PID is present.
 
-This is also the route for data deposited **somewhere other than our Zenodo pipeline** — a record the PI made by hand, or another repository entirely (common in collaborations): record that deposit's DOI/URL with `done=1` and the remaining steps (completion email, publication-DB entry, folder removal) follow as normal. The web UI offers this as "Deposited elsewhere" on the QA and create-draft steps. Use `close_archived_external` (or `done=2`) instead only when those remaining steps are already done.
+For data deposited **somewhere other than our Zenodo pipeline** — a record the PI made by hand, or another repository entirely (common in collaborations) — prefer the explicit `archived_external` code (see "Exemptions" above); it has the same effect with a clearer audit trail. Use `close_archived_external` (or `done=2`) only when the publication-DB entry and folder removal are already done.
 
 **`done=2` → full closure (everything done, folder removed)**
 

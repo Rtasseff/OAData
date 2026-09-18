@@ -30,9 +30,12 @@ Zenodo draft by hand. Where the system would create one (QA pass, and
 the create-draft step) there is a folded-away alternative, *Deposited
 elsewhere — record its DOI and URL*, for a deposit made by hand or data
 that lives in another repository (common in collaborations, and not
-necessarily Zenodo). It is the sheet's `done=1` + DOI/URL fast-track:
-the archive jumps to *Published — update database* and the completion
-email, institutional-DB entry and folder removal still follow as steps.
+necessarily Zenodo). It applies `archived_external` (the same code the
+Tracker List's "deposited externally" exemption routes to): the archive
+jumps to *Published — update database* and the completion email,
+institutional-DB entry and folder removal still follow as steps. True
+exemptions (no data shareable / generated, consultation only) close at
+once and leave only the folder deletion as an action.
 The manual *record id* / *DOI + URL* inputs only appear when the system
 cannot act itself (Zenodo integration off, non-numeric id); they are
 pre-filled whenever the record is known.

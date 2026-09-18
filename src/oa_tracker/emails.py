@@ -11,7 +11,7 @@ from string import Template
 from typing import Any
 
 from oa_tracker import db, status as st
-from oa_tracker.checks import has_data_contact
+from oa_tracker.checks import has_data_contact, is_external_deposit
 from oa_tracker.config import Config
 
 
@@ -403,6 +403,10 @@ def generate_emails(config: Config) -> list[Path]:
             vars_ = _common_template_vars(archive, config)
             vars_["final_pid"] = archive.get("final_pid") or "(pending)"
             vars_["final_url"] = archive.get("final_url") or "(pending)"
+            vars_["repository"] = (
+                "the external repository you indicated" if is_external_deposit(archive)
+                else "Zenodo"
+            )
             vars_["cc_line"] = _cc_line(archive, vars_["data_contact_email"])
             content = completion_tpl.safe_substitute(**vars_)
             generated.extend(

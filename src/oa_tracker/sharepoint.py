@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from oa_tracker.checks import is_external_deposit
 from oa_tracker.config import Config, SharePointSettings
 
 GRAPH = "https://graph.microsoft.com/v1.0"
@@ -54,14 +55,28 @@ STATUS_LABELS = {
     "CLOSED_PUBLICATION_ONLY": "Closed — no data required",
     "CLOSED_EXCEPTION": "Closed — exception",
 }
+# OPEN_ZENODO_PUBLISHED when the deposit is in another repository.
+EXTERNAL_PUBLISHED_LABEL = "Deposited externally — recorded"
 
+# The user-facing exemption list (wording locked 2026-09-18). The first is
+# an exemption from OUR deposit only — the process continues with the
+# publication-DB entry and folder removal; the next three are true
+# exemptions (closed at once; only the folder removal remains).
 EXEMPTION_CHOICES = [
-    "All data deposited in another archive",
+    "All data is deposited externally (e.g. collaboration; must fill in external PID and URL)",
     "No data shareable (sensitivity/confidentiality)",
     "No data generated (review/theory/perspective)",
-    "Collaborative project AND no biomaGUNE data or lead",
+    "Collaborative consultation only (no biomaGUNE data AND no biomaGUNE lead)",
     "Other — needs explanation",
 ]
+EXEMPTION_EXTERNAL, EXEMPTION_NO_SHARE, EXEMPTION_NO_DATA, EXEMPTION_CONSULT, EXEMPTION_OTHER = (
+    EXEMPTION_CHOICES
+)
+# Rows still carrying the pre-2026-09-18 wording route the same way.
+_LEGACY_EXEMPTIONS = {
+    "All data deposited in another archive": EXEMPTION_EXTERNAL,
+    "Collaborative project AND no biomaGUNE data or lead": EXEMPTION_CONSULT,
+}
 
 # ── Display-name constants (single source for the column registry and
 #    the field-building code, so the two never drift). ────────────────
@@ -114,7 +129,7 @@ def _person() -> dict:
 COLUMNS: list[dict[str, Any]] = [
     # system-owned
     {"display": D_PUBID, "name": "PubId", "group": "system", "indexed": True, "spec": _text()},
-    {"display": D_STATUS, "name": "PipelineStatus", "group": "system", "spec": _choice(list(STATUS_LABELS.values()))},
+    {"display": D_STATUS, "name": "PipelineStatus", "group": "system", "spec": _choice(list(STATUS_LABELS.values()) + [EXTERNAL_PUBLISHED_LABEL])},
     {"display": D_DATA, "name": "DataArchiving", "group": "system", "spec": _choice(["Required", "Not required", "Unknown"])},
     {"display": D_EMBARGO, "name": "EmbargoMonths", "group": "system", "spec": {"number": {}}},
     {"display": D_CORR, "name": "CorrAuthor", "group": "system", "spec": _person()},
@@ -146,7 +161,9 @@ COLUMNS: list[dict[str, Any]] = [
 
 # ── Pure mappers (no I/O) ────────────────────────────────────────────
 
-def status_label(status: str) -> str:
+def status_label(status: str, archive: dict | None = None) -> str:
+    if archive is not None and status == "OPEN_ZENODO_PUBLISHED" and is_external_deposit(archive):
+        return EXTERNAL_PUBLISHED_LABEL
     return STATUS_LABELS.get(status, status)
 
 
@@ -205,7 +222,7 @@ def build_system_fields(
             f[col] = value
 
     put(D_PUBID, archive["publication_id"])
-    put(D_STATUS, status_label(archive["status"]))
+    put(D_STATUS, status_label(archive["status"], archive))
     put(D_DATA, data_archiving_label(archive))
     put(D_SYNCED, now)
     if archive.get("max_embargo_months") is not None:
@@ -524,6 +541,7 @@ def ensure_list(client, site_id: str, sp: SharePointSettings) -> tuple[str, str,
             except Exception:
                 pass
             failures.append(f"{col['display']!r} ({col['name']}): HTTP {e.code} — {detail[:300]}")
+    failures.extend(sync_choice_columns(client, site_id, list_id))
     name_for = resolve_names(client, site_id, list_id)
     if failures:
         # The columns that succeeded are created (re-running skips them).
@@ -533,6 +551,34 @@ def ensure_list(client, site_id: str, sp: SharePointSettings) -> tuple[str, str,
             "`oa sharepoint provision`:\n  - " + "\n  - ".join(failures)
         )
     return list_id, lst.get("webUrl", ""), name_for
+
+
+def sync_choice_columns(client, site_id: str, list_id: str) -> list[str]:
+    """Bring existing choice columns' option lists up to the registry
+    (e.g. reworded exemption categories). Items keep whatever value they
+    already hold — a row still showing an old wording is routed by the
+    legacy map in EXEMPTION_ROUTING. Returns failure descriptions."""
+    wanted = {
+        c["display"]: c["spec"]["choice"]["choices"]
+        for c in COLUMNS if "choice" in c["spec"]
+    }
+    _, page = client.request(
+        "GET", f"/sites/{site_id}/lists/{list_id}/columns?$select=id,displayName,choice"
+    )
+    failures: list[str] = []
+    for col in page.get("value", []):
+        choices = wanted.get(col.get("displayName"))
+        current = (col.get("choice") or {}).get("choices")
+        if choices is None or current is None or list(current) == choices:
+            continue
+        try:
+            client.request(
+                "PATCH", f"/sites/{site_id}/lists/{list_id}/columns/{col['id']}",
+                {"choice": {"choices": choices}},
+            )
+        except urllib.error.HTTPError as e:
+            failures.append(f"{col.get('displayName')!r} choices: HTTP {e.code}")
+    return failures
 
 
 def fetch_items(client, site_id: str, list_id: str, pubid_internal: str) -> dict[str, dict]:
@@ -628,7 +674,7 @@ def reconcile_closed_rows(
         arch = archive_by_id.get(pub_id)
         if arch is None or not str(arch.get("status", "")).startswith("CLOSED_"):
             continue
-        desired = status_label(arch["status"])
+        desired = status_label(arch["status"], arch)
         current = (item.get("fields") or {}).get(status_col)
         try:
             if current != desired:
@@ -656,16 +702,19 @@ REQUEST_STATUS_PENDING = "Received — pending review"
 REQUEST_STATUS_PROCESSED = "Received — processed"
 REQUEST_STATUS_NOT_DONE = "Returned — not done yet (see our email)"
 
-# Exemption category → the concrete closure task code applied (after the
-# operator confirms). "needs_evidence" categories require PID + URL. Maps
-# the docs/sharepoint_list_design.md table; "Other" stays operator-routed.
+# Exemption category → the task code applied. "needs_evidence" categories
+# require PID + URL. Maps the docs/sharepoint_list_design.md table;
+# "Other" stays operator-routed. The external-deposit category is NOT a
+# closure: archived_external records the PID/URL and the process carries
+# on with the publication-DB entry and the folder removal.
 EXEMPTION_ROUTING: dict[str, tuple[str, bool]] = {
-    "All data deposited in another archive": ("close_archived_external", True),
-    "No data shareable (sensitivity/confidentiality)": ("close_exception", False),
-    "No data generated (review/theory/perspective)": ("close_publication_only", False),
-    "Collaborative project AND no biomaGUNE data or lead": ("close_exception", False),
-    "Other — needs explanation": ("propose_exemption", False),
+    EXEMPTION_EXTERNAL: ("archived_external", True),
+    EXEMPTION_NO_SHARE: ("close_exception", False),
+    EXEMPTION_NO_DATA: ("close_publication_only", False),
+    EXEMPTION_CONSULT: ("close_exception", False),
+    EXEMPTION_OTHER: ("propose_exemption", False),
 }
+EXEMPTION_ROUTING.update({old: EXEMPTION_ROUTING[new] for old, new in _LEGACY_EXEMPTIONS.items()})
 
 
 @dataclass

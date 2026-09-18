@@ -183,7 +183,14 @@ SharePoint-track additions (v3):
   sheet rows (categorized exemptions re-route to a concrete `close_*`).
 * `user_note` — records a List free-text note to the archive; no status change.
 * `close_archived_external` — any OPEN → `CLOSED_DATA_ARCHIVED` with an
-  **external** repository's PID + URL (both required).
+  **external** repository's PID + URL (both required). The shortcut for
+  when the publication-DB entry and folder removal are already done.
+* `archived_external` (2026-09-18) — any OPEN → `OPEN_ZENODO_PUBLISHED`
+  with an external PID + URL (both required; warns if a Zenodo draft is
+  on file). The "deposited externally" exemption: skips the Zenodo
+  stages only, so `db_updated` and `folder_removed` still follow.
+  `checks.is_external_deposit` tells such archives apart (List label
+  "Deposited externally — recorded"; completion email wording).
 * `set_corresponding_author` / `reset_corresponding_author` — CLI-only
   override, mirrors `set_data_contact`.
 

@@ -240,15 +240,6 @@ def perform(
         config, pub_id, apply_code, done=1, pid=pid, url=url, note=note, source=source,
     )
     out.warnings = [_clean(w) for w in result.warnings]
-    if button.choice == "elsewhere":
-        # apply's "not a Zenodo DOI" heuristic is expected here; keep only
-        # the part that matters (it must not be the paper's own DOI).
-        out.warnings = [
-            "Check: that DOI is not a Zenodo DOI — fine for another repository, "
-            "wrong if it is the paper's own DOI."
-            if "looks like a paper DOI" in w else w
-            for w in out.warnings
-        ]
     out.errors = [_clean(e) for e in result.errors]
     if not result.applied:
         if not out.errors and not out.warnings:

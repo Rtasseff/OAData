@@ -92,6 +92,7 @@ single reference for operating rules):
 | Pipeline (manual steps) | `qa_pass`, `qa_hold`, `zenodo_draft_created`, `zenodo_validated`, `zenodo_published`, `db_updated`, `folder_removed` |
 | Zenodo API (needs `[zenodo]` enabled; done=1 performs the call) | `zenodo_create_draft`, `zenodo_upload_files`, `zenodo_publish` |
 | Closures (any OPEN status) | `close_publication_only`, `close_exception`, `close_archived_external` |
+| External deposit (any OPEN status) | `archived_external` — records the external PID/URL, skips the Zenodo stages; DB entry + folder removal still follow |
 | Audit-only acknowledgments | `remind_sent`, `contact_pi_manual`, `mandate_missing`, `propose_*`, `user_note` |
 | CLI-only overrides (survive scans) | `set/reset_data_contact`, `set/reset_zenodo_code`, `set/reset_corresponding_author` |
 

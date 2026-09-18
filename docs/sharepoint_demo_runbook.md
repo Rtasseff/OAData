@@ -30,8 +30,8 @@ PubId** in *Shared Documents* (so the Folder link resolves):
 | PubId  | Status → List label                | Folder        | What it demonstrates / tests |
 |--------|------------------------------------|---------------|------------------------------|
 | 990001 | OPEN_ACTIVE → "Data uploaded — under review" | with a file | Folder link · **Suggest a new data contact** · **I think this is done** |
-| 990002 | OPEN_ACTIVE → "Data uploaded — under review" (embargo 6) | with a file | **Exemption: All data deposited in another archive** (needs External PID + URL) |
-| 990003 | OPEN_ACTIVE → "Data uploaded — under review" | with a file | **Exemption: Collaborative AND no biomaGUNE data or lead** · **Note** |
+| 990002 | OPEN_ACTIVE → "Data uploaded — under review" (embargo 6) | with a file | **Exemption: All data is deposited externally (…)** (needs External PID + URL) |
+| 990003 | OPEN_ACTIVE → "Data uploaded — under review" | with a file | **Exemption: Collaborative consultation only (…)** · **Note** |
 | 990004 | OPEN_INACTIVE → "Waiting for data" | **EMPTY**     | "Waiting for data" label |
 | 990005 | OPEN_READY_FOR_ZENODO_DRAFT → "Ready to archive" | with a file | Later-stage label · DOI link (fake, 404s) |
 | 990006 | OPEN_ZENODO_PUBLISHED → "Published to Zenodo" | with a file | "Published to Zenodo" label · Zenodo link (fake, 404s) |
@@ -92,16 +92,16 @@ changing the edit re-emits.
       the normal flow, e.g. `oa action 990001 …`).
 
 **990002 — exemption needing evidence (the guard)**
-- [ ] Set *Propose exemption* = "All data deposited in another archive", leave
+- [ ] Set *Propose exemption* = "All data is deposited externally (e.g. collaboration; must fill in external PID and URL)", leave
       *External archive PID/URL* **blank**. Save → sync.
 - [ ] Expect a `propose_exemption` row whose note says the PID/URL is missing — **no
       closure** (this is the guard working).
 - [ ] Now fill *External archive PID* and *External archive URL*. Save → sync.
-- [ ] Expect a `close_archived_external` row with pid + url filled. Set `done=1`,
+- [ ] Expect an `archived_external` row with pid + url filled (lands on OPEN_ZENODO_PUBLISHED; db_updated + folder_removed still follow). Set `done=1`,
       `oa apply …` → 990002 closes **CLOSED_DATA_ARCHIVED** with the external PID/URL.
 
 **990003 — collaborative exemption + note**
-- [ ] Set *Propose exemption* = "Collaborative AND no biomaGUNE data or lead" and type
+- [ ] Set *Propose exemption* = "Collaborative consultation only (no biomaGUNE data AND no biomaGUNE lead)" and type
       something in *Notes*. Save → sync.
 - [ ] Expect a `close_exception` row (collaborative → CLOSED_EXCEPTION, no evidence
       required) **and** a separate `user_note` row carrying the Notes text
@@ -158,7 +158,7 @@ links and will 404. The **folder link** is real (use 990001).
    lives — this is where you upload your dataset." Show it open, come back.
 3. **Respond to a row (0:40–1:15).** Open a row (990003) → the short form. Walk the
    options slowly: **I think this is done**; **Propose exemption** (open the
-   dropdown, pick "Collaborative AND no biomaGUNE data or lead"); **Exemption /
+   dropdown, pick "Collaborative consultation only (no biomaGUNE data AND no biomaGUNE lead)"); **Exemption /
    done detail** (type a one-line reason); **Suggest a new data contact** (if it's
    not you); **Notes** (anything you want to tell us). Save.
 4. **What happens next (1:15–1:35).** "That's it — we review what you send and

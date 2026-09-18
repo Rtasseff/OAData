@@ -67,3 +67,14 @@ def has_data_contact(archive: dict[str, Any]) -> bool:
     """True when the archive names a real data contact. The scanner stores
     the literal placeholder 'TBD' when the central DB can't resolve one."""
     return "@" in (archive.get("data_contact_email") or "")
+
+
+def is_external_deposit(archive: dict[str, Any]) -> bool:
+    """The recorded dataset lives in a repository other than our Zenodo
+    pipeline (the "deposited externally" exemption, or a hand-recorded
+    non-Zenodo PID): a final PID with no Zenodo record on file and no
+    'zenodo' in the identifier."""
+    pid = (archive.get("final_pid") or "").strip().lower()
+    if not pid or archive.get("zenodo_code"):
+        return False
+    return "zenodo" not in pid

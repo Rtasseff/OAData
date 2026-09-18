@@ -10,7 +10,8 @@ from oa_tracker.actions import (
 )
 from oa_tracker.db import get_archive, get_connection, upsert_archive, get_recent_events
 from oa_tracker.status import (
-    OPEN_ACTIVE, OPEN_READY_FOR_ZENODO_DRAFT, OPEN_ZENODO_PUBLISHED,
+    OPEN_ACTIVE, OPEN_READY_FOR_ZENODO_DRAFT, OPEN_ZENODO_DRAFT_CREATED,
+    OPEN_ZENODO_PUBLISHED, OPEN_DB_UPDATED,
     CLOSED_DATA_ARCHIVED, CLOSED_EXCEPTION,
     validate_transition,
 )
@@ -1146,3 +1147,62 @@ def test_reassignment_keeps_reminder_clock(test_config):
         a = get_archive(conn, "PUB501")
         assert a["reminder_count"] == 2
         assert a["next_reminder_at"] == "2026-01-19T00:00:00"
+
+
+# ── archived_external: external deposit, process continues ───────────
+
+
+def test_archived_external_records_pid_and_lands_on_published(test_config):
+    """The 'deposited externally' exemption skips only the Zenodo stages:
+    the archive lands on OPEN_ZENODO_PUBLISHED with the external PID/URL,
+    so db_updated and folder_removed still have to happen."""
+    from oa_tracker.actions import apply_single
+    from oa_tracker.sheet import build_rows
+
+    _insert_active_archive(test_config.database, "PUB600")
+    result, old, new = apply_single(
+        test_config, "PUB600", "archived_external",
+        pid="10.5061/dryad.abc123", url="https://datadryad.org/x", note="collab deposit",
+    )
+    assert result.applied == 1 and result.errors == []
+    assert (old, new) == (OPEN_ACTIVE, OPEN_ZENODO_PUBLISHED)
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "PUB600")
+        assert a["final_pid"] == "10.5061/dryad.abc123"
+        assert "collab deposit" in a["notes"]
+        events = get_recent_events(conn, "2000-01-01T00:00:00")
+        assert events[0]["action_code"] == "archived_external"
+    assert [r["task_code"] for r in build_rows(test_config)] == ["db_updated", "completion_sent"]
+
+    # ...and the normal tail closes it.
+    apply_single(test_config, "PUB600", "db_updated")
+    _, old, new = apply_single(test_config, "PUB600", "folder_removed")
+    assert (old, new) == (OPEN_DB_UPDATED, CLOSED_DATA_ARCHIVED)
+
+
+def test_archived_external_requires_pid_and_url_and_open_status(test_config):
+    from oa_tracker.actions import apply_single
+
+    _insert_active_archive(test_config.database, "PUB601")
+    result, _, _ = apply_single(test_config, "PUB601", "archived_external", pid="10.5061/x")
+    assert result.applied == 0 and "URL" in result.errors[0]
+    with get_connection(test_config.database) as conn:
+        assert get_archive(conn, "PUB601")["status"] == OPEN_ACTIVE
+
+    apply_single(test_config, "PUB601", "close_exception", note="x")
+    result, _, _ = apply_single(test_config, "PUB601", "archived_external",
+                                pid="10.5061/x", url="https://d/x")
+    assert result.applied == 0 and "OPEN" in result.errors[0]
+
+
+def test_archived_external_warns_when_a_zenodo_draft_exists(test_config):
+    from oa_tracker.actions import apply_single
+
+    _insert_active_archive(test_config.database, "PUB602")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB602", status=OPEN_ZENODO_DRAFT_CREATED,
+                       zenodo_code="777")
+    result, _, new = apply_single(test_config, "PUB602", "archived_external",
+                                  pid="10.5061/x", url="https://d/x")
+    assert result.applied == 1 and new == OPEN_ZENODO_PUBLISHED
+    assert any("777" in w and "discard" in w for w in result.warnings)

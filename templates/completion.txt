@@ -3,7 +3,7 @@ ${cc_line}Subject: Data deposit complete for publication ${publication_id}
 
 Dear ${data_contact_name},
 
-The Open Access data deposit for publication ${publication_id} ("${publication_title}") has been successfully published on Zenodo.
+The Open Access data deposit for publication ${publication_id} ("${publication_title}") has been successfully published on ${repository}.
 
 Dataset DOI: ${final_pid}
 Dataset URL: ${final_url}

@@ -1588,3 +1588,19 @@ Web UI for operator hand-off (2026-09-17, branch `web-ui`):
 - Not yet: exposing it to other machines (`--host 0.0.0.0` +
   `[web] allowed_hosts`; plain HTTP), `oa reopen` / `done=2` /
   proposals-file review on the web.
+
+Exemption semantics fixed (2026-09-18, branch `web-ui`):
+
+- "All data is deposited externally (e.g. collaboration; must fill in
+  external PID and URL)" is an exemption from *our* deposit only: new
+  task code `archived_external` records the PID/URL and lands on
+  `OPEN_ZENODO_PUBLISHED`, so the publication-DB entry and the folder
+  removal are still enforced (List exemption, web "Deposited elsewhere",
+  `oa action … archived_external`). `close_archived_external` stays as
+  the already-all-done shortcut.
+- True exemptions (no data shareable / no data generated / "Collaborative
+  consultation only (no biomaGUNE data AND no biomaGUNE lead)") close at
+  once; the closed-folder clean-up row is the required follow-up.
+- Two List choices reworded; `ensure_list` now patches an existing choice
+  column's options, so `oa sharepoint provision` (or `sync`) applies the
+  new wording to the live List. Old wordings still route.

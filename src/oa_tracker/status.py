@@ -170,6 +170,17 @@ TASK_CODES = {
         "changes_status": True,
         "requires_pid": True,
     },
+    # The "all data deposited externally" exemption (decision 2026-09-18):
+    # an exemption from OUR Zenodo deposit, not from the process. Records
+    # the external PID/URL and lands on OPEN_ZENODO_PUBLISHED so the
+    # publication-DB entry and the folder removal still have to be done.
+    # close_archived_external stays as the shortcut for when those two
+    # steps are already done (like done=2).
+    "archived_external": {
+        "description": "Record the external deposit (PID + URL); publication-DB entry and folder removal still follow",
+        "changes_status": True,
+        "requires_pid": True,
+    },
     # CLI-only corresponding-author override (mirrors set/reset_data_contact).
     # Lets the operator pin an "effective" corresponding author on rows
     # whose real one is external/blank, so the row surfaces in that
@@ -236,6 +247,8 @@ _WILDCARD_TASKS = {
     # Data archived in an external repository — closes as archived (the
     # external PID/URL is required and recorded by actions._apply_row).
     "close_archived_external": CLOSED_DATA_ARCHIVED,
+    # External deposit recorded — skips the Zenodo stages only.
+    "archived_external": OPEN_ZENODO_PUBLISHED,
 }
 
 

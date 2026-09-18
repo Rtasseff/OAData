@@ -118,13 +118,14 @@ def _apply_row(
         result.applied += 1
         return (True, old_status, new_status)
 
-    # ── close_archived_external: data archived in an external repo ──
-    # The "ALL data deposited in another archive" exemption. The data is
-    # archived (just not via our Zenodo pipeline), so this closes as
-    # CLOSED_DATA_ARCHIVED with the EXTERNAL PID/URL recorded — it counts
-    # in "data archived" totals, not as an exception. Handled before the
-    # generic fast-track below so the external PID isn't mistaken for a
-    # Zenodo publish. Requires both a PID and a URL.
+    # ── close_archived_external: external deposit, everything else done ──
+    # Closes as CLOSED_DATA_ARCHIVED with the EXTERNAL PID/URL recorded —
+    # it counts in "data archived" totals, not as an exception. Since
+    # 2026-09-18 the "deposited externally" exemption routes to
+    # archived_external (below) instead, which keeps the DB-entry and
+    # folder-removal steps; this code is the shortcut for when those are
+    # already done. Handled before the generic fast-track below so the
+    # external PID isn't mistaken for a Zenodo publish. Requires PID + URL.
     if task_code == "close_archived_external":
         if old_status not in st.OPEN_STATUSES:
             result.errors.append(
@@ -150,6 +151,40 @@ def _apply_row(
         )
         result.applied += 1
         return (True, old_status, st.CLOSED_DATA_ARCHIVED)
+
+    # ── archived_external: external deposit, keep the tail of the process ──
+    # The "all data deposited externally" exemption: the data is archived,
+    # just not by us — so the Zenodo stages are skipped, but the
+    # publication-DB entry and the folder removal still follow (the
+    # archive lands on OPEN_ZENODO_PUBLISHED with the external PID/URL).
+    if task_code == "archived_external":
+        if old_status not in st.OPEN_STATUSES:
+            result.errors.append(
+                f"{row_label} ({pub_id}): archived_external needs an OPEN status, "
+                f"not {old_status}"
+            )
+            return (False, old_status, None)
+        if not pid or not url:
+            result.errors.append(
+                f"{row_label} ({pub_id}): archived_external requires both a PID "
+                "and a URL (the external archive's)"
+            )
+            return (False, old_status, None)
+        if archive.get("zenodo_code"):
+            result.warnings.append(
+                f"{row_label} ({pub_id}): a Zenodo draft ({archive['zenodo_code']}) is "
+                "on file — discard it on Zenodo by hand so it is not published later"
+            )
+        extra_fields = {"final_pid": pid, "final_url": url}
+        if note:
+            extra_fields["notes"] = _append_note(archive, note, now)
+        db.update_archive_status(conn, pub_id, st.OPEN_ZENODO_PUBLISHED, **extra_fields)
+        db.insert_event(
+            conn, pub_id, "archived_external", old_status, st.OPEN_ZENODO_PUBLISHED,
+            source, pid=pid, url=url, note=note or None,
+        )
+        result.applied += 1
+        return (True, old_status, st.OPEN_ZENODO_PUBLISHED)
 
     # ── reject_done / closed_folder_removed: no status change ──
     # Handled before the fast-track block — a stray PID on these rows
