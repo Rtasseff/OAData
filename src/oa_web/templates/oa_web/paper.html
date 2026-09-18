@@ -49,19 +49,46 @@
     </div>
     {% endif %}
 
+    {% if "expected" in c.spec.links %}
+    <dl class="kv" style="margin-bottom:14px">
+      {% if zen %}
+      <dt>DOI to record</dt><dd><span class="copy">{{ zen.doi }}</span></dd>
+      <dt>URL to record</dt><dd><span class="copy">{{ zen.record }}</span></dd>
+      {% if not zenodo_enabled %}<dt></dt><dd class="small">Zenodo integration is switched off in config.toml, so confirming cannot check Zenodo: it marks the draft validated and the next step records these identifiers (pre-filled).</dd>{% endif %}
+      {% else %}
+      <dt>Identifiers</dt><dd class="small">This draft was not made by the system, so there is no record on file: confirming marks it validated and the next step asks for the DOI and URL.</dd>
+      {% endif %}
+    </dl>
+    {% endif %}
+
+    {% if c.main %}
     <form method="post" action="{% url 'paper_action' a.publication_id %}">{% csrf_token %}
       <input type="hidden" name="task_code" value="{{ c.row.task_code }}">
       <input type="hidden" name="expected_status" value="{{ a.status }}">
       <div class="fields">
-        {% if "zenodo_code" in c.spec.fields %}<div><label>Zenodo record id (numeric)</label><input type="text" name="zenodo_code" inputmode="numeric" required value="{{ a.zenodo_code|default:'' }}"></div>{% endif %}
-        {% if "pid" in c.spec.fields %}<div><label>Dataset DOI</label><input type="text" name="pid" placeholder="10.5281/zenodo.1234567" required></div>
-        <div><label>Dataset URL</label><input type="url" name="url" placeholder="https://zenodo.org/records/1234567" required></div>{% endif %}
+        {% if "zenodo_code" in c.spec.fields %}<div><label>Zenodo record id (numeric)</label><input type="text" name="zenodo_code" inputmode="numeric" value="{{ a.zenodo_code|default:'' }}"></div>{% endif %}
         <div><label>{{ c.spec.note_hint }}</label><textarea name="note" rows="2"></textarea></div>
       </div>
       <div class="btns">
-        {% for b in c.spec.buttons %}<button class="btn {{ b.style }}" type="submit" name="choice" value="{{ b.choice }}"{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}>{{ b.label }}</button>{% endfor %}
+        {% for b in c.main %}<button class="btn {{ b.style }}" type="submit" name="choice" value="{{ b.choice }}"{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}>{{ b.label }}</button>{% endfor %}
       </div>
     </form>
+    {% endif %}
+
+    {% for b in c.pid_buttons %}
+    {% if c.main %}<details class="alt"><summary>Deposited elsewhere (not by the system) — record its DOI and URL</summary><div class="body">{% endif %}
+    <form method="post" action="{% url 'paper_action' a.publication_id %}">{% csrf_token %}
+      <input type="hidden" name="task_code" value="{{ c.row.task_code }}">
+      <input type="hidden" name="expected_status" value="{{ a.status }}">
+      <div class="fields">
+        <div><label>Dataset DOI / PID</label><input type="text" name="pid" placeholder="10.5281/zenodo.1234567" required{% if not c.main and zen %} value="{{ zen.doi }}"{% endif %}></div>
+        <div><label>Dataset URL</label><input type="url" name="url" placeholder="https://zenodo.org/records/1234567" required{% if not c.main and zen %} value="{{ zen.record }}"{% endif %}></div>
+        <div><label>{{ c.spec.note_hint }}</label><textarea name="note" rows="2"></textarea></div>
+      </div>
+      <div class="btns"><button class="btn {{ b.style }}" type="submit" name="choice" value="{{ b.choice }}"{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}>{{ b.label }}</button></div>
+    </form>
+    {% if c.main %}</div></details>{% endif %}
+    {% endfor %}
     {% else %}
     <h2>{{ c.row.task_text }}</h2>
     <div class="notebox">This kind of action is handled from the command line ({{ c.row.task_code }}).</div>
@@ -137,7 +164,7 @@
           <input type="hidden" name="other" value="1">
           <input type="hidden" name="expected_status" value="{{ a.status }}">
           <div class="fields">
-            {% if "pid" in spec.fields %}<div><label>PID / DOI in the other repository</label><input type="text" name="pid" required></div>
+            {% if spec.buttons.0.needs_pid_url %}<div><label>PID / DOI in the other repository</label><input type="text" name="pid" required></div>
             <div><label>URL</label><input type="url" name="url" required></div>{% endif %}
             <div><label>{{ spec.note_hint }}</label><textarea name="note" rows="2"{% if spec.buttons.0.needs_note %} required{% endif %}></textarea></div>
           </div>

@@ -15,13 +15,32 @@ page covers only running the site and how it fits with the CLI.
 | **History** | The audit trail (`events` table), newest first. | — |
 | **Paper** (click an action or a title) | What to do for each pending action, the links needed (SharePoint folder, Zenodo draft, email draft download, DOI/URL to copy), and the button that records it. After a button the same page reloads showing the next step. | `oa action` |
 
-Buttons per step: QA has **QA pass / QA fail** (fail requires a note →
-`qa_hold`); email steps have **Email sent** (drafts are still written to
-`output/email_drafts/`, sending stays manual; the page offers the draft
-as a download); hand-recorded Zenodo steps ask for the record id or
-DOI + URL; everything else is a single confirm button. "Other actions"
-on an open paper: change the data contact, close as exception (note
-required), close as publication-only, close as archived elsewhere.
+Buttons per step: QA has **QA pass** (the system then creates the
+Zenodo draft and uploads the package at the next `oa auto` run) and
+**QA fail** (requires a note → `qa_hold`); email steps have **Email
+sent** (drafts are still written to `output/email_drafts/`, sending
+stays manual; the page offers the draft as a download); the Zenodo
+review step shows the DOI/URL the system reserved and **confirm**
+records them after checking the record is public (the CLI's
+`zenodo_validated` auto-record path — nothing is typed); everything
+else is a single confirm button.
+
+**Deposited elsewhere.** The normal workflow never asks anyone to make a
+Zenodo draft by hand. Where the system would create one (QA pass, and
+the create-draft step) there is a folded-away alternative, *Deposited
+elsewhere — record its DOI and URL*, for a deposit made by hand or data
+that lives in another repository (common in collaborations, and not
+necessarily Zenodo). It is the sheet's `done=1` + DOI/URL fast-track:
+the archive jumps to *Published — update database* and the completion
+email, institutional-DB entry and folder removal still follow as steps.
+The manual *record id* / *DOI + URL* inputs only appear when the system
+cannot act itself (Zenodo integration off, non-numeric id); they are
+pre-filled whenever the record is known.
+
+"Other actions" on an open paper: change the data contact, close as
+exception (note required), close as publication-only, close as archived
+elsewhere (DOI + URL; closes at once — for when the DB entry and folder
+removal are already done, i.e. the CLI's `done=2` habit).
 
 Not in the UI (CLI only): `oa reopen`, the `reset_*` overrides,
 `set_corresponding_author`, the `done=2` full-closure shortcut, applying

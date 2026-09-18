@@ -139,6 +139,9 @@ def zenodo_links(config: Config, archive: dict[str, Any]) -> dict[str, str]:
     return {
         "draft": zenodo.record_ui_url(config.zenodo, str(code)),
         "record": zenodo.record_public_url(config.zenodo, str(code)),
+        # The DOI reserved at draft creation IS the minted DOI — what the
+        # confirm step records (see actions._confirm_zenodo_published).
+        "doi": archive.get("zenodo_doi") or zenodo.code_to_doi(str(code)),
     }
 
 
@@ -211,9 +214,10 @@ def perform(
     if button.needs_note and not note:
         out.errors.append("A note is required for this — say why.")
         return out
-    # pid/url are only ever passed for the actions that ask for them: on any
-    # other row they would trip apply's fast-track-to-published shortcut.
-    if "pid" in spec.fields:
+    # pid/url are only ever passed for the buttons that ask for them: on any
+    # other button they would trip apply's fast-track-to-published shortcut
+    # (which is exactly what the "deposited elsewhere" buttons rely on).
+    if button.needs_pid_url:
         if not pid or not url:
             out.errors.append("Both the DOI/PID and the URL are required.")
             return out
@@ -223,7 +227,7 @@ def perform(
     apply_code = button.apply_code or task_code
     source = f"web:{username}"
 
-    if "zenodo_code" in spec.fields:
+    if "zenodo_code" in spec.fields and not button.needs_pid_url:
         if not zenodo_code.isdigit():
             out.errors.append("Enter the numeric Zenodo record id (not the DOI).")
             return out
@@ -236,6 +240,15 @@ def perform(
         config, pub_id, apply_code, done=1, pid=pid, url=url, note=note, source=source,
     )
     out.warnings = [_clean(w) for w in result.warnings]
+    if button.choice == "elsewhere":
+        # apply's "not a Zenodo DOI" heuristic is expected here; keep only
+        # the part that matters (it must not be the paper's own DOI).
+        out.warnings = [
+            "Check: that DOI is not a Zenodo DOI — fine for another repository, "
+            "wrong if it is the paper's own DOI."
+            if "looks like a paper DOI" in w else w
+            for w in out.warnings
+        ]
     out.errors = [_clean(e) for e in result.errors]
     if not result.applied:
         if not out.errors and not out.warnings:

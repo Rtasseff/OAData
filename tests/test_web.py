@@ -188,3 +188,43 @@ def test_button_returns_to_the_paper_showing_the_next_step(client, test_config):
     assert "Recorded: QA pass" in page
     assert 'id="zenodo_draft_created"' in page
     assert tracker.events_for(test_config, "100")[0]["source"] == "web:alice"
+
+
+def test_deposited_elsewhere_at_qa_fast_tracks_to_published(test_config):
+    """The 'deposited elsewhere' button is the sheet's done=1 + DOI/URL
+    shortcut: straight to OPEN_ZENODO_PUBLISHED, with the DB-update and
+    folder steps still to come — no Zenodo draft is created."""
+    _insert(test_config.database, "100", OPEN_ACTIVE)
+    out = tracker.perform(test_config, "alice", "100", "qa_pass", "elsewhere", OPEN_ACTIVE)
+    assert not out.ok and "DOI" in out.errors[0]
+    out = tracker.perform(test_config, "alice", "100", "qa_pass", "elsewhere", OPEN_ACTIVE,
+                          pid="10.1234/other.repo.1", url="https://repo.example.org/1")
+    assert out.ok, out.errors
+    a = tracker.get_archive(test_config, "100")
+    assert a["status"] == OPEN_ZENODO_PUBLISHED
+    assert (a["final_pid"], a["final_url"]) == ("10.1234/other.repo.1", "https://repo.example.org/1")
+    assert a["zenodo_code"] is None
+    assert tracker.events_for(test_config, "100")[0]["action_code"] == "fast_track_published"
+    assert [r["task_code"] for r in tracker.pending_by_pub(test_config)["100"]] == \
+        ["db_updated", "completion_sent"]
+
+
+def test_deposited_elsewhere_at_the_draft_step_skips_the_api(test_config):
+    _insert(test_config.database, "100", OPEN_READY_FOR_ZENODO_DRAFT)
+    row_code = tracker.pending_by_pub(test_config)["100"][0]["task_code"]
+    out = tracker.perform(test_config, "alice", "100", row_code, "elsewhere",
+                          OPEN_READY_FOR_ZENODO_DRAFT,
+                          pid="10.5281/zenodo.99", url="https://zenodo.org/records/99")
+    assert out.ok, out.errors
+    assert _status(test_config, "100") == OPEN_ZENODO_PUBLISHED
+
+
+def test_system_draft_shows_the_identifiers_it_will_record(client, test_config):
+    _insert(test_config.database, "100", "OPEN_ZENODO_DRAFT_CREATED",
+            zenodo_code="4242", zenodo_doi="10.5281/zenodo.4242")
+    page = client.get("/paper/100/").content.decode()
+    assert "10.5281/zenodo.4242" in page
+    assert "/records/4242" in page
+    card = page.split('id="zenodo_validated"')[1].split("</form>")[0]
+    assert "DOI to record" in card
+    assert 'name="pid"' not in card          # nothing to type at the confirm step

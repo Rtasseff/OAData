@@ -18,6 +18,7 @@ class Button:
     apply_code: str = ""    # task code applied; "" → the row's own code
     style: str = "primary"  # primary | danger | secondary
     needs_note: bool = False
+    needs_pid_url: bool = False  # asks for the dataset DOI + URL (recorded as final_pid/final_url)
     confirm: str = ""       # browser confirm() text for irreversible steps
 
 
@@ -26,11 +27,28 @@ class ActionSpec:
     title: str
     steps: tuple[str, ...]
     buttons: tuple[Button, ...]
-    fields: tuple[str, ...] = ()        # extra inputs: "pid", "url", "zenodo_code"
+    fields: tuple[str, ...] = ()        # extra inputs: "zenodo_code"
     email_stem: str = ""                # "{pub_id}"/"{n}" template of the draft's file stem
     note_hint: str = "Optional note (recorded in the audit log)"
     links: tuple[str, ...] = field(default=())  # "folder" | "zenodo" | "doi"
 
+
+# Offered wherever the normal path would have the system create the
+# Zenodo draft: the deposit was made by hand, or the data lives in another
+# repository (collaborations). Same as done=1 + DOI/URL on the sheet: the
+# archive jumps to "Published — update database" and the completion email,
+# institutional-DB entry and folder removal still follow as steps.
+ELSEWHERE = Button(
+    "elsewhere", "Record the DOI and URL — deposited elsewhere",
+    style="secondary", needs_pid_url=True,
+)
+ELSEWHERE_STEP = (
+    "If the data is already deposited somewhere else — a Zenodo record made "
+    "by hand, or another repository (common in collaborations) — do not "
+    "create a draft: record that deposit's DOI and URL instead under "
+    "“Deposited elsewhere” below. The remaining steps (completion email, "
+    "publication database, folder removal) then follow as usual."
+)
 
 _EMAIL_STEPS = (
     "Open the draft below (it opens in Outlook as a ready-to-send message), "
@@ -46,14 +64,18 @@ SPECS: dict[str, ActionSpec] = {
             "Open the SharePoint folder and review what the data contact uploaded.",
             "The package must be: one .zip with the datasets, a README.txt beside "
             "the zip, and a version of the manuscript (.doc/.docx/.pdf) beside the zip.",
-            "Pass → the archive moves on to the Zenodo draft. Fail → it stays where "
-            "it is; say what is wrong in the note so it is on record (the data "
-            "contact hears about it through the next reminder or your own email).",
+            "Pass → the system creates the Zenodo draft and uploads the package "
+            "at the next automatic run; you review and publish it later. Fail → "
+            "the archive stays where it is; say what is wrong in the note so it "
+            "is on record (the data contact hears about it through the next "
+            "reminder or your own email).",
+            ELSEWHERE_STEP,
         ),
         buttons=(
-            Button("pass", "QA pass"),
+            Button("pass", "QA pass — system creates the Zenodo draft"),
             Button("fail", "QA fail — keep waiting", apply_code="qa_hold",
                    style="danger", needs_note=True),
+            ELSEWHERE,
         ),
         note_hint="Note — required for a fail: what is missing or wrong",
         links=("folder",),
@@ -111,24 +133,28 @@ SPECS: dict[str, ActionSpec] = {
     "zenodo_create_draft": ActionSpec(
         title="Create the Zenodo draft",
         steps=(
-            "QA has passed. This creates the draft on Zenodo for you: metadata "
-            "from the publication database and a reserved DOI.",
-            "The package files are uploaded to the draft by the next automatic "
-            "run. Nothing is published at this step.",
+            "QA has passed. The next automatic run creates the draft on Zenodo "
+            "(metadata from the publication database, a reserved DOI) and "
+            "uploads the package — or create it now with the button. Nothing is "
+            "published at this step.",
+            ELSEWHERE_STEP,
         ),
-        buttons=(Button("done", "Create Zenodo draft"),),
+        buttons=(Button("done", "Create the Zenodo draft now"), ELSEWHERE),
         links=("folder",),
     ),
+    # Only offered when the system cannot create the draft itself (Zenodo
+    # integration off, non-numeric publication id, or a record already on
+    # file): the normal workflow never asks anyone to make a draft by hand.
     "zenodo_draft_created": ActionSpec(
-        title="Create the Zenodo draft by hand",
+        title="Zenodo draft made by hand",
         steps=(
-            "Create the deposit on Zenodo yourself (the cheat sheet in "
-            "output/zenodo_cheat/ has the metadata to enter).",
-            "Enter the numeric Zenodo record id below (e.g. 20268493 — not the "
-            "DOI) so the tracker knows which record belongs to this paper, then "
-            "confirm.",
+            "The system cannot create this draft itself (Zenodo integration is "
+            "off for this paper). If you created the deposit on Zenodo yourself, "
+            "enter its numeric record id (e.g. 20268493 — not the DOI) so the "
+            "tracker can find the DOI and URL later, then confirm.",
+            ELSEWHERE_STEP,
         ),
-        buttons=(Button("done", "Draft created"),),
+        buttons=(Button("done", "Draft created on Zenodo"), ELSEWHERE),
         fields=("zenodo_code",),
         links=("folder",),
     ),
@@ -138,12 +164,13 @@ SPECS: dict[str, ActionSpec] = {
             "Open the draft on Zenodo and check the metadata and the files.",
             "If it is good, click Publish on Zenodo. That is the permanent step "
             "and it is always yours.",
-            "Then confirm here. The tracker checks the record really is public "
-            "and records the DOI and URL by itself — nothing to type. If it is "
-            "not published yet you get a message and nothing changes.",
+            "Then confirm here. The DOI and URL shown below are the ones the "
+            "system reserved when it made the draft — confirming checks the "
+            "record really is public and records them; nothing to type. If it "
+            "is not published yet you get a message and nothing changes.",
         ),
         buttons=(Button("done", "Published on Zenodo — confirm"),),
-        links=("zenodo", "folder"),
+        links=("zenodo", "folder", "expected"),
     ),
     "zenodo_publish": ActionSpec(
         title="Publish the validated Zenodo draft",
@@ -163,13 +190,12 @@ SPECS: dict[str, ActionSpec] = {
     "zenodo_published": ActionSpec(
         title="Record the published Zenodo deposit",
         steps=(
-            "This deposit was made by hand, so the tracker does not know its "
-            "identifiers. Publish it on Zenodo, then enter the dataset DOI "
-            "(10.5281/zenodo.…) and the record URL below.",
+            "Publish the draft on Zenodo, then record the dataset DOI "
+            "(10.5281/zenodo.…) and the record URL. They are pre-filled when "
+            "the tracker knows the record — check them against Zenodo.",
             "Use the dataset's DOI — never the paper's DOI.",
         ),
-        buttons=(Button("done", "Record DOI and URL"),),
-        fields=("pid", "url"),
+        buttons=(Button("done", "Record DOI and URL", needs_pid_url=True),),
         links=("zenodo",),
     ),
     "db_updated": ActionSpec(
@@ -244,12 +270,15 @@ OTHER: dict[str, ActionSpec] = {
                         confirm="Close this archive as publication-only?"),),
     ),
     "close_archived_external": ActionSpec(
-        title="Close as archived elsewhere",
-        steps=("All the data is already in another repository. Record that "
-               "repository's PID and URL; the archive closes as “data archived”.",),
+        title="Close as archived elsewhere (everything already done)",
+        steps=("All the data is in another repository AND the publication "
+               "database is already updated and the folder removed. Record that "
+               "repository's PID and URL; the archive closes at once as “data "
+               "archived”. If those steps are still to do, use “Deposited "
+               "elsewhere” on the QA / Zenodo action instead.",),
         buttons=(Button("done", "Close as archived elsewhere", style="danger",
+                        needs_pid_url=True,
                         confirm="Close this archive as archived elsewhere?"),),
-        fields=("pid", "url"),
     ),
 }
 

@@ -101,14 +101,20 @@ def paper(request, pub_id: str):
     cards = []
     for row in tracker.pending_by_pub(config).get(pub_id, []):
         spec = guide.SPECS.get(row["task_code"])
+        buttons = spec.buttons if spec else ()
         cards.append({
             "row": row, "spec": spec,
             "drafts": tracker.email_drafts(config, archive, spec) if spec else [],
+            # Buttons that ask for a DOI + URL get their own form (folded
+            # away under "Deposited elsewhere" when they are the alternative).
+            "main": [b for b in buttons if not b.needs_pid_url],
+            "pid_buttons": [b for b in buttons if b.needs_pid_url],
         })
     show_folder = any(c["spec"] and "folder" in c["spec"].links for c in cards)
 
     return render(request, "oa_web/paper.html", {
         "a": archive, "cards": cards, "zen": zen,
+        "zenodo_enabled": config.zenodo.enabled,
         "others": guide.OTHER if archive["is_open"] else {},
         "files": tracker.folder_listing(archive) if show_folder else None,
         "show_folder": show_folder,

@@ -300,6 +300,8 @@ Example: an `OPEN_ACTIVE` archive where you did everything at once. Set `done=1`
 
 This does NOT apply to `remind_sent` or `qa_hold` rows — those are handled normally even if a PID is present.
 
+This is also the route for data deposited **somewhere other than our Zenodo pipeline** — a record the PI made by hand, or another repository entirely (common in collaborations): record that deposit's DOI/URL with `done=1` and the remaining steps (completion email, publication-DB entry, folder removal) follow as normal. The web UI offers this as "Deposited elsewhere" on the QA and create-draft steps. Use `close_archived_external` (or `done=2`) instead only when those remaining steps are already done.
+
 **`done=2` → full closure (everything done, folder removed)**
 
 Setting `done=2` means: "I did everything needed and the folder has been removed." The system closes the archive immediately:
