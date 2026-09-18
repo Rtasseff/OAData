@@ -22,8 +22,12 @@ sent** (drafts are still written to `output/email_drafts/`, sending
 stays manual; the page offers the draft as a download); the Zenodo
 review step shows the DOI/URL the system reserved and **confirm**
 records them after checking the record is public (the CLI's
-`zenodo_validated` auto-record path — nothing is typed); everything
-else is a single confirm button.
+`zenodo_validated` auto-record path — nothing is typed). For the rare
+record whose DOI or URL differs, a fold-out *Different DOI or URL on
+Zenodo?* holds the same two values pre-filled and editable; its button
+records them as entered, without the Zenodo check (the CLI's `pid`/`url`
+on that row — see [sop.md](sop.md) §7). Everything else is a single
+confirm button.
 
 **Deposited elsewhere.** The normal workflow never asks anyone to make a
 Zenodo draft by hand. Where the system would create one (QA pass, and

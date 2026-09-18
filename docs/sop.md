@@ -149,6 +149,11 @@ you never re-type identifiers we already have:
    - Safety: if you set `done=1` **before** actually clicking Publish, the
      apply refuses with *"record … is not published yet — publish it on
      Zenodo, then re-apply."* Nothing is invented.
+   - Rare correction: if the published record shows a different DOI or
+     URL, put the correct ones in `pid`/`url` on the same row. They are
+     then recorded exactly as entered (the fast-track path,
+     `fast_track_published` in the audit log), without the check against
+     Zenodo. The web UI offers the same thing as a pre-filled fold-out.
 
 Manual entry is required **only** for a draft the system did **not**
 create (a hand-made deposit — no record id on file). There the two-step

@@ -55,6 +55,7 @@
       {% if zen %}
       <dt>DOI to record</dt><dd><span class="copy">{{ zen.doi }}</span></dd>
       <dt>URL to record</dt><dd><span class="copy">{{ zen.record }}</span></dd>
+      <dt></dt><dd class="small">Zenodo shows a different DOI or URL (rare)? Correct them under “Different DOI or URL on Zenodo?” below — what you enter is recorded as is, without the check against Zenodo (the same as typing a PID on this row in the action sheet).</dd>
       {% if not zenodo_enabled %}<dt></dt><dd class="small">Zenodo integration is switched off in config.toml, so confirming cannot check Zenodo: it marks the draft validated and the next step records these identifiers (pre-filled).</dd>{% endif %}
       {% else %}
       <dt>Identifiers</dt><dd class="small">This draft was not made by the system, so there is no record on file: confirming marks it validated and the next step asks for the DOI and URL.</dd>
@@ -77,13 +78,13 @@
     {% endif %}
 
     {% for b in c.pid_buttons %}
-    {% if c.main %}<details class="alt"><summary>Deposited elsewhere (not by the system) — record its DOI and URL</summary><div class="body">{% endif %}
+    {% if c.main %}<details class="alt"><summary>{{ b.alt_summary }}</summary><div class="body">{% endif %}
     <form method="post" action="{% url 'paper_action' a.publication_id %}">{% csrf_token %}
       <input type="hidden" name="task_code" value="{{ c.row.task_code }}">
       <input type="hidden" name="expected_status" value="{{ a.status }}">
       <div class="fields">
-        <div><label>Dataset DOI / PID</label><input type="text" name="pid" placeholder="10.5281/zenodo.1234567" required{% if not c.main and zen %} value="{{ zen.doi }}"{% endif %}></div>
-        <div><label>Dataset URL</label><input type="url" name="url" placeholder="https://zenodo.org/records/1234567" required{% if not c.main and zen %} value="{{ zen.record }}"{% endif %}></div>
+        <div><label>Dataset DOI / PID</label><input type="text" name="pid" placeholder="10.5281/zenodo.1234567" required{% if b.prefill and zen %} value="{{ zen.doi }}"{% endif %}></div>
+        <div><label>Dataset URL</label><input type="url" name="url" placeholder="https://zenodo.org/records/1234567" required{% if b.prefill and zen %} value="{{ zen.record }}"{% endif %}></div>
         <div><label>{{ c.spec.note_hint }}</label><textarea name="note" rows="2"></textarea></div>
       </div>
       <div class="btns"><button class="btn {{ b.style }}" type="submit" name="choice" value="{{ b.choice }}"{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}>{{ b.label }}</button></div>

@@ -20,6 +20,8 @@ class Button:
     needs_note: bool = False
     needs_pid_url: bool = False  # asks for the dataset DOI + URL (recorded as final_pid/final_url)
     confirm: str = ""       # browser confirm() text for irreversible steps
+    alt_summary: str = ""   # needs_pid_url beside other buttons: the fold-out's heading
+    prefill: bool = False   # pre-fill DOI + URL from the Zenodo record on file
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class ActionSpec:
 ELSEWHERE = Button(
     "elsewhere", "Record the DOI and URL — deposited elsewhere",
     apply_code="archived_external", style="secondary", needs_pid_url=True,
+    alt_summary="Deposited elsewhere (not by the system) — record its DOI and URL",
 )
 ELSEWHERE_STEP = (
     "If the data is already deposited somewhere else — a Zenodo record made "
@@ -170,7 +173,14 @@ SPECS: dict[str, ActionSpec] = {
             "record really is public and records them; nothing to type. If it "
             "is not published yet you get a message and nothing changes.",
         ),
-        buttons=(Button("done", "Published on Zenodo — confirm"),),
+        buttons=(
+            Button("done", "Published on Zenodo — confirm"),
+            # Same path as done=1 + pid/url on this row in the sheet:
+            # apply's fast-track records the identifiers as entered.
+            Button("correct", "Published on Zenodo — record these identifiers",
+                   style="secondary", needs_pid_url=True, prefill=True,
+                   alt_summary="Different DOI or URL on Zenodo? Edit them and record"),
+        ),
         links=("zenodo", "folder", "expected"),
     ),
     "zenodo_publish": ActionSpec(
@@ -196,7 +206,7 @@ SPECS: dict[str, ActionSpec] = {
             "the tracker knows the record — check them against Zenodo.",
             "Use the dataset's DOI — never the paper's DOI.",
         ),
-        buttons=(Button("done", "Record DOI and URL", needs_pid_url=True),),
+        buttons=(Button("done", "Record DOI and URL", needs_pid_url=True, prefill=True),),
         links=("zenodo",),
     ),
     "db_updated": ActionSpec(

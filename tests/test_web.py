@@ -228,6 +228,41 @@ def test_system_draft_shows_the_identifiers_it_will_record(client, test_config):
     card = page.split('id="zenodo_validated"')[1].split("</form>")[0]
     assert "DOI to record" in card
     assert 'name="pid"' not in card          # nothing to type at the confirm step
+    # ...but they can be corrected in the fold-out, which starts pre-filled
+    alt = page.split('id="zenodo_validated"')[1].split("</details>")[0]
+    assert "<summary>Different DOI or URL on Zenodo?" in alt
+    assert 'value="10.5281/zenodo.4242"' in alt
+    assert '/records/4242"' in alt
+
+
+def test_hand_made_draft_has_no_correction_fold_out(client, test_config):
+    _insert(test_config.database, "100", "OPEN_ZENODO_DRAFT_CREATED")
+    page = client.get("/paper/100/").content.decode()
+    assert "Different DOI or URL on Zenodo?" not in page
+    assert 'value="correct"' not in page
+
+
+def test_corrected_identifiers_are_recorded_as_entered(test_config):
+    _insert(test_config.database, "100", "OPEN_ZENODO_DRAFT_CREATED",
+            zenodo_code="4242", zenodo_doi="10.5281/zenodo.4242")
+    row_code = tracker.pending_by_pub(test_config)["100"][0]["task_code"]
+    assert row_code == "zenodo_validated"
+    out = tracker.perform(test_config, "alice", "100", row_code, "correct",
+                          "OPEN_ZENODO_DRAFT_CREATED", note="Zenodo shows a new version DOI",
+                          pid="10.5281/zenodo.4243", url="https://zenodo.org/records/4243")
+    assert out.ok, out.errors
+    a = tracker.get_archive(test_config, "100")
+    assert a["status"] == OPEN_ZENODO_PUBLISHED
+    assert (a["final_pid"], a["final_url"]) == \
+        ("10.5281/zenodo.4243", "https://zenodo.org/records/4243")
+    ev = tracker.events_for(test_config, "100")[0]
+    assert (ev["action_code"], ev["source"], ev["pid"]) == \
+        ("fast_track_published", "web:alice", "10.5281/zenodo.4243")
+    # both fields are required on the correction
+    _insert(test_config.database, "101", "OPEN_ZENODO_DRAFT_CREATED", zenodo_code="5")
+    out = tracker.perform(test_config, "alice", "101", "zenodo_validated", "correct",
+                          "OPEN_ZENODO_DRAFT_CREATED", pid="10.5281/zenodo.5")
+    assert not out.ok and _status(test_config, "101") == "OPEN_ZENODO_DRAFT_CREATED"
 
 
 def test_button_press_pushes_that_row_to_sharepoint(test_config, monkeypatch):

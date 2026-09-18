@@ -106,9 +106,14 @@ def paper(request, pub_id: str):
             "row": row, "spec": spec,
             "drafts": tracker.email_drafts(config, archive, spec) if spec else [],
             # Buttons that ask for a DOI + URL get their own form (folded
-            # away under "Deposited elsewhere" when they are the alternative).
+            # away under their alt_summary when they are the alternative).
+            # A fold-out for correcting pre-filled identifiers is dropped
+            # when the system has no Zenodo record to pre-fill them from.
             "main": [b for b in buttons if not b.needs_pid_url],
-            "pid_buttons": [b for b in buttons if b.needs_pid_url],
+            "pid_buttons": [
+                b for b in buttons if b.needs_pid_url
+                and not (b.prefill and b.alt_summary and not zen)
+            ],
         })
     show_folder = any(c["spec"] and "folder" in c["spec"].links for c in cards)
 
