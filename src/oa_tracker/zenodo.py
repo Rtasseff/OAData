@@ -51,8 +51,22 @@ from typing import Any, Callable
 
 from oa_tracker.config import Config, ZenodoSettings
 
-# Zenodo per-file and per-record limit (50 GB).
-_MAX_BYTES = 50 * 1024**3
+# Zenodo's standard per-record quota: at most 100 files and 50 GB —
+# "50GB (50,000,000,000 bytes)", decimal, as Zenodo states it
+# (help.zenodo.org/docs/deposit/manage-files/). Each account also has a
+# one-off extra 150 GB allowance it can assign to a draft with "Manage
+# storage" (…/deposit/manage-quota/); CIC biomaGUNE keeps that for
+# exceptional cases (see OVER_QUOTA_ADVICE).
+_MAX_BYTES = 50_000_000_000
+_MAX_FILES = 100
+
+OVER_QUOTA_ADVICE = (
+    "CIC biomaGUNE policy is to respect the 50 GB limit: ask the data contact "
+    "to bring the package under 50 GB if at all possible. Extra storage is for "
+    "exceptional cases only — on the Zenodo draft, “Manage storage” (Files "
+    "section) assigns part of the account's one-off 150 GB extra allowance to "
+    "this record, after which the package can be uploaded by hand."
+)
 
 # Folder clutter never uploaded, whatever the upload_files mode.
 _IGNORE_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
@@ -591,6 +605,94 @@ def discover_files(folder: Path, mode: str = "package") -> tuple[list[Path], lis
     return to_upload, skipped
 
 
+def _gb(n: int) -> str:
+    return f"{n / 1e9:.1f} GB"
+
+
+@dataclass
+class UploadPlan:
+    """What uploading an archive folder to its draft involves, decided from
+    the local file sizes alone (no API call) — so the web page, the action
+    sheet and ``oa auto`` all give the same answer, before and after any
+    upload attempt."""
+    auto_limit: int                  # bytes: largest file the system uploads itself
+    files: list[tuple[str, Path, int]] = field(default_factory=list)  # (key, path, bytes)
+    skipped: list[str] = field(default_factory=list)   # outside the upload mode
+    error: str = ""                  # nothing uploadable / name collision
+    too_big_for_auto: list[str] = field(default_factory=list)  # keys above auto_limit
+    over_quota: bool = False         # beyond Zenodo's standard per-record quota
+
+    @property
+    def total(self) -> int:
+        return sum(size for _, _, size in self.files)
+
+    @property
+    def mode(self) -> str:
+        """``auto`` (the system can upload it), ``manual`` (a file is too big
+        for the unattended upload — upload by hand), ``over_quota`` (beyond
+        Zenodo's standard 50 GB / 100 files) or ``error``."""
+        if self.error:
+            return "error"
+        if self.over_quota:
+            return "over_quota"
+        if self.too_big_for_auto:
+            return "manual"
+        return "auto"
+
+    @property
+    def reason(self) -> str:
+        """Why the system cannot upload the package itself ("" when it can)."""
+        if self.error:
+            return self.error
+        if self.over_quota:
+            return (
+                f"The package is {_gb(self.total)} in {len(self.files)} file(s) — "
+                "over Zenodo's standard limit of 50 GB and 100 files per record. "
+                + OVER_QUOTA_ADVICE
+            )
+        if self.too_big_for_auto:
+            big = ", ".join(
+                f"{k} ({_gb(size)})" for k, _, size in self.files
+                if k in self.too_big_for_auto
+            )
+            return (
+                f"Too large for the system's automatic upload (over "
+                f"{_gb(self.auto_limit)} per file): {big}. Upload the package "
+                "to the Zenodo draft by hand."
+            )
+        return ""
+
+
+def plan_upload(folder: Path, settings: ZenodoSettings) -> UploadPlan:
+    """Classify an archive folder's package for upload (read-only: lists and
+    stats the files, never opens them)."""
+    plan = UploadPlan(auto_limit=settings.single_put_max_mb * 1024**2)
+    try:
+        to_upload, skipped = discover_files(folder, settings.upload_files)
+        plan.skipped = [p.name for p in skipped]
+        if not to_upload:
+            plan.error = f"no uploadable files found in {folder}"
+            return plan
+        # Nested paths upload flattened ("sub_name"); refuse on collision.
+        for p in to_upload:
+            key = "_".join(p.relative_to(folder).parts)
+            if any(key == k for k, _, _ in plan.files):
+                plan.error = f"filename collision after flattening: {key}"
+                return plan
+            plan.files.append((key, p, p.stat().st_size))
+    except OSError as e:
+        plan.error = f"cannot read {folder}: {e}"
+        return plan
+    plan.over_quota = plan.total > _MAX_BYTES or len(plan.files) > _MAX_FILES
+    # Zenodo denies multipart part uploads (403, re-probed 2026-07-15), so a
+    # file above single_put_max_mb is never uploaded unattended — one
+    # dropped connection would re-send all of it. If
+    # scripts/probe_zenodo_multipart.py ever shows multipart working, this
+    # is the rule to relax (upload_files already uses multipart when it can).
+    plan.too_big_for_auto = [k for k, _, size in plan.files if size > plan.auto_limit]
+    return plan
+
+
 def _md5(path: Path) -> str:
     h = hashlib.md5()
     with open(path, "rb") as f:
@@ -792,31 +894,20 @@ def upload_files(
     → error, never overwrite).
     """
     result = UploadResult()
-    to_upload, skipped = discover_files(folder, settings.upload_files)
-    result.skipped_local = [p.name for p in skipped]
-    if not to_upload:
-        result.errors.append(f"no uploadable files found in {folder}")
+    plan = plan_upload(folder, settings)
+    result.skipped_local = plan.skipped
+    if plan.error:
+        result.errors.append(plan.error)
         return result
-
-    # Flatten nested paths; refuse on collision.
-    keyed: dict[str, Path] = {}
-    for p in to_upload:
-        rel = p.relative_to(folder)
-        key = "_".join(rel.parts)
-        if key in keyed:
-            result.errors.append(f"filename collision after flattening: {key}")
-            return result
-        keyed[key] = p
-
-    total = sum(p.stat().st_size for p in keyed.values())
-    oversized = [k for k, p in keyed.items() if p.stat().st_size > _MAX_BYTES]
-    if oversized or total > _MAX_BYTES:
+    if plan.over_quota:
+        # Refused up front: the draft's standard quota would reject it
+        # part-way. A hand upload (after "Manage storage") is recorded
+        # with zenodo_files_uploaded, which has no size limit.
         result.errors.append(
-            f"upload exceeds Zenodo's 50 GB limit (total {total/1024**3:.1f} GB; "
-            f"oversized: {', '.join(oversized) or 'none'}) — no upload method "
-            "fixes this; split the deposit or contact Zenodo support"
+            plan.reason + " Record a hand upload with zenodo_files_uploaded."
         )
         return result
+    keyed = {key: path for key, path, _ in plan.files}
 
     threshold = settings.multipart_threshold_mb * 1024**2
     part_size = settings.multipart_part_size_mb * 1024**2
@@ -853,9 +944,8 @@ def upload_files(
                         f"unattended single-PUT upload (> "
                         f"{settings.single_put_max_mb} MB) and Zenodo does not "
                         "currently accept multipart part uploads — upload this "
-                        "file by hand to the draft, then re-run "
-                        "zenodo_upload_files to record it (checksum match, no "
-                        "bytes re-sent)"
+                        "file by hand to the draft, then record it with "
+                        "zenodo_files_uploaded"
                     )
                     continue
                 if not used_multipart:

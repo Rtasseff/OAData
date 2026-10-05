@@ -2,6 +2,7 @@
 {% block content %}
 <h1>Papers</h1>
 <p class="sub">Every publication being tracked. Click an action to see what needs doing.</p>
+{% include "oa_web/_sync.html" %}
 <div class="toolbar">
   <div class="tabs">
     <a href="?show=open{% if q %}&q={{ q|urlencode }}{% endif %}" class="{% if show == 'open' %}on{% endif %}">Open <span class="n">{{ counts.open }}</span></a>

@@ -197,6 +197,29 @@ def _row(archive: dict[str, Any], task_code: str, task_text: str, note: str = ""
     }
 
 
+def _upload_task(archive: dict, zen, env_ok: bool) -> tuple[str, str]:
+    """The upload step for a system-made draft that holds no data yet:
+    ``zenodo_upload_files`` (done=1 uploads via the API) when the system
+    can upload the package, else ``zenodo_files_uploaded`` (done=1 records
+    the operator's hand upload) with the reason. Decided by file size
+    (``zenodo.plan_upload``), so it holds before and after any attempt."""
+    from oa_tracker import zenodo as z
+    url = z.record_ui_url(zen, archive["zenodo_code"])
+    plan = z.plan_upload(Path(archive["folder_path"]), zen)
+    if plan.mode == "auto" and zen.enabled and env_ok:
+        return "zenodo_upload_files", (
+            f"Draft {url} holds no data yet. done=1 uploads the package now via "
+            f"the API ({len(plan.files)} file(s), {plan.total / 1e9:.1f} GB); the "
+            "next `oa auto` run also does it. Uploaded it by hand instead? Change "
+            "task_code to zenodo_files_uploaded, done=1."
+        )
+    why = plan.reason or "The system cannot upload to this draft (Zenodo integration off or another environment)."
+    return "zenodo_files_uploaded", (
+        f"Draft {url} holds no data yet. MANUAL UPLOAD: {why} "
+        "Upload it in the Zenodo web interface, then done=1 records it."
+    )
+
+
 def build_rows(config: Config) -> list[dict[str, str]]:
     """The action rows for the current DB state, in sheet order. Read-only —
     shared by ``generate_sheet`` (writes them to the TSV) and the web UI
@@ -326,10 +349,17 @@ def build_rows(config: Config) -> list[dict[str, str]]:
                     task = "zenodo_create_draft"
                     note = _join_notes(
                         note,
-                        f"done=1 creates the draft via the API on {zen.environment} "
-                        "(metadata + reserved DOI + package upload happen automatically "
-                        "when `oa auto` runs).",
+                        f"done=1 creates the draft record via the API on {zen.environment} "
+                        "(metadata + reserved DOI; no data is uploaded and nothing is "
+                        "published — uploading is the next step). `oa auto` also "
+                        "does this at its next run.",
                     )
+                elif cur_status == st.OPEN_ZENODO_DRAFT_CREATED and archive.get("zenodo_code") \
+                        and db.get_pending_upload(conn, pub_id) is not None:
+                    # Draft made, data not uploaded yet: the upload is its
+                    # own step, before the review.
+                    task, upload_note = _upload_task(archive, zen, env_ok)
+                    note = _join_notes(note, upload_note)
                 elif cur_status == st.OPEN_ZENODO_DRAFT_CREATED and archive.get("zenodo_code"):
                     from oa_tracker import zenodo as z
                     note = _join_notes(

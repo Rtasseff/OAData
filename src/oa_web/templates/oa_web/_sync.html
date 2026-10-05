@@ -1,0 +1,14 @@
+<div class="syncbar">
+  <div class="syncinfo">
+    {% if sync.state == "running" %}<strong>Automatic update running</strong> — started {{ sync.when }} by {{ sync.by }}. {{ sync.text }} <span class="small">(this page refreshes by itself)</span>
+    {% elif sync.state %}<strong>Automatic update {% if sync.state == "ok" %}finished{% else %}finished with problems{% endif %}</strong> ({{ sync.when }}, started by {{ sync.by }}): {{ sync.text }}
+    {% elif last_update %}<span class="small">Last automatic update: {{ last_update }}</span>
+    {% endif %}
+  </div>
+  {% if automation_enabled %}
+  <form method="post" action="{% url 'sync' %}">{% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <button class="btn secondary" type="submit"{% if sync.state == "running" %} disabled{% endif %} title="Scan the folders, sync with the SharePoint List and apply the automatic steps — the same as the scheduled run">Run the automatic update now</button>
+  </form>
+  {% endif %}
+</div>

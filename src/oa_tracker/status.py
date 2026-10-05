@@ -205,6 +205,15 @@ TASK_CODES = {
         "description": "Upload the package files to the Zenodo draft via API",
         "changes_status": False,
     },
+    # The hand-done twin of zenodo_upload_files (like zenodo_draft_created
+    # beside zenodo_create_draft): the operator uploaded the package in the
+    # Zenodo web interface — files too big for the system's upload, or
+    # over the standard 50 GB quota after "Manage storage". Recording it
+    # checks the draft holds files (no size limit, no re-upload).
+    "zenodo_files_uploaded": {
+        "description": "Record the package uploaded to the Zenodo draft by hand",
+        "changes_status": False,
+    },
     "zenodo_publish": {
         "description": "Publish the validated Zenodo draft via API (mints the DOI)",
         "changes_status": True,
@@ -269,13 +278,14 @@ def validate_transition(current_status: str, task_code: str) -> str:
     # event/note for the operator but do not themselves move status.
     # (propose_exemption's eventual closure is applied by re-routing to a
     # concrete close_* code; the bare signal is a no-op until then.)
-    # zenodo_upload_files uploads to an existing draft — the status stays
-    # OPEN_ZENODO_DRAFT_CREATED (upload alone is not validation). It is
-    # only valid at that status, unlike the other no-op codes.
-    if task_code == "zenodo_upload_files":
+    # zenodo_upload_files uploads to an existing draft (zenodo_files_uploaded
+    # records a hand upload) — the status stays OPEN_ZENODO_DRAFT_CREATED
+    # (upload alone is not validation). Only valid at that status, unlike
+    # the other no-op codes.
+    if task_code in ("zenodo_upload_files", "zenodo_files_uploaded"):
         if current_status != OPEN_ZENODO_DRAFT_CREATED:
             raise ValueError(
-                f"zenodo_upload_files needs {OPEN_ZENODO_DRAFT_CREATED!r}, "
+                f"{task_code} needs {OPEN_ZENODO_DRAFT_CREATED!r}, "
                 f"not {current_status!r}"
             )
         return current_status

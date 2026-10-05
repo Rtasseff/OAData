@@ -1108,6 +1108,39 @@ def test_closed_folder_removed_records_close_out(test_config, tmp_path):
         assert get_pending_folder_cleanup(conn, "PUB400") is None
 
 
+def test_close_with_folder_present_queues_cleanup_at_once(test_config, tmp_path):
+    """An exemption close must not drop the folder clean-up until the next scan."""
+    from oa_tracker.actions import apply_single
+    from oa_tracker.db import get_pending_folder_cleanup
+    from oa_tracker.sheet import build_rows
+    folder = tmp_path / "PUB400"
+    folder.mkdir()
+    _insert_active_archive(test_config.database, "PUB400")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB400", folder_path=str(folder))
+    r, _, new_s = apply_single(test_config, "PUB400", "close_exception",
+                               note="No data", source="web:tester")
+    assert r.applied == 1 and new_s == CLOSED_EXCEPTION
+    with get_connection(test_config.database) as conn:
+        pending = get_pending_folder_cleanup(conn, "PUB400")
+    assert pending is not None and pending["source"] == "web:tester"
+    rows = build_rows(test_config)
+    assert [r["task_code"] for r in rows if r["publication_id"] == "PUB400"] \
+        == ["closed_folder_removed"]
+
+
+def test_close_without_folder_queues_no_cleanup(test_config, tmp_path):
+    from oa_tracker.actions import apply_single
+    from oa_tracker.db import get_pending_folder_cleanup
+    _insert_active_archive(test_config.database, "PUB400")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB400", folder_path=str(tmp_path / "gone"))
+    r, _, _ = apply_single(test_config, "PUB400", "close_exception", note="No data")
+    assert r.applied == 1
+    with get_connection(test_config.database) as conn:
+        assert get_pending_folder_cleanup(conn, "PUB400") is None
+
+
 def test_closed_folder_removed_refused_on_open_archive(test_config):
     from oa_tracker.actions import apply_single
     _insert_active_archive(test_config.database, "PUB400")

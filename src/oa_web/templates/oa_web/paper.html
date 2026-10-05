@@ -10,6 +10,7 @@
   <span class="badge s-{{ a.status }}">{{ a.status_label }}</span>
 </div>
 
+{% if upload_job %}<div class="msg {% if upload_job.state == 'ok' %}success{% elif upload_job.state == 'running' %}info{% else %}warning{% endif %}">{{ upload_job.text }} <span class="small">({% if upload_job.state == 'running' %}started {{ upload_job.when }} by {{ upload_job.by }} — this page refreshes by itself{% else %}{{ upload_job.when }}{% endif %})</span></div>{% endif %}
 {% if last_push %}<div class="msg {% if last_push.ok %}success{% elif last_push.ok is None %}info{% else %}warning{% endif %}">{{ last_push.text }} <span class="small">({{ last_push.when }}{% if last_push.ok is None %} — reload to see the result{% endif %})</span></div>{% endif %}
 <div class="cols">
 <div>
@@ -19,7 +20,7 @@
     {% if c.spec %}
     <h2>{{ c.spec.title }}</h2>
     <ol>{% for s in c.spec.steps %}<li>{{ s }}</li>{% endfor %}</ol>
-    {% if c.row.note_display %}<div class="notebox">{{ c.row.note_display }}</div>{% endif %}
+    {% if c.row.note_display and not c.upload %}<div class="notebox">{{ c.row.note_display }}</div>{% endif %}
 
     {% if "folder" in c.spec.links or "zenodo" in c.spec.links or "pubdb" in c.spec.links or c.drafts %}
     <div class="linkrow">
@@ -63,6 +64,15 @@
     </dl>
     {% endif %}
 
+    {% if c.upload %}
+    <div class="pkgplan">
+      <h3>Package to upload <span class="small">({{ c.upload.files|length }} file{{ c.upload.files|length|pluralize }}, {{ c.upload.total_text }})</span></h3>
+      {% if c.upload.files %}<ul class="files">{% for f in c.upload.files %}<li><span>{{ f.name }}</span><span class="sz">{{ f.size_text }}</span></li>{% endfor %}</ul>{% endif %}
+      {% if c.upload.can_auto %}<p class="small ok">The system can upload this package itself.</p>
+      {% else %}<div class="msg warning"><strong>{% if c.upload.over_quota %}Over Zenodo's 50 GB limit — manual upload only.{% else %}Manual upload needed.{% endif %}</strong> {{ c.upload.reason }}</div>{% endif %}
+    </div>
+    {% endif %}
+
     {% if c.main %}
     <form method="post" action="{% url 'paper_action' a.publication_id %}">{% csrf_token %}
       <input type="hidden" name="task_code" value="{{ c.row.task_code }}">
@@ -72,7 +82,7 @@
         <div><label>{{ c.spec.note_hint }}</label><textarea name="note" rows="2"></textarea></div>
       </div>
       <div class="btns">
-        {% for b in c.main %}<button class="btn {{ b.style }}" type="submit" name="choice" value="{{ b.choice }}"{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}>{{ b.label }}</button>{% endfor %}
+        {% for b in c.main %}<button class="btn {{ b.style }}" type="submit" name="choice" value="{{ b.choice }}"{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}{% if c.upload and c.upload.job.state == "running" %} disabled{% elif b.background and not c.upload.can_auto %} disabled title="Not available for this package — see above"{% endif %}>{{ b.label }}</button>{% endfor %}
       </div>
     </form>
     {% endif %}
@@ -132,7 +142,7 @@
   {% if files is not None %}
   <div class="card">
     <h2>Folder contents <span class="small">(synced copy on this server, read-only)</span></h2>
-    {% if files %}<ul class="files">{% for f in files %}<li><span>{{ f.name }}</span><span class="sz">{% if f.size is not None %}{{ f.size|filesizeformat }}{% endif %}</span></li>{% endfor %}</ul>
+    {% if files %}<ul class="files">{% for f in files %}<li><span>{{ f.name }}</span><span class="sz">{% if f.size is not None %}{{ f.size_text }}{% endif %}</span></li>{% endfor %}</ul>
     {% else %}<p class="small" style="margin:0">The folder is empty.</p>{% endif %}
   </div>
   {% endif %}

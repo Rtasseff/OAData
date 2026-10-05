@@ -9,6 +9,7 @@ urlpatterns = [
     path("actions/", views.action_list, name="actions"),
     path("report/", views.report, name="report"),
     path("history/", views.history, name="history"),
+    path("sync/", views.sync, name="sync"),
     path("paper/<str:pub_id>/", views.paper, name="paper"),
     path("paper/<str:pub_id>/do/", views.paper_action, name="paper_action"),
     path("paper/<str:pub_id>/draft/<str:filename>", views.draft, name="draft"),

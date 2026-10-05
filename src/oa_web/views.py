@@ -47,7 +47,7 @@ def papers(request):
 
     return render(request, "oa_web/papers.html", {
         "rows": rows, "show": show, "q": request.GET.get("q", ""), "counts": counts,
-        "nav": "papers",
+        "nav": "papers", **_sync_context(config),
     })
 
 
@@ -61,7 +61,33 @@ def action_list(request):
         for r in pub_rows:
             r["archive"] = titles.get(r["publication_id"], {})
             rows.append(r)
-    return render(request, "oa_web/actions.html", {"rows": rows, "nav": "actions"})
+    return render(request, "oa_web/actions.html", {
+        "rows": rows, "nav": "actions", **_sync_context(config),
+    })
+
+
+def _sync_context(config) -> dict:
+    """The "Run the automatic update now" bar: state of a web-started run
+    (the page refreshes itself while it runs) and the last run of any kind."""
+    sync = dict(tracker.SYNC)
+    return {
+        "sync": sync, "last_update": tracker.last_update(config),
+        "automation_enabled": config.automation.enabled,
+        "refresh": 10 if sync.get("state") == "running" else None,
+    }
+
+
+@login_required
+@require_POST
+def sync(request):
+    out = tracker.start_sync(tracker.get_config(), request.user.get_username())
+    for m in out.messages:
+        messages.success(request, m)
+    for m in out.errors:
+        messages.error(request, m)
+    back = request.POST.get("next", "")
+    return redirect(back if back.startswith("/") and not back.startswith("//")
+                    else reverse("papers"))
 
 
 def _md(text: str) -> str:
@@ -99,10 +125,17 @@ def paper(request, pub_id: str):
 
     zen = tracker.zenodo_links(config, archive)
     cards = []
+    refresh = None
     for row in tracker.pending_by_pub(config).get(pub_id, []):
         spec = guide.SPECS.get(row["task_code"])
         buttons = spec.buttons if spec else ()
+        upload = None
+        if row["task_code"] in tracker.UPLOAD_CODES:
+            upload = tracker.upload_view(config, archive, row["task_code"])
+            if (upload["job"] or {}).get("state") == "running":
+                refresh = 10
         cards.append({
+            "upload": upload,
             "row": row, "spec": spec,
             "drafts": tracker.email_drafts(config, archive, spec) if spec else [],
             # Buttons that ask for a DOI + URL get their own form (folded
@@ -127,6 +160,10 @@ def paper(request, pub_id: str):
         "pub_db_url": tracker.pub_db_url(pub_id),
         "events": tracker.events_for(config, pub_id),
         "last_push": tracker.LAST_PUSH.get(pub_id),
+        # A finished or failed web upload whose step is gone (it succeeded)
+        # still gets its message once.
+        "upload_job": tracker.UPLOADS.get(pub_id),
+        "refresh": refresh,
         "nav": "papers",
     })
 

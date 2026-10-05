@@ -427,10 +427,15 @@ re-probes multipart implicitly and self-activates when it works):
   users, or planned? We deposit institutional datasets, occasionally
   ~20 GB, and per-part retry would make those transfers far more
   reliable than a monolithic PUT."*
-- Records over 50 GB: Zenodo grants a one-time quota increase up to
-  200 GB per record via a support request with fair-use justification
-  (their FAQ "What are the size limitations of Zenodo?"). That is
-  about the record cap, not transfer reliability.
+- Records over 50 GB: per Zenodo's current help pages (checked
+  2026-10-05) the standard quota is 100 files / 50 GB
+  (50,000,000,000 bytes) per record, and each account has a one-off
+  extra 150 GB allowance it assigns to a draft itself (*Manage storage*;
+  [manage files](https://help.zenodo.org/docs/deposit/manage-files/),
+  [manage quota](https://help.zenodo.org/docs/deposit/manage-quota/)).
+  CIC biomaGUNE policy keeps that for exceptional cases — see
+  [sop.md](sop.md) § *Uploading the data to the draft*. That is about
+  the record cap, not transfer reliability.
 - **Verification:** after commit the draft entry is re-fetched and
   must match the local file (md5 when the server reports one; S3-style
   backends may not report a whole-file md5, in which case
@@ -439,14 +444,18 @@ re-probes multipart implicitly and self-activates when it works):
   deleted and re-sent on a later run.
 - Stale `pending` entries (an interrupted earlier upload) never match —
   they are deleted and restarted clean.
-- Beyond Zenodo's hard 50 GB/record cap nothing helps: refused up
-  front with an explicit "split the deposit" message.
-- Escape hatch: when automatic upload fails across runs, the `oa auto`
-  digest tells the operator to upload by hand (draft + reserved DOI
-  already exist) and close the loop with
-  `oa action <pub_id> zenodo_upload_files` — the checksum/size match
-  recognises the hand-uploaded file and records the event without
-  re-sending bytes.
+- `zenodo.plan_upload` classifies a package from file sizes alone
+  (`auto` / `manual` — a file above `single_put_max_mb` / `over_quota`)
+  and every caller uses it: the API upload refuses `over_quota` up front
+  (Manage-storage + policy message), `oa auto` never attempts a
+  non-`auto` package (digest line instead of a daily error), the sheet
+  and the web UI offer the hand-upload path. If multipart ever works
+  (probe above), relax the `manual` rule there.
+- Escape hatch: a hand upload (any size) is recorded with
+  `zenodo_files_uploaded`, which reads the draft's file list back
+  instead of checksumming (fast on a 20+ GB file). Re-running
+  `zenodo_upload_files` still recognises a hand-uploaded file by
+  checksum within the 50 GB quota.
 
 ## Workflow integration
 

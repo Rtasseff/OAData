@@ -353,10 +353,7 @@ def auto(
     clear message instead of blocking on a device-code prompt. Zenodo
     publishing is never automatic — validated drafts wait for you.
     """
-    from oa_tracker.auto import run_auto, write_digest
-    from oa_tracker.emails import generate_emails
-    from oa_tracker.report import generate_report
-    from oa_tracker.sheet import generate_sheet
+    from oa_tracker.auto import run_cycle
 
     cfg = _get_config(config, db)
     if not cfg.automation.enabled:
@@ -364,23 +361,7 @@ def auto(
         typer.echo("Set `enabled = true` under [automation] to turn on `oa auto`.")
         raise typer.Exit(1)
 
-    result = run_auto(cfg)
-
-    # Regenerate the operator artifacts from the post-run state.
-    try:
-        generate_sheet(cfg)
-    except Exception as e:
-        result.errors.append(f"sheet generation failed: {e}")
-    try:
-        generate_emails(cfg)
-    except Exception as e:
-        result.errors.append(f"email generation failed: {e}")
-    try:
-        generate_report(cfg)
-    except Exception as e:
-        result.errors.append(f"report generation failed: {e}")
-
-    digest = write_digest(cfg, result)
+    result, digest = run_cycle(cfg)
     typer.echo(result.summary)
     typer.echo(f"Digest: {digest}")
     if result.errors:

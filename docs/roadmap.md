@@ -1612,3 +1612,32 @@ Exemption semantics fixed (2026-09-18, branch `web-ui`):
   note. Also: the pre-filled Zenodo DOI/URL on the review step can be
   corrected (the sheet's `pid`/`url` fast-track), and each web action
   pushes its row to the List in the background.
+
+Zenodo upload as its own step + web jobs (2026-10-05, branch
+`zenodo-upload-step`), from live testing of the web UI on 3243/3304:
+
+- **Draft ≠ upload.** Creating the Zenodo draft and uploading the data
+  are separate steps everywhere (sheet, web, digest, SOP). A system-made
+  draft shows the upload step until an upload is on record
+  (`db.get_pending_upload`); only then the review/publish step. Before
+  this, the web's "Create the Zenodo draft now" left an empty draft and
+  jumped straight to "Review and publish".
+- **Size rules in one place** (`zenodo.plan_upload`, file sizes only):
+  ≤ 5 GB per file → the system uploads (next `oa auto`, or web *Upload
+  now*); a file > 5 GB → by hand; > 50 GB (decimal, as Zenodo counts) →
+  by hand with the CIC biomaGUNE policy text (bring it under 50 GB;
+  Zenodo's self-service *Manage storage* allowance only for exceptional
+  cases). `oa auto` no longer attempts (and errors on) hand-only packages
+  every day; the old "no upload method fixes this" message is gone.
+- New task code `zenodo_files_uploaded` records a hand upload of any size
+  by reading the draft's file list back (no checksumming of huge files).
+- Web: *Upload now* (background; greyed out with the reason when the
+  package must go by hand), *Uploaded by hand*, and **Run the automatic
+  update now** on Papers/Actions — the same `auto.run_cycle` as cron
+  (now shared with `oa auto`), under the same `output/.auto.lock`.
+- Closing an archive (exemption, done=2, …) while its folder still
+  exists now queues the folder clean-up row at once instead of after the
+  next scan (3304 "disappeared" from every worklist until then).
+- 3243's package is 70.4 GB: the data contact has been asked to reduce
+  it; its empty production draft 23159530 (DOI reserved) waits for the
+  upload.

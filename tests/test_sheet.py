@@ -546,3 +546,62 @@ def test_closed_folder_removed_row_while_folder_present(test_config):
                      "CLOSED_PUBLICATION_ONLY", "CLOSED_PUBLICATION_ONLY", "scanner")
     rows = _read_sheet(generate_sheet(test_config))
     assert [r for r in rows if r["task_code"] == "closed_folder_removed"] == []
+
+
+# ── Zenodo upload step (between draft creation and review) ───────────
+
+def _system_draft(test_config, tmp_path, zip_size=None):
+    from oa_tracker import db
+    folder = tmp_path / "pub5001"
+    folder.mkdir()
+    zip_path = folder / "data.zip"
+    if zip_size is None:
+        zip_path.write_bytes(b"zip")
+    else:
+        with open(zip_path, "wb") as f:
+            f.truncate(zip_size)          # sparse
+    (folder / "README.txt").write_text("readme")
+    test_config.zenodo.enabled = True
+    _seed_active(test_config, status="OPEN_ZENODO_DRAFT_CREATED", folder_path=str(folder),
+                 zenodo_code="123", zenodo_env="sandbox")
+    with db.get_connection(test_config.database) as conn:
+        db.insert_event(conn, "5001", "zenodo_create_draft", "OPEN_READY_FOR_ZENODO_DRAFT",
+                        "OPEN_ZENODO_DRAFT_CREATED", "auto")
+
+
+def test_sheet_upload_row_before_review(test_config, tmp_path):
+    _system_draft(test_config, tmp_path)
+    rows = _rows(test_config)
+    assert [r["task_code"] for r in rows] == ["zenodo_upload_files"]
+    assert "done=1 uploads the package" in rows[0]["note"]
+    assert "sandbox.zenodo.org/uploads/123" in rows[0]["note"]
+
+
+def test_sheet_hand_upload_row_for_too_big_package(test_config, tmp_path):
+    _system_draft(test_config, tmp_path, zip_size=6 * 1024**3)
+    rows = _rows(test_config)
+    assert [r["task_code"] for r in rows] == ["zenodo_files_uploaded"]
+    assert "MANUAL UPLOAD" in rows[0]["note"] and "data.zip" in rows[0]["note"]
+
+
+def test_sheet_hand_upload_row_over_quota_has_policy_advice(test_config, tmp_path):
+    _system_draft(test_config, tmp_path, zip_size=70_000_000_000)
+    rows = _rows(test_config)
+    assert [r["task_code"] for r in rows] == ["zenodo_files_uploaded"]
+    assert "Manage storage" in rows[0]["note"] and "CIC biomaGUNE policy" in rows[0]["note"]
+
+
+def test_sheet_review_row_once_uploaded(test_config, tmp_path):
+    from oa_tracker import db
+    _system_draft(test_config, tmp_path)
+    with db.get_connection(test_config.database) as conn:
+        db.insert_event(conn, "5001", "zenodo_files_uploaded", "OPEN_ZENODO_DRAFT_CREATED",
+                        "OPEN_ZENODO_DRAFT_CREATED", "web:alice")
+    assert [r["task_code"] for r in _rows(test_config)] == ["zenodo_validated"]
+
+
+def test_sheet_create_draft_row_says_no_upload(test_config):
+    test_config.zenodo.enabled = True
+    _seed_active(test_config, status="OPEN_READY_FOR_ZENODO_DRAFT")
+    note = _rows(test_config)[0]["note"]
+    assert "no data is uploaded" in note and "next step" in note

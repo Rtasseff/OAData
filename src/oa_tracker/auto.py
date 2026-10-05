@@ -16,9 +16,10 @@ recorded in the digest and the remaining stages still run):
      ``auto_reject_done`` is on, else a sheet row + digest line;
    - auto-QC: OPEN_ACTIVE + Tracker "done" + detected package
      (``.zip`` + ``README.txt``) + data-required mandate → ``qa_pass``;
-   - Zenodo: READY archives get a draft (metadata + reserved DOI) and the
-     package files uploaded — then STOP: validation and publish stay
-     operator-confirmed;
+   - Zenodo: READY archives get a draft (metadata + reserved DOI), then —
+     a separate step — the package upload when ``zenodo.plan_upload``
+     says the system can do it (otherwise a MANUAL UPLOAD worklist line)
+     — then STOP: validation and publish stay operator-confirmed;
    - closure: OPEN_DB_UPDATED + folder gone + PID on record →
      ``folder_removed`` (CLOSED_DATA_ARCHIVED).
 4. **Push** fresh statuses back to the List (+ closed-row reconcile), and
@@ -481,6 +482,7 @@ def _advance(config: Config, result: AutoRunResult) -> None:
             )
 
     # 3d. Zenodo drafts + uploads for READY archives.
+    just_created: set[str] = set()
     if config.zenodo.enabled and gates.auto_zenodo_draft:
         with db.get_connection(config.database) as conn:
             ready = db.get_all_archives(conn, status_filter=st.OPEN_READY_FOR_ZENODO_DRAFT)
@@ -503,12 +505,9 @@ def _advance(config: Config, result: AutoRunResult) -> None:
             )
             if r.applied and not r.errors:
                 result.auto_applied.append(f"{pub_id}: Zenodo draft created ({old_s} → {new_s})")
+                just_created.add(pub_id)
                 if gates.auto_zenodo_upload:
-                    r2, _, _ = apply_single(config, pub_id, "zenodo_upload_files", done=1)
-                    if r2.applied and not r2.errors:
-                        result.auto_applied.append(f"{pub_id}: package uploaded to draft")
-                    else:
-                        result.errors.extend(r2.errors or [f"{pub_id}: upload did not apply"])
+                    _auto_upload(config, a, result, retry=False)
             else:
                 result.errors.extend(r.errors or [f"{pub_id}: draft creation did not apply"])
 
@@ -517,32 +516,15 @@ def _advance(config: Config, result: AutoRunResult) -> None:
     if config.zenodo.enabled and gates.auto_zenodo_upload:
         with db.get_connection(config.database) as conn:
             created = db.get_all_archives(conn, status_filter=st.OPEN_ZENODO_DRAFT_CREATED)
-            for a in created:
-                pub_id = a["publication_id"]
-                if not a.get("zenodo_code") or a.get("zenodo_env") != config.zenodo.environment:
-                    continue
-                create_ev = db.get_last_event(conn, pub_id, "zenodo_create_draft")
-                upload_ev = db.get_last_event(conn, pub_id, "zenodo_upload_files")
-                if create_ev is None:
-                    continue  # draft made by hand — uploads are the operator's call
-                if upload_ev is not None and upload_ev["ts"] >= create_ev["ts"]:
-                    continue  # already uploaded since creation
-                r, _, _ = apply_single(config, pub_id, "zenodo_upload_files", done=1)
-                if r.applied and not r.errors:
-                    result.auto_applied.append(f"{pub_id}: package uploaded to draft (retry)")
-                else:
-                    result.errors.extend(r.errors or [f"{pub_id}: upload retry did not apply"])
-                    # A retry failure means at least two runs have failed —
-                    # hand the operator the manual path (draft + DOI are
-                    # already reserved; upload_files recognises a hand-made
-                    # upload by checksum, so the loop closes cleanly).
-                    from oa_tracker import zenodo as z
-                    result.awaiting_operator.append(
-                        f"{pub_id}: automatic upload keeps failing — upload the "
-                        f"package by hand from {a.get('folder_path')} to "
-                        f"{z.record_ui_url(config.zenodo, a['zenodo_code'])}, then run "
-                        f"`oa action {pub_id} zenodo_upload_files` to record it"
-                    )
+            pending = {a["publication_id"] for a in created
+                       if db.get_pending_upload(conn, a["publication_id"]) is not None}
+        for a in created:
+            pub_id = a["publication_id"]
+            if pub_id not in pending or pub_id in just_created:
+                continue  # uploaded already, a hand-made draft, or tried above
+            if not a.get("zenodo_code") or a.get("zenodo_env") != config.zenodo.environment:
+                continue
+            _auto_upload(config, a, result, retry=True)
 
     # Operator worklist for the digest.
     with db.get_connection(config.database) as conn:
@@ -552,9 +534,24 @@ def _advance(config: Config, result: AutoRunResult) -> None:
                 from oa_tracker import zenodo as z
                 url = z.record_ui_url(config.zenodo, a["zenodo_code"]) \
                     if config.zenodo.enabled else f"record {a['zenodo_code']}"
-                result.awaiting_operator.append(
-                    f"{pub_id}: validate the Zenodo draft ({url}), then apply zenodo_validated"
-                )
+                if db.get_pending_upload(conn, pub_id) is None:
+                    result.awaiting_operator.append(
+                        f"{pub_id}: validate the Zenodo draft ({url}), then apply zenodo_validated"
+                    )
+                else:
+                    plan = z.plan_upload(Path(a["folder_path"]), config.zenodo)
+                    if plan.mode != "auto" or not config.zenodo.enabled:
+                        result.awaiting_operator.append(
+                            f"{pub_id}: MANUAL UPLOAD — {plan.reason or 'the system cannot upload to this draft.'} "
+                            f"Draft: {url}. Then record it: “Uploaded by hand” on the "
+                            "web page, or done=1 on the sheet's zenodo_files_uploaded row"
+                        )
+                    elif not gates.auto_zenodo_upload:
+                        result.awaiting_operator.append(
+                            f"{pub_id}: the package is not on the Zenodo draft yet ({url}) — "
+                            "“Upload now” on the web page, or done=1 on the sheet's "
+                            "zenodo_upload_files row"
+                        )
             elif s == st.OPEN_ZENODO_DRAFT_VALIDATED:
                 result.awaiting_operator.append(
                     f"{pub_id}: validated — publish via the sheet's zenodo_publish row "
@@ -589,7 +586,54 @@ def _advance(config: Config, result: AutoRunResult) -> None:
                 )
 
 
+def _auto_upload(config: Config, archive: dict, result: AutoRunResult, retry: bool) -> None:
+    """Upload a draft's package when the system can (``zenodo.plan_upload``
+    says ``auto``). Packages that must be uploaded by hand are left alone —
+    the worklist says so every run, without an error or an API call."""
+    from oa_tracker import zenodo as z
+    from oa_tracker.actions import apply_single
+
+    pub_id = archive["publication_id"]
+    if z.plan_upload(Path(archive["folder_path"]), config.zenodo).mode != "auto":
+        return
+    r, _, _ = apply_single(config, pub_id, "zenodo_upload_files", done=1)
+    if r.applied and not r.errors:
+        result.auto_applied.append(
+            f"{pub_id}: package uploaded to draft" + (" (retry)" if retry else "")
+        )
+        return
+    result.errors.extend(r.errors or [f"{pub_id}: upload did not apply"])
+    if retry:
+        # Failed on at least two runs — hand the operator the manual path
+        # (draft + DOI are already reserved).
+        result.awaiting_operator.append(
+            f"{pub_id}: automatic upload keeps failing — upload the package by "
+            f"hand from {archive.get('folder_path')} to "
+            f"{z.record_ui_url(config.zenodo, archive['zenodo_code'])}, then record "
+            "it: “Uploaded by hand” on the web page, or zenodo_files_uploaded on the sheet"
+        )
+
+
 # ── Orchestration + digest ───────────────────────────────────────────
+
+def run_cycle(config: Config) -> tuple[AutoRunResult, Path]:
+    """Everything one ``oa auto`` does: ``run_auto``, then the operator
+    artifacts regenerated from the post-run state (sheet, email drafts,
+    report) and the digest written. Shared by the CLI (cron) and the web
+    UI's "Run the automatic update now" button."""
+    from oa_tracker.emails import generate_emails
+    from oa_tracker.report import generate_report
+    from oa_tracker.sheet import generate_sheet
+
+    result = run_auto(config)
+    for what, generate in (("sheet", generate_sheet), ("email", generate_emails),
+                           ("report", generate_report)):
+        try:
+            generate(config)
+        except Exception as e:
+            result.errors.append(f"{what} generation failed: {e}")
+    return result, write_digest(config, result)
+
 
 def run_auto(config: Config) -> AutoRunResult:
     """Run the full unattended cycle. Never raises for per-stage failures —

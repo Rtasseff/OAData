@@ -89,7 +89,7 @@ OPEN_INACTIVE  →  OPEN_ACTIVE  →  OPEN_READY_FOR_ZENODO_DRAFT
 | `OPEN_INACTIVE` | Folder exists but is empty — data contact has not yet uploaded anything |
 | `OPEN_ACTIVE` | Folder contains files — ready for QA review |
 | `OPEN_READY_FOR_ZENODO_DRAFT` | QA passed — ready to create a Zenodo draft |
-| `OPEN_ZENODO_DRAFT_CREATED` | Draft deposit exists on Zenodo — ready to validate |
+| `OPEN_ZENODO_DRAFT_CREATED` | Draft record exists on Zenodo (DOI reserved) — upload the data to it, then review and publish |
 | `OPEN_ZENODO_DRAFT_VALIDATED` | Draft validated — ready to publish |
 | `OPEN_ZENODO_PUBLISHED` | Published on Zenodo (PID and URL recorded) — ready to update internal DB |
 | `OPEN_DB_UPDATED` | Internal publication DB updated with DOI — ready for folder cleanup |
@@ -115,9 +115,10 @@ The `task_code` column in `action_sheet.tsv` identifies the **action you are bei
 | `OPEN_ACTIVE` | `qa_pass` | Review uploaded data and approve QA | `OPEN_READY_FOR_ZENODO_DRAFT` |
 | `OPEN_ACTIVE` | `qa_hold` | Flag QA issue; add note and keep monitoring | *(stays OPEN_ACTIVE)* |
 | `OPEN_READY_FOR_ZENODO_DRAFT` | `zenodo_draft_created` | Create Zenodo draft deposit **by hand** and record it | `OPEN_ZENODO_DRAFT_CREATED` |
-| `OPEN_READY_FOR_ZENODO_DRAFT` | `zenodo_create_draft` | **API:** done=1 creates the draft (metadata + reserved DOI) | `OPEN_ZENODO_DRAFT_CREATED` |
-| `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_upload_files` | **API:** upload the package files to the draft | *(stays OPEN_ZENODO_DRAFT_CREATED)* |
-| `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_validated` | Review the draft on Zenodo and **click Publish there**; done=1 confirms it | `OPEN_ZENODO_PUBLISHED` *(system-made draft — DOI/URL auto-recorded)* · `OPEN_ZENODO_DRAFT_VALIDATED` *(hand-made draft)* |
+| `OPEN_READY_FOR_ZENODO_DRAFT` | `zenodo_create_draft` | **API:** done=1 creates the draft record (metadata + reserved DOI — no data uploaded) | `OPEN_ZENODO_DRAFT_CREATED` |
+| `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_upload_files` | **API:** done=1 uploads the package to the draft (the system can upload it) | *(stays OPEN_ZENODO_DRAFT_CREATED)* |
+| `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_files_uploaded` | Upload the package to the draft **by hand**; done=1 records it | *(stays OPEN_ZENODO_DRAFT_CREATED)* |
+| `OPEN_ZENODO_DRAFT_CREATED` | `zenodo_validated` | *(once the data is on the draft)* Review the draft on Zenodo and **click Publish there**; done=1 confirms it | `OPEN_ZENODO_PUBLISHED` *(system-made draft — DOI/URL auto-recorded)* · `OPEN_ZENODO_DRAFT_VALIDATED` *(hand-made draft)* |
 | `OPEN_ZENODO_DRAFT_VALIDATED` | `zenodo_published` | Record a **hand-published** Zenodo record (enter PID and URL) | `OPEN_ZENODO_PUBLISHED` |
 | `OPEN_ZENODO_DRAFT_VALIDATED` | `zenodo_publish` | **API:** done=1 publishes the draft and mints the DOI | `OPEN_ZENODO_PUBLISHED` |
 | `OPEN_ZENODO_PUBLISHED` | `db_updated` | Update internal publication DB with dataset DOI/URL | `OPEN_DB_UPDATED` |
@@ -128,6 +129,47 @@ enabled in `config.toml`; when a draft was made by hand or lives on a
 different Zenodo environment than the config, the manual codes appear
 instead. `zenodo_publish` is the deliberate human keystroke that mints
 the permanent DOI — it is never applied automatically.
+
+### Uploading the data to the draft (its own step)
+
+Creating the Zenodo draft and uploading the data are **two separate
+steps**. Creating the draft makes the record (metadata from the
+publication database, DOI reserved) and uploads nothing. Until an upload
+is on record for a draft the system created, the sheet and the web UI show
+the **upload** step; only then does the review-and-publish step
+(`zenodo_validated`) appear. A draft made by hand goes straight to review
+(whoever made it uploaded to it; the review checks the files).
+
+Which way the upload goes depends on file size alone
+(`zenodo.plan_upload`), so the sheet, the web page and the `oa auto`
+digest always agree, before and after any attempt:
+
+| Package | What happens | Sheet row | Web UI |
+|---|---|---|---|
+| every file ≤ 5 GB (`[zenodo] single_put_max_mb`), total ≤ 50 GB | the system uploads it: the next `oa auto` run, or right away | `zenodo_upload_files` — done=1 uploads now | **Upload now** (runs in the background) |
+| a file > 5 GB, total ≤ 50 GB | **upload by hand** — too large for the system's unattended upload | `zenodo_files_uploaded` | *Upload now* greyed out with the reason; **Uploaded by hand** |
+| total > 50 GB (or > 100 files) | over Zenodo's standard quota — see the policy below | `zenodo_files_uploaded` | as above, with the policy text |
+
+**Uploading by hand:** get the package files (.zip, README.txt,
+manuscript) from the SharePoint folder — download them, or use a
+OneDrive-synced copy — open the draft on Zenodo, drag the files onto it
+or click *Upload files*, and wait until every file has finished. Then
+record it: **Uploaded by hand** on the web page, done=1 on the sheet's
+`zenodo_files_uploaded` row, or `oa action <pub_id> zenodo_files_uploaded`.
+Recording reads the draft's file list from Zenodo (nothing is re-sent):
+it is refused while the draft holds no files or a file is still
+uploading, and it warns when a package file has no same-size file on the
+draft. It has no size limit.
+
+**Over 50 GB — CIC biomaGUNE policy:** respect Zenodo's standard limit of
+50 GB per record (50,000,000,000 bytes, as Zenodo counts it). Ask the data
+contact to bring the package under 50 GB if at all possible. Extra storage
+is for exceptional cases only: each Zenodo account has a one-off extra
+allowance of 150 GB that can be assigned to a draft — on the draft, *Manage
+storage* in the Files section, set the amount, *Apply* — after which the
+package is uploaded by hand as above
+([Zenodo: manage files](https://help.zenodo.org/docs/deposit/manage-files/),
+[manage storage quota](https://help.zenodo.org/docs/deposit/manage-quota/)).
 
 ### Publishing a Zenodo draft (review → publish → confirm)
 
@@ -429,9 +471,12 @@ unattended and advances what it safely can:
    is being validated). The weekly report lists every open done-tick
    under "Tracker 'Done' Ticked — Needs Review". Then auto-QC (done tick
    + complete package incl. manuscript +
-   data-required mandate → `qa_pass`), then Zenodo draft with reserved
-   DOI + package upload (stops at `OPEN_ZENODO_DRAFT_CREATED`), and
-   closure of `OPEN_DB_UPDATED` archives whose folder you already
+   data-required mandate → `qa_pass`), then the Zenodo draft with its
+   reserved DOI, then — its own step — the package upload when the
+   system can do it (a package that must go by hand is listed in the
+   digest as *MANUAL UPLOAD* every run instead; see § Uploading the data
+   to the draft). It stops at `OPEN_ZENODO_DRAFT_CREATED` either way.
+   Last, closure of `OPEN_DB_UPDATED` archives whose folder you already
    removed.
 4. SharePoint push + closed-row reconcile, then fresh
    sheet / email drafts / weekly report.
@@ -439,7 +484,8 @@ unattended and advances what it safely can:
    when you sit down**: what was done automatically, what needs your
    decision, and the pipeline states only you can advance.
 
-Your weekly manual session shrinks to: read the digest → validate any
+Your weekly manual session shrinks to: read the digest → upload any
+*MANUAL UPLOAD* packages by hand and record them → validate any
 Zenodo drafts in the browser (link is in the sheet row/digest) →
 `done=1` on `zenodo_validated` and `zenodo_publish` rows → update the
 internal DB (`db_updated`) → remove finished folders in SharePoint →
@@ -455,15 +501,12 @@ Large packages: files above `[zenodo] multipart_threshold_mb` try
 Zenodo's multipart transfer (per-part retry — a mid-transfer drop
 costs one ~200 MB part, not the file). **As of 2026-07-04 Zenodo
 denies the part uploads (403)** — the code detects this and falls
-back automatically; multipart activates by itself the day Zenodo
-enables it (see zenodo_design.md § Large files). Until then, fallback
-files above `single_put_max_mb` (5 GB) are deferred to you: the
-digest carries the manual path — upload by hand to the
-already-created draft, then `oa action <pub_id> zenodo_upload_files`
-records it (checksum match, no bytes re-sent). The same manual path
-appears when smaller uploads keep failing across runs. Deposits over
-Zenodo's 50 GB/record cap are refused up front — split them or
-contact Zenodo support.
+back automatically (files up to 5 GB would use multipart by
+themselves the day Zenodo enables it; see zenodo_design.md § Large
+files). Files above `single_put_max_mb` (5 GB) and packages over 50 GB
+go by hand —
+see § Uploading the data to the draft. The same manual path appears in
+the digest when smaller uploads keep failing across runs.
 
 Zenodo credentials: `~/.zenodorc` (mode 600), sections `[zenodo]`
 (production) and `[zenodo-sandbox]`, each with `token = ...`. The

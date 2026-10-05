@@ -306,6 +306,24 @@ def get_pending_folder_cleanup(
     )
 
 
+def get_pending_upload(
+    conn: sqlite3.Connection, publication_id: str
+) -> dict[str, Any] | None:
+    """A Zenodo draft the system created whose package upload isn't on
+    record yet: no API upload (``zenodo_upload_files``) and no hand upload
+    (``zenodo_files_uploaded``) since the ``zenodo_create_draft`` event.
+    Drafts made by hand (``zenodo_draft_created``) never count — whoever
+    made the draft uploads to it, and the review step checks the files."""
+    created = get_last_event(conn, publication_id, "zenodo_create_draft")
+    if created is None:
+        return None
+    for code in ("zenodo_upload_files", "zenodo_files_uploaded"):
+        uploaded = get_last_event(conn, publication_id, code)
+        if uploaded is not None and uploaded["event_id"] > created["event_id"]:
+            return None
+    return created
+
+
 def get_last_event(
     conn: sqlite3.Connection, publication_id: str, action_code: str
 ) -> dict[str, Any] | None:

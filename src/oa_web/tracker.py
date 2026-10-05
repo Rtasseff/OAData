@@ -16,7 +16,9 @@ from typing import Any
 
 from django.conf import settings
 
+import fcntl
 import logging
+import os
 import threading
 
 from oa_tracker import actions, db, status as st
@@ -92,6 +94,17 @@ def recent_events(config: Config, limit: int = 200) -> list[dict[str, Any]]:
     return _events(rows)
 
 
+def size_text(n: int | None) -> str:
+    """Decimal units, as Zenodo states its limits (50 GB = 50,000,000,000
+    bytes) — Django's filesizeformat would show 1024-based values."""
+    if n is None:
+        return ""
+    for unit, factor in (("GB", 1e9), ("MB", 1e6), ("KB", 1e3)):
+        if n >= factor:
+            return f"{n / factor:.1f} {unit}"
+    return f"{n} bytes"
+
+
 def folder_listing(archive: dict[str, Any], limit: int = 40) -> list[dict[str, Any]] | None:
     """Top-level contents of the synced publication folder, for the QA
     view. Strictly read-only (the folder tree is never written to);
@@ -103,9 +116,10 @@ def folder_listing(archive: dict[str, Any], limit: int = 40) -> list[dict[str, A
         entries = []
         for p in sorted(folder.iterdir(), key=lambda x: x.name.lower())[:limit]:
             is_dir = p.is_dir()
+            size = None if is_dir else p.stat().st_size
             entries.append({
                 "name": p.name + ("/" if is_dir else ""),
-                "size": None if is_dir else p.stat().st_size,
+                "size": size, "size_text": size_text(size),
             })
         return entries
     except OSError:
@@ -149,6 +163,31 @@ def zenodo_links(config: Config, archive: dict[str, Any]) -> dict[str, str]:
     }
 
 
+UPLOAD_CODES = ("zenodo_upload_files", "zenodo_files_uploaded")
+
+
+def upload_view(config: Config, archive: dict[str, Any], row_code: str) -> dict[str, Any]:
+    """What the upload card shows: the package, whether the system can
+    upload it ("Upload now" greyed out with the reason when not), and any
+    upload running in the background or failed from this page."""
+    from oa_tracker import zenodo
+
+    plan = zenodo.plan_upload(Path(archive["folder_path"]), config.zenodo)
+    can_auto = row_code == "zenodo_upload_files" and plan.mode == "auto"
+    return {
+        "files": [{"name": key, "size": size, "size_text": size_text(size)}
+                  for key, _, size in plan.files],
+        "total": plan.total,
+        "total_text": size_text(plan.total),
+        "can_auto": can_auto,
+        "reason": "" if can_auto else (plan.reason or (
+            "The system cannot upload to this draft (Zenodo integration is off, "
+            "or the draft is on another Zenodo environment).")),
+        "over_quota": plan.mode == "over_quota",
+        "job": UPLOADS.get(archive["publication_id"]),
+    }
+
+
 def pub_db_url(pub_id: str) -> str:
     tpl = settings.OA_PUB_DB_URL_TEMPLATE
     return tpl.format(pub_id=pub_id) if tpl else ""
@@ -186,6 +225,160 @@ def push_to_sharepoint(config: Config, pub_id: str) -> None:
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="minutes").replace("T", " ")
+
+
+# ── Background jobs: the upload and the automatic update ─────────────
+# Both hold the same lock file as scripts/run_auto.sh (flock on
+# output/.auto.lock), so a web job, the scheduled run and each other never
+# work on the same drafts at once. State is in-memory: a restart forgets a
+# failed attempt, and the next automatic run retries regardless.
+
+UPLOADS: dict[str, dict[str, Any]] = {}   # pub_id → {"state", "when", "by", "text"}
+SYNC: dict[str, Any] = {}                 # {"state", "when", "by", "text"}
+
+_BUSY = ("An automatic update or an upload is already running (from this site or "
+         "the schedule). Try again when it has finished.")
+
+
+def _take_run_lock(config: Config) -> int | None:
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(config.output_dir / ".auto.lock", os.O_RDWR | os.O_CREAT, 0o664)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def _release_run_lock(fd: int) -> None:
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    os.close(fd)
+
+
+def start_upload(config: Config, username: str, archive: dict[str, Any],
+                 row_code: str) -> "Outcome":
+    """"Upload now": run the same API upload as the automatic run, in the
+    background (a large package takes minutes), recorded as web:<user>."""
+    out = Outcome()
+    pub_id = archive["publication_id"]
+    view = upload_view(config, archive, row_code)
+    if not view["can_auto"]:
+        out.errors.append(f"The system cannot upload this package: {view['reason']}")
+        return out
+    if (UPLOADS.get(pub_id) or {}).get("state") == "running":
+        out.errors.append("The upload is already running.")
+        return out
+    fd = _take_run_lock(config)
+    if fd is None:
+        out.errors.append(_BUSY)
+        return out
+    UPLOADS[pub_id] = {
+        "state": "running", "when": _now(), "by": username,
+        "text": f"Uploading {len(view['files'])} file(s), {view['total'] / 1e9:.1f} GB, "
+                "to the Zenodo draft…",
+    }
+
+    def run() -> None:
+        try:
+            result, _, _ = actions.apply_single(
+                config, pub_id, "zenodo_upload_files", done=1, source=f"web:{username}",
+            )
+            if result.applied and not result.errors:
+                _retire_sheet_row(config, archive, row_code, "zenodo_upload_files", "", "", "")
+                UPLOADS[pub_id] = {"state": "ok", "when": _now(), "by": username,
+                                   "text": "Package uploaded to the Zenodo draft."}
+            else:
+                problems = "; ".join(_clean(e) for e in result.errors) or "nothing was recorded"
+                UPLOADS[pub_id] = {
+                    "state": "failed", "when": _now(), "by": username,
+                    "text": f"The upload did not finish: {problems}. Nothing was recorded — "
+                            "try again, wait for the next automatic run, or upload by hand.",
+                }
+        except Exception as e:  # network etc. — the draft is unchanged on our side
+            log.warning("Upload for %s failed: %s", pub_id, e)
+            UPLOADS[pub_id] = {"state": "failed", "when": _now(), "by": username,
+                               "text": f"The upload failed ({e}). Nothing was recorded."}
+        finally:
+            _release_run_lock(fd)
+
+    threading.Thread(target=run, name=f"upload-{pub_id}", daemon=True).start()
+    out.ok = True
+    out.messages.append(
+        "Upload started in the background — this page refreshes until it has "
+        "finished. You can leave the page; the upload carries on."
+    )
+    return out
+
+
+def last_update(config: Config) -> str:
+    """The last line of output/auto_log.txt (every run appends one)."""
+    path = config.output_dir / "auto_log.txt"
+    try:
+        lines = path.read_text().strip().splitlines()
+    except OSError:
+        return ""
+    if not lines:
+        return ""
+    when, _, summary = lines[-1].partition("  ")
+    return f"{when[:16].replace('T', ' ')} — {summary}"
+
+
+def start_sync(config: Config, username: str) -> "Outcome":
+    """"Run the automatic update now": the whole ``oa auto`` cycle (scan,
+    SharePoint pull + push, the automatic steps, sheet/emails/report,
+    digest) in the background — exactly what the scheduled run does."""
+    out = Outcome()
+    if not config.automation.enabled:
+        out.errors.append("The automatic update is switched off ([automation] in config.toml).")
+        return out
+    if SYNC.get("state") == "running":
+        out.errors.append("The automatic update is already running.")
+        return out
+    fd = _take_run_lock(config)
+    if fd is None:
+        out.errors.append(_BUSY)
+        return out
+    SYNC.clear()
+    SYNC.update(state="running", when=_now(), by=username,
+                text="Scanning the folders and syncing with SharePoint…")
+
+    def run() -> None:
+        from oa_tracker.auto import run_cycle
+        started = datetime.now().isoformat(timespec="seconds")
+        try:
+            result, digest = run_cycle(config)
+            _log_run(config, started, username, result.summary, digest, ok=not result.errors)
+            SYNC.update(
+                state="failed" if result.errors else "ok", when=_now(),
+                text=(f"{result.summary}. " + (
+                    f"{len(result.errors)} problem(s) — see the run digest on the Report page."
+                    if result.errors else "See the run digest on the Report page.")),
+            )
+        except Exception as e:
+            log.warning("Automatic update failed: %s", e)
+            _log_run(config, started, username, f"failed: {e}", None, ok=False)
+            SYNC.update(state="failed", when=_now(), text=f"The update failed: {e}")
+        finally:
+            _release_run_lock(fd)
+
+    threading.Thread(target=run, name="oa-auto-web", daemon=True).start()
+    out.ok = True
+    out.messages.append("Automatic update started — the page refreshes until it has finished.")
+    return out
+
+
+def _log_run(config: Config, started: str, username: str, summary: str,
+             digest: Path | None, ok: bool) -> None:
+    """Leave the same trail in output/auto_cron.log as scripts/run_auto.sh."""
+    try:
+        with open(config.output_dir / "auto_cron.log", "a") as f:
+            f.write(f"=== {started} oa auto (web:{username}) ===\n{summary}\n")
+            if digest:
+                f.write(f"Digest: {digest}\n")
+            f.write(f"=== exit {0 if ok else 1} ===\n")
+    except OSError as e:
+        log.warning("Could not append to auto_cron.log: %s", e)
 
 
 # ── Writes ────────────────────────────────────────────────────────────
@@ -261,6 +454,9 @@ def perform(
             return out
     else:
         pid = url = ""
+
+    if button.background:
+        return start_upload(config, username, archive, task_code)
 
     apply_code = button.apply_code or task_code
 

@@ -156,3 +156,12 @@ pre.notes { white-space: pre-wrap; font: 13px/1.5 ui-monospace, monospace; margi
 .login p { margin: 0 0 12px; }
 .login label { font-size: 13px; color: var(--muted); }
 .login button { width: 100%; margin-top: 4px; }
+
+button.btn:disabled, button.btn:disabled:hover { background: #eef1f5; color: #98a2ae; border-color: #d6dce3; cursor: not-allowed; }
+.syncbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; }
+.syncbar .syncinfo { flex: 1 1 320px; }
+.pkgplan { margin: 0 0 14px; }
+.pkgplan h3 { font-size: 14px; margin: 0 0 6px; }
+.pkgplan .ok { color: var(--ok); margin: 8px 0 0; }
+.pkgplan .msg { margin: 10px 0 0; }

@@ -9,15 +9,23 @@ page covers only running the site and how it fits with the CLI.
 
 | Page | Shows | CLI equivalent |
 |---|---|---|
-| **Papers** | One row per publication: id (links to the SharePoint folder), status, pending action(s), title, data contact, corresponding author. An open paper with nothing pending before the Zenodo deposit shows *Apply exemption* instead of "—". Tabs: Open / Needs action / Closed / All, plus search. | `oa status` |
-| **Actions** | Every pending action, in working order — the action sheet, live. | `oa sheet` |
+| **Papers** | One row per publication: id (links to the SharePoint folder), status, pending action(s), title, data contact, corresponding author. An open paper with nothing pending before the Zenodo deposit shows *Apply exemption* instead of "—". Tabs: Open / Needs action / Closed / All, plus search. *Run the automatic update now* (below). | `oa status` |
+| **Actions** | Every pending action, in working order — the action sheet, live. *Run the automatic update now* (below). | `oa sheet` |
 | **Report** | The weekly report, live, beside the latest `oa auto` digest. | `oa report` |
 | **History** | The audit trail (`events` table), newest first. | — |
 | **Paper** (click an action or a title) | What to do for each pending action, the links needed (SharePoint folder, Zenodo draft, email draft download, DOI/URL to copy), and the button that records it. After a button the same page reloads showing the next step. | `oa action` |
 
-Buttons per step: QA has **QA pass** (the system then creates the
-Zenodo draft and uploads the package at the next `oa auto` run) and
-**QA fail** (requires a note → `qa_hold`); email steps have **Email
+Buttons per step: QA has **QA pass** (the next step, creating the
+Zenodo draft, follows on the same page — or the next `oa auto` run does
+it) and **QA fail** (requires a note → `qa_hold`); the draft step has
+**Create the Zenodo draft now** (record + reserved DOI only); the upload
+step — its own step, before the review ([sop.md](sop.md) § *Uploading
+the data to the draft*) — lists the package with decimal sizes and has
+**Upload now** (the same API upload as `oa auto`, run in the background;
+the page refreshes until it finishes) and **Uploaded by hand — record
+it** (`zenodo_files_uploaded`). *Upload now* is greyed out with the
+reason when the package must go by hand (a file over 5 GB, or over
+Zenodo's 50 GB — with the CIC biomaGUNE policy text). Email steps have **Email
 sent** (drafts are still written to `output/email_drafts/`, sending
 stays manual; the page offers the draft as a download); the Zenodo
 review step shows the DOI/URL the system reserved and **confirm**
@@ -67,9 +75,22 @@ exception (note required), close as publication-only, close as archived
 elsewhere (DOI + URL; closes at once — for when the DB entry and folder
 removal are already done, i.e. the CLI's `done=2` habit).
 
+**Run the automatic update now** (Papers and Actions pages): the whole
+`oa auto` cycle — folder scan, SharePoint List pull and push, the
+automatic steps, sheet/email drafts/report, digest — the same
+`auto.run_cycle` the scheduled run uses, in the background; the page
+refreshes until it finishes and then shows the run's summary (details on
+the Report page's digest). It is logged in `output/auto_cron.log` as
+`oa auto (web:<user>)`. Web jobs (this and *Upload now*) take the same
+lock as `scripts/run_auto.sh` (`output/.auto.lock`), so they never run
+alongside the scheduled run or each other — a button pressed while one is
+running says so; a scheduled run that finds the lock taken logs
+"skipped". Job state is in memory: restarting `oa web` mid-upload drops
+that upload (nothing is recorded; it is retried later).
+
 Not in the UI (CLI only): `oa reopen`, the `reset_*` overrides,
-`set_corresponding_author`, the `done=2` full-closure shortcut, applying
-`sharepoint_proposals.tsv`, and running `oa auto` (cron does that).
+`set_corresponding_author`, the `done=2` full-closure shortcut, and
+applying `sharepoint_proposals.tsv`.
 
 ## How it fits with the CLI
 

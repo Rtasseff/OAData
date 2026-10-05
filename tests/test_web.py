@@ -35,9 +35,10 @@ from oa_web import tracker  # noqa: E402
 
 def _insert(db_path, pub_id, status, **kwargs):
     kwargs.setdefault("data_contact_email", "dc@cicbiomagune.es")
+    kwargs.setdefault("folder_path", f"/tmp/oa-web-test/{pub_id}")
     with get_connection(db_path) as conn:
         upsert_archive(
-            conn, publication_id=pub_id, folder_path=f"/tmp/oa-web-test/{pub_id}",
+            conn, publication_id=pub_id,
             first_seen_at="2026-01-01T00:00:00", last_seen_at="2026-01-15T00:00:00",
             status=status, **kwargs,
         )
@@ -386,3 +387,166 @@ def test_list_offers_exemption_where_there_is_no_action(client, test_config):
     assert r.status_code == 302 and r["Location"] == "/paper/100/"
     assert _status(test_config, "100") == "CLOSED_PUBLICATION_ONLY"
     assert 'id="exemption"' not in client.get("/paper/100/").content.decode()
+
+
+# ── Zenodo upload step + background jobs ──────────────────────────────
+
+from oa_tracker import zenodo  # noqa: E402
+from oa_tracker.config import ZenodoSettings  # noqa: E402
+from tests.test_zenodo import FakeZenodo  # noqa: E402
+
+
+class _Inline:
+    """Stand-in for threading.Thread: runs the job at start()."""
+    def __init__(self, target, **kwargs):
+        self.target = target
+
+    def start(self):
+        self.target()
+
+
+@pytest.fixture
+def jobs(monkeypatch):
+    monkeypatch.setattr(tracker.threading, "Thread", _Inline)
+    tracker.UPLOADS.clear()
+    tracker.SYNC.clear()
+    yield
+    tracker.UPLOADS.clear()
+    tracker.SYNC.clear()
+
+
+@pytest.fixture
+def zen(test_config, tmp_path, monkeypatch):
+    test_config.zenodo = ZenodoSettings(enabled=True, environment="sandbox",
+                                        token_file=tmp_path / "zenodorc",
+                                        manifest_dir=tmp_path / "uploads")
+    fake = FakeZenodo()
+    fake.records["4242"] = {}
+    fake.files["4242"] = {}
+    monkeypatch.setattr(zenodo, "get_client", lambda settings: fake)
+    return fake
+
+
+def _system_draft(config, tmp_path, zip_size=None):
+    folder = tmp_path / "pub100"
+    folder.mkdir()
+    if zip_size is None:
+        (folder / "data.zip").write_bytes(b"zip")
+    else:
+        with open(folder / "data.zip", "wb") as f:
+            f.truncate(zip_size)          # sparse
+    (folder / "README.txt").write_text("readme")
+    _insert(config.database, "100", "OPEN_ZENODO_DRAFT_CREATED", folder_path=str(folder),
+            zenodo_code="4242", zenodo_env="sandbox", zenodo_doi="10.5281/zenodo.4242")
+    with get_connection(config.database) as conn:
+        insert_event(conn, "100", "zenodo_create_draft", OPEN_READY_FOR_ZENODO_DRAFT,
+                     "OPEN_ZENODO_DRAFT_CREATED", "web:alice")
+
+
+def _codes(config, pub_id="100"):
+    return [r["task_code"] for r in tracker.pending_by_pub(config).get(pub_id, [])]
+
+
+def test_new_draft_asks_for_the_upload_before_the_review(client, test_config, tmp_path, zen):
+    _system_draft(test_config, tmp_path)
+    assert _codes(test_config) == ["zenodo_upload_files"]
+    page = client.get("/paper/100/").content.decode()
+    card = page.split('id="zenodo_upload_files"')[1].split("</form>")[0]
+    assert "Upload the data to the Zenodo draft" in card
+    assert "The system can upload this package itself" in card
+    assert 'value="now">' in card                     # enabled
+    assert 'id="zenodo_validated"' not in page
+
+
+def test_upload_now_runs_and_moves_on_to_the_review(test_config, tmp_path, zen, jobs):
+    _system_draft(test_config, tmp_path)
+    out = tracker.perform(test_config, "alice", "100", "zenodo_upload_files", "now",
+                          "OPEN_ZENODO_DRAFT_CREATED")
+    assert out.ok, out.errors
+    assert set(zen.files["4242"]) == {"data.zip", "README.txt"}
+    assert tracker.UPLOADS["100"]["state"] == "ok"
+    ev = tracker.events_for(test_config, "100")[0]
+    assert (ev["action_code"], ev["source"]) == ("zenodo_upload_files", "web:alice")
+    assert _codes(test_config) == ["zenodo_validated"]
+
+
+def test_upload_now_greyed_out_for_a_package_over_the_auto_limit(client, test_config,
+                                                                tmp_path, zen, jobs):
+    _system_draft(test_config, tmp_path, zip_size=6 * 1024**3)
+    assert _codes(test_config) == ["zenodo_files_uploaded"]
+    page = client.get("/paper/100/").content.decode()
+    card = page.split('id="zenodo_files_uploaded"')[1].split("</form>")[0]
+    assert "Manual upload needed." in card and "data.zip" in card
+    assert 'value="now" disabled' in card
+    out = tracker.perform(test_config, "alice", "100", "zenodo_files_uploaded", "now",
+                          "OPEN_ZENODO_DRAFT_CREATED")
+    assert not out.ok and "cannot upload" in out.errors[0]
+    assert zen.calls == []
+
+
+def test_over_quota_package_shows_the_policy_advice(client, test_config, tmp_path, zen):
+    _system_draft(test_config, tmp_path, zip_size=70_000_000_000)
+    page = client.get("/paper/100/").content.decode()
+    assert "Over Zenodo&#x27;s 50 GB limit" in page or "Over Zenodo's 50 GB limit" in page
+    assert "Manage storage" in page and "CIC biomaGUNE policy" in page
+    assert "70.0 GB" in page                          # decimal, as Zenodo counts
+
+
+def test_uploaded_by_hand_is_checked_and_recorded(test_config, tmp_path, zen, jobs):
+    _system_draft(test_config, tmp_path, zip_size=6 * 1024**3)
+    out = tracker.perform(test_config, "alice", "100", "zenodo_files_uploaded", "manual",
+                          "OPEN_ZENODO_DRAFT_CREATED")
+    assert not out.ok and "holds no files" in out.errors[0]      # nothing there yet
+    zen.files["4242"]["data.zip"] = {"key": "data.zip", "status": "completed",
+                                     "size": 6 * 1024**3}
+    zen.files["4242"]["README.txt"] = {"key": "README.txt", "status": "completed", "size": 6}
+    out = tracker.perform(test_config, "alice", "100", "zenodo_files_uploaded", "manual",
+                          "OPEN_ZENODO_DRAFT_CREATED")
+    assert out.ok, out.errors
+    assert tracker.events_for(test_config, "100")[0]["action_code"] == "zenodo_files_uploaded"
+    assert _codes(test_config) == ["zenodo_validated"]
+
+
+def test_upload_refused_while_another_run_holds_the_lock(test_config, tmp_path, zen, jobs):
+    _system_draft(test_config, tmp_path)
+    fd = tracker._take_run_lock(test_config)            # e.g. the scheduled oa auto
+    try:
+        out = tracker.perform(test_config, "alice", "100", "zenodo_upload_files", "now",
+                              "OPEN_ZENODO_DRAFT_CREATED")
+    finally:
+        tracker._release_run_lock(fd)
+    assert not out.ok and "already running" in out.errors[0]
+    assert zen.files["4242"] == {}
+
+
+def test_run_the_automatic_update_now(client, test_config, jobs, monkeypatch):
+    from oa_tracker import auto
+    test_config.automation.enabled = True
+    seen = []
+
+    def fake_cycle(config):
+        seen.append(config)
+        return auto.AutoRunResult(started_at="2026-10-05T12:00:00"), \
+            config.output_dir / "auto_digest.md"
+
+    monkeypatch.setattr(auto, "run_cycle", fake_cycle)
+    r = client.post("/sync/", {"next": "/actions/"})
+    assert r.status_code == 302 and r["Location"] == "/actions/"
+    assert seen == [test_config]
+    assert tracker.SYNC["state"] == "ok" and tracker.SYNC["by"] == "alice"
+    log = (test_config.output_dir / "auto_cron.log").read_text()
+    assert "oa auto (web:alice)" in log and "=== exit 0 ===" in log
+    assert "Automatic update finished" in client.get("/actions/").content.decode()
+
+
+def test_automatic_update_refused_when_automation_is_off(test_config, jobs):
+    test_config.automation.enabled = False
+    out = tracker.start_sync(test_config, "alice")
+    assert not out.ok and "switched off" in out.errors[0]
+    assert tracker.SYNC == {}
+
+
+def test_sync_redirect_stays_on_this_site(client, test_config, jobs):
+    test_config.automation.enabled = False
+    r = client.post("/sync/", {"next": "//evil.example.org/"})
+    assert r["Location"] == "/"

@@ -62,6 +62,42 @@ def _apply_row(
     result: ApplyResult,
     row_label: str,
 ) -> tuple[bool, str | None, str | None]:
+    """Apply one action row, then queue the folder clean-up if it closed one.
+
+    A close (exemption, done=2, ...) while the SharePoint folder is still
+    on disk leaves the last manual step — deleting the folder. Flag it
+    now, exactly as the scanner would on its next run, so the
+    ``closed_folder_removed`` row appears straight away instead of the
+    archive vanishing from every worklist until the next scan.
+    """
+    applied, old_status, new_status = _apply_row_inner(
+        conn, row, now, config, source, result, row_label
+    )
+    if (applied and old_status in st.OPEN_STATUSES
+            and new_status in st.CLOSED_STATUSES):
+        pub_id = row["publication_id"].strip()
+        archive = db.get_archive(conn, pub_id)
+        folder = (archive or {}).get("folder_path")
+        if folder and Path(folder).is_dir() \
+                and db.get_pending_folder_cleanup(conn, pub_id) is None:
+            db.insert_event(
+                conn, pub_id, "closed_folder_present", new_status, new_status,
+                source,
+                note="Archive is closed but its SharePoint folder still "
+                     "exists — delete it to finish the close-out",
+            )
+    return applied, old_status, new_status
+
+
+def _apply_row_inner(
+    conn: sqlite3.Connection,
+    row: dict,
+    now: str,
+    config: Config,
+    source: str,
+    result: ApplyResult,
+    row_label: str,
+) -> tuple[bool, str | None, str | None]:
     """Apply one action row to the database.
 
     Returns (applied, old_status, new_status). Mutates `result` with the
@@ -283,6 +319,10 @@ def _apply_row(
     # API-backed Zenodo codes: the apply IS the API call (create draft /
     # upload files / publish). Terminal API failures become row errors —
     # no status change happens unless the call succeeded.
+    if task_code == "zenodo_files_uploaded":
+        return _apply_files_uploaded(
+            conn, archive, note, now, config, source, result, row_label,
+        )
     if task_code in ("zenodo_create_draft", "zenodo_upload_files", "zenodo_publish"):
         return _apply_zenodo_row(
             conn, archive, task_code, new_status, note, now, config,
@@ -572,6 +612,84 @@ def _confirm_zenodo_published(
     )
     result.applied += 1
     return (True, old_status, st.OPEN_ZENODO_PUBLISHED)
+
+
+def _apply_files_uploaded(
+    conn: sqlite3.Connection,
+    archive: dict,
+    note: str,
+    now: str,
+    config: Config,
+    source: str,
+    result: ApplyResult,
+    row_label: str,
+) -> tuple[bool, str | None, str | None]:
+    """Record a package the operator uploaded to the draft by hand.
+
+    With the Zenodo integration on, the draft's file list is read back
+    first (one quick API call — nothing is checksummed or re-sent):
+    refused while the draft holds no files or a file is still uploading.
+    Local package files with no same-size file on the draft are a warning,
+    not a refusal — a hand upload may be named or packed differently, and
+    the review step checks the files anyway. No size limit: this is how an
+    upload beyond Zenodo's standard 50 GB quota gets recorded.
+    """
+    from oa_tracker import zenodo
+
+    pub_id = archive["publication_id"]
+    old_status = archive["status"]
+    zset = config.zenodo
+    code = archive.get("zenodo_code")
+    if zset.enabled and code and archive.get("zenodo_env") in (None, zset.environment):
+        try:
+            remote = zenodo.list_draft_files(zenodo.get_client(zset), str(code))
+        except zenodo.ZenodoError as e:
+            result.errors.append(
+                f"{row_label} ({pub_id}): could not read the draft's files from Zenodo — {e}"
+            )
+            return (False, old_status, None)
+        if not remote:
+            result.errors.append(
+                f"{row_label} ({pub_id}): Zenodo draft {code} holds no files yet — "
+                "upload the package (and let every file finish) before recording it"
+            )
+            return (False, old_status, None)
+        unfinished = sorted(k for k, e in remote.items()
+                            if e.get("status") not in (None, "completed"))
+        if unfinished:
+            result.errors.append(
+                f"{row_label} ({pub_id}): still uploading on Zenodo: "
+                f"{', '.join(unfinished)} — record it once every file has finished"
+            )
+            return (False, old_status, None)
+        sizes = [e.get("size") for e in remote.values()]
+        plan = zenodo.plan_upload(Path(archive["folder_path"]), zset)
+        missing = [key for key, _, size in plan.files if size not in sizes]
+        if missing:
+            result.warnings.append(
+                f"{row_label} ({pub_id}): no file of the same size on the draft for "
+                f"{', '.join(missing)} — check the draft's files before publishing"
+            )
+        total = sum(e.get("size") or 0 for e in remote.values())
+        event_note = (
+            f"Package uploaded by hand: {len(remote)} file(s), {total / 1e9:.1f} GB "
+            f"on draft {code} ({', '.join(sorted(remote))})"
+        )
+    else:
+        event_note = "Package uploaded by hand (not checked against Zenodo)"
+        result.warnings.append(
+            f"{row_label} ({pub_id}): recorded without checking Zenodo (integration "
+            "off, or no system draft on this environment) — check the draft's "
+            "files at the review step"
+        )
+    db.upsert_archive(conn, publication_id=pub_id,
+                      notes=_append_note(archive, note or event_note, now))
+    db.insert_event(
+        conn, pub_id, "zenodo_files_uploaded", old_status, old_status, source,
+        note=event_note + (f" — {note}" if note else ""),
+    )
+    result.applied += 1
+    return (True, old_status, old_status)
 
 
 def _apply_zenodo_row(

@@ -25,6 +25,7 @@ class Button:
     confirm: str = ""       # browser confirm() text for irreversible steps
     alt_summary: str = ""   # needs_pid_url beside other buttons: the fold-out's heading
     prefill: bool = False   # pre-fill DOI + URL from the Zenodo record on file
+    background: bool = False  # starts a background job (the upload) instead of applying a code
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,32 @@ _EMAIL_STEPS = (
     "recurring once it is recorded.",
 )
 
+UPLOAD = ActionSpec(
+    title="Upload the data to the Zenodo draft",
+    steps=(
+        "The draft record exists on Zenodo (its DOI is reserved) but holds no "
+        "data yet. The package to upload — the .zip, README.txt and manuscript "
+        "from the SharePoint folder — is listed below.",
+        "Automatic: the next automatic run uploads it, or press “Upload now” to "
+        "start it straight away. It runs in the background; this page shows when "
+        "it has finished.",
+        "By hand (when the package is too large for the system, or you prefer "
+        "to): get the package files from the SharePoint folder (download them, or "
+        "use your OneDrive-synced copy), open the Zenodo draft, drag the files "
+        "onto it or click “Upload files”, and wait until every file has finished. "
+        "Then press “Uploaded by hand” — the system checks that the draft holds "
+        "the files.",
+        "Nothing is published at this step: reviewing and publishing the draft "
+        "comes next.",
+    ),
+    buttons=(
+        Button("now", "Upload now", background=True),
+        Button("manual", "Uploaded by hand — record it",
+               apply_code="zenodo_files_uploaded", style="secondary"),
+    ),
+    links=("zenodo", "folder"),
+)
+
 SPECS: dict[str, ActionSpec] = {
     "qa_pass": ActionSpec(
         title="Quality check the uploaded data",
@@ -71,15 +98,15 @@ SPECS: dict[str, ActionSpec] = {
             "Open the SharePoint folder and review what the data contact uploaded.",
             "The package must be: one .zip with the datasets, a README.txt beside "
             "the zip, and a version of the manuscript (.doc/.docx/.pdf) beside the zip.",
-            "Pass → the system creates the Zenodo draft and uploads the package "
-            "at the next automatic run; you review and publish it later. Fail → "
-            "the archive stays where it is; say what is wrong in the note so it "
-            "is on record (the data contact hears about it through the next "
+            "Pass → the next step is creating the Zenodo draft record: the next "
+            "automatic run does it, or you can do it straight away on this page. "
+            "Fail → the archive stays where it is; say what is wrong in the note "
+            "so it is on record (the data contact hears about it through the next "
             "reminder or your own email).",
             ELSEWHERE_STEP,
         ),
         buttons=(
-            Button("pass", "QA pass — system creates the Zenodo draft"),
+            Button("pass", "QA pass"),
             Button("fail", "QA fail — keep waiting", apply_code="qa_hold",
                    style="danger", needs_note=True),
             ELSEWHERE,
@@ -138,12 +165,13 @@ SPECS: dict[str, ActionSpec] = {
         links=("folder",),
     ),
     "zenodo_create_draft": ActionSpec(
-        title="Create the Zenodo draft",
+        title="Create the Zenodo draft record",
         steps=(
-            "QA has passed. The next automatic run creates the draft on Zenodo "
-            "(metadata from the publication database, a reserved DOI) and "
-            "uploads the package — or create it now with the button. Nothing is "
-            "published at this step.",
+            "QA has passed. This creates the record on Zenodo with the metadata "
+            "from the publication database and reserves its DOI. No data is "
+            "uploaded and nothing is published — uploading the data is the next step.",
+            "The next automatic run creates it by itself, or create it now with "
+            "the button.",
             ELSEWHERE_STEP,
         ),
         buttons=(Button("done", "Create the Zenodo draft now"), ELSEWHERE),
@@ -165,6 +193,12 @@ SPECS: dict[str, ActionSpec] = {
         fields=("zenodo_code",),
         links=("folder",),
     ),
+    # Both upload codes share one card: the sheet emits zenodo_upload_files
+    # when the system can upload the package and zenodo_files_uploaded
+    # when it must go by hand (zenodo.plan_upload); the page greys out
+    # "Upload now" with the reason in the second case.
+    "zenodo_upload_files": UPLOAD,
+    "zenodo_files_uploaded": UPLOAD,
     "zenodo_validated": ActionSpec(
         title="Review the Zenodo draft and publish it",
         steps=(
@@ -358,7 +392,7 @@ STATUS_LABELS = {
     "OPEN_INACTIVE": "Waiting for data",
     "OPEN_ACTIVE": "Data uploaded — QA",
     "OPEN_READY_FOR_ZENODO_DRAFT": "QA passed — create draft",
-    "OPEN_ZENODO_DRAFT_CREATED": "Zenodo draft — review",
+    "OPEN_ZENODO_DRAFT_CREATED": "Zenodo draft created",
     "OPEN_ZENODO_DRAFT_VALIDATED": "Draft validated — publish",
     "OPEN_ZENODO_PUBLISHED": "Published — update database",
     "OPEN_DB_UPDATED": "Database updated — remove folder",
@@ -377,6 +411,8 @@ SHORT_LABELS = {
     "reject_done": "Reject “done” tick",
     "zenodo_create_draft": "Create Zenodo draft",
     "zenodo_draft_created": "Create Zenodo draft",
+    "zenodo_upload_files": "Upload data to Zenodo",
+    "zenodo_files_uploaded": "Upload data to Zenodo (by hand)",
     "zenodo_validated": "Review & publish on Zenodo",
     "zenodo_publish": "Publish on Zenodo",
     "zenodo_published": "Record Zenodo DOI",

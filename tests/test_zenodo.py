@@ -651,3 +651,60 @@ def test_record_ui_url(settings):
     assert zenodo.record_ui_url(settings, "42") == "https://sandbox.zenodo.org/uploads/42"
     settings.environment = "production"
     assert zenodo.record_ui_url(settings, "42") == "https://zenodo.org/uploads/42"
+
+
+# ── Upload plan: what the system may upload by itself ────────────────
+
+def _sparse(path, size):
+    """A file that reports ``size`` bytes without using the disk."""
+    with open(path, "wb") as f:
+        f.truncate(size)
+
+
+def test_plan_small_package_is_auto(tmp_path, settings):
+    folder = tmp_path / "pub"
+    folder.mkdir()
+    (folder / "data.zip").write_bytes(b"zip")
+    (folder / "README.txt").write_text("readme")
+    plan = zenodo.plan_upload(folder, settings)
+    assert plan.mode == "auto" and plan.reason == ""
+    assert [k for k, _, _ in plan.files] == ["README.txt", "data.zip"]
+
+
+def test_plan_file_above_auto_limit_needs_hand_upload(tmp_path, settings):
+    folder = tmp_path / "pub"
+    folder.mkdir()
+    _sparse(folder / "data.zip", 6 * 1024**3)          # > single_put_max_mb (5120)
+    (folder / "README.txt").write_text("readme")
+    plan = zenodo.plan_upload(folder, settings)
+    assert plan.mode == "manual" and plan.too_big_for_auto == ["data.zip"]
+    assert "by hand" in plan.reason and "Manage storage" not in plan.reason
+
+
+def test_plan_over_50_gb_is_over_quota(tmp_path, settings):
+    folder = tmp_path / "pub"
+    folder.mkdir()
+    _sparse(folder / "data.zip", 50_000_000_001)       # Zenodo's 50 GB is decimal
+    plan = zenodo.plan_upload(folder, settings)
+    assert plan.mode == "over_quota"
+    assert "50 GB" in plan.reason and "Manage storage" in plan.reason
+    assert "CIC biomaGUNE policy" in plan.reason
+
+
+def test_plan_quota_counts_the_whole_package(tmp_path, settings):
+    folder = tmp_path / "pub"
+    folder.mkdir()
+    _sparse(folder / "part1.zip", 26_000_000_000)
+    _sparse(folder / "part2.zip", 26_000_000_000)
+    assert zenodo.plan_upload(folder, settings).mode == "over_quota"
+
+
+def test_upload_files_refuses_over_quota_without_api_calls(tmp_path, settings):
+    fake = FakeZenodo()
+    folder = tmp_path / "pub"
+    folder.mkdir()
+    _sparse(folder / "data.zip", 60_000_000_000)
+    res = zenodo.upload_files(fake, "100", folder, settings)
+    assert not res.ok
+    assert "Manage storage" in res.errors[0] and "zenodo_files_uploaded" in res.errors[0]
+    assert fake.calls == []

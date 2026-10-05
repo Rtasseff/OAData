@@ -443,3 +443,139 @@ def test_untick_rejected_records_when_row_already_clear(zen_config):
     assert unticked == [] and errors == []
     with db.get_connection(zen_config.database) as conn:
         assert db.get_pending_untick(conn, "3259") is None
+
+
+# ── Upload step: hand uploads, and packages the system can't send ────
+
+def _sparse(path, size):
+    with open(path, "wb") as f:
+        f.truncate(size)
+
+
+def _system_draft(zen_config, pub_id="3290", code="100"):
+    """A draft the system created (create event on record), no upload yet."""
+    _seed(zen_config, pub_id, status=st.OPEN_ZENODO_DRAFT_CREATED,
+          zenodo_code=code, zenodo_env="sandbox")
+    zen_config._fake_zenodo.records[code] = {}
+    zen_config._fake_zenodo.files[code] = {}
+    with db.get_connection(zen_config.database) as conn:
+        db.insert_event(conn, pub_id, "zenodo_create_draft",
+                        st.OPEN_READY_FOR_ZENODO_DRAFT, st.OPEN_ZENODO_DRAFT_CREATED, "auto")
+
+
+def _hand_uploaded(fake, code, **sizes):
+    for key, size in sizes.items():
+        fake.files[code][key] = {"key": key, "status": "completed", "size": size,
+                                 "checksum": "md5:whatever"}
+
+
+def test_upload_pending_until_an_upload_is_recorded(zen_config):
+    _folder_with_package(zen_config)
+    _system_draft(zen_config)
+    with db.get_connection(zen_config.database) as conn:
+        assert db.get_pending_upload(conn, "3290") is not None
+    apply_single(zen_config, "3290", "zenodo_upload_files")
+    with db.get_connection(zen_config.database) as conn:
+        assert db.get_pending_upload(conn, "3290") is None
+
+
+def test_hand_made_draft_never_pending_upload(zen_config):
+    _seed(zen_config, status=st.OPEN_ZENODO_DRAFT_CREATED, zenodo_code="777")
+    with db.get_connection(zen_config.database) as conn:
+        assert db.get_pending_upload(conn, "3290") is None
+
+
+def test_files_uploaded_refused_while_draft_is_empty(zen_config):
+    _folder_with_package(zen_config)
+    _system_draft(zen_config)
+    result, _, _ = apply_single(zen_config, "3290", "zenodo_files_uploaded")
+    assert result.applied == 0 and "holds no files" in result.errors[0]
+
+
+def test_files_uploaded_refused_while_a_file_is_still_uploading(zen_config):
+    _folder_with_package(zen_config)
+    _system_draft(zen_config)
+    zen_config._fake_zenodo.files["100"]["data.zip"] = {"key": "data.zip", "status": "pending"}
+    result, _, _ = apply_single(zen_config, "3290", "zenodo_files_uploaded")
+    assert result.applied == 0 and "still uploading" in result.errors[0]
+
+
+def test_files_uploaded_records_a_hand_upload_of_any_size(zen_config):
+    folder = _folder_with_package(zen_config)
+    _sparse(folder / "data.zip", 70_000_000_000)        # over the 50 GB quota
+    _system_draft(zen_config)
+    fake = zen_config._fake_zenodo
+    _hand_uploaded(fake, "100", **{"data.zip": 70_000_000_000, "README.txt": 5})
+    result, old_s, new_s = apply_single(zen_config, "3290", "zenodo_files_uploaded",
+                                        source="web:alice")
+    assert result.applied == 1 and not result.errors and not result.warnings
+    assert old_s == new_s == st.OPEN_ZENODO_DRAFT_CREATED
+    with db.get_connection(zen_config.database) as conn:
+        ev = db.get_last_event(conn, "3290", "zenodo_files_uploaded")
+        assert db.get_pending_upload(conn, "3290") is None
+    assert ev["source"] == "web:alice" and "70.0 GB" in ev["note"]
+    assert not any(c[0] == "PUT" for c in fake.calls)   # nothing re-sent
+
+
+def test_files_uploaded_warns_about_package_files_missing_on_the_draft(zen_config):
+    _folder_with_package(zen_config)
+    _system_draft(zen_config)
+    _hand_uploaded(zen_config._fake_zenodo, "100", **{"README.txt": 5})
+    result, _, _ = apply_single(zen_config, "3290", "zenodo_files_uploaded")
+    assert result.applied == 1
+    assert any("data.zip" in w for w in result.warnings)
+
+
+def test_files_uploaded_without_zenodo_records_with_a_warning(zen_config):
+    _folder_with_package(zen_config)
+    _system_draft(zen_config)
+    zen_config.zenodo.enabled = False
+    result, _, _ = apply_single(zen_config, "3290", "zenodo_files_uploaded")
+    assert result.applied == 1 and "without checking Zenodo" in result.warnings[0]
+
+
+def test_files_uploaded_only_at_draft_created(zen_config):
+    _seed(zen_config, status=st.OPEN_ACTIVE)
+    result, _, _ = apply_single(zen_config, "3290", "zenodo_files_uploaded")
+    assert result.applied == 0 and result.errors
+
+
+def test_auto_leaves_a_too_big_package_for_hand_upload(zen_config):
+    """Draft created this run; the zip is above the unattended limit, so
+    no upload is attempted and the worklist says what to do by hand."""
+    folder = _folder_with_package(zen_config)
+    _sparse(folder / "data.zip", 6 * 1024**3)
+    _seed(zen_config, status=st.OPEN_ACTIVE, user_done_flag=1,
+          package_has_zip=1, package_has_readme=1, package_has_manuscript=1)
+    result = auto.AutoRunResult(started_at=NOW)
+    auto._advance(zen_config, result)
+    assert not result.errors
+    fake = zen_config._fake_zenodo
+    assert fake.files["100"] == {}                     # draft made, nothing uploaded
+    assert any("MANUAL UPLOAD" in w and "data.zip" in w for w in result.awaiting_operator)
+    assert not any("validate the Zenodo draft" in w for w in result.awaiting_operator)
+
+
+def test_auto_retry_skips_over_quota_package_every_run(zen_config):
+    folder = _folder_with_package(zen_config)
+    _sparse(folder / "data.zip", 60_000_000_000)
+    _system_draft(zen_config)
+    for _ in range(2):
+        result = auto.AutoRunResult(started_at=NOW)
+        auto._advance(zen_config, result)
+        assert not result.errors
+        assert any("MANUAL UPLOAD" in w and "Manage storage" in w
+                   for w in result.awaiting_operator)
+    assert zen_config._fake_zenodo.calls == []
+
+
+def test_auto_after_hand_upload_points_at_review(zen_config):
+    folder = _folder_with_package(zen_config)
+    _sparse(folder / "data.zip", 6 * 1024**3)
+    _system_draft(zen_config)
+    _hand_uploaded(zen_config._fake_zenodo, "100", **{"data.zip": 6 * 1024**3, "README.txt": 5})
+    apply_single(zen_config, "3290", "zenodo_files_uploaded")
+    result = auto.AutoRunResult(started_at=NOW)
+    auto._advance(zen_config, result)
+    assert any("validate the Zenodo draft" in w for w in result.awaiting_operator)
+    assert not any("MANUAL UPLOAD" in w for w in result.awaiting_operator)

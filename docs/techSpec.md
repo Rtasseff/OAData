@@ -201,7 +201,17 @@ Zenodo API codes (v4 — the apply IS the API call; see
   `OPEN_ZENODO_DRAFT_CREATED`; creates the draft, reserves the DOI,
   records `zenodo_code`/`zenodo_doi`/`zenodo_env`.
 * `zenodo_upload_files` — uploads the folder package to the draft;
-  status unchanged (upload is not validation).
+  status unchanged (upload is not validation). Refused up front over
+  Zenodo's standard quota (`zenodo.plan_upload`).
+* `zenodo_files_uploaded` (manual twin, 2026-10-05) — records a hand
+  upload: reads the draft's file list (refused if empty or still
+  uploading; warns on package files with no same-size match); no size
+  limit; status unchanged. The upload step is pending while
+  `db.get_pending_upload` finds a `zenodo_create_draft` event with no
+  `zenodo_upload_files` / `zenodo_files_uploaded` after it; the sheet
+  then emits one of the two codes (by `plan_upload`) instead of
+  `zenodo_validated`. Procedure: [sop.md](sop.md) § *Uploading the data
+  to the draft*.
 * `zenodo_publish` — `OPEN_ZENODO_DRAFT_VALIDATED` →
   `OPEN_ZENODO_PUBLISHED`; publishes, records `final_pid`/`final_url`.
   Never emitted by the automation engine — operator keystroke only.

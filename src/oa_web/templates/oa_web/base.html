@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}OA Archive Tracker{% endblock %}</title>
+{% if refresh %}<meta http-equiv="refresh" content="{{ refresh }}">{% endif %}
 <link rel="stylesheet" href="{% static 'oa_web/style.css' %}">
 </head>
 <body>

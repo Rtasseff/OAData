@@ -57,12 +57,15 @@ manifest_dir = "./output/zenodo_uploads"
 # into parts, each an independent retryable PUT — a drop costs one part,
 # not the whole file. NOTE (verified live 2026-07-04): Zenodo currently
 # accepts the multipart init but denies the part uploads (403) — the
-# code detects that and falls back automatically; multipart will simply
-# start working the day Zenodo enables it. Until then, fallback files
-# above single_put_max_mb are NOT uploaded unattended: the digest tells
-# the operator to upload by hand (then `oa action <pub>
-# zenodo_upload_files` records it via checksum match, no bytes re-sent).
-# Zenodo's hard 50 GB/record cap is refused up front regardless.
+# code detects that and falls back automatically (files up to
+# single_put_max_mb would use multipart by themselves the day Zenodo
+# enables it; larger ones need the rule in zenodo.plan_upload relaxed —
+# docs/zenodo_design.md § Large files). Files above single_put_max_mb
+# are NOT uploaded unattended: the sheet, the web
+# page and the digest ask for a hand upload (recorded with
+# zenodo_files_uploaded). Packages over Zenodo's standard 50 GB/record
+# quota are refused up front regardless — see docs/sop.md § Uploading
+# the data to the draft for the policy.
 multipart_threshold_mb = 1024      # > 1 GB → try multipart
 multipart_part_size_mb = 200
 single_put_max_mb = 5120           # > 5 GB single-PUT fallback → manual
