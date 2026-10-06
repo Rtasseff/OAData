@@ -444,6 +444,21 @@ re-probes multipart implicitly and self-activates when it works):
   deleted and re-sent on a later run.
 - Stale `pending` entries (an interrupted earlier upload) never match —
   they are deleted and restarted clean.
+- **Single transfer with retry (2026-10-05, `_single_put`):** each file
+  gets `1 + UPLOAD_RETRIES` (= 4) attempts of register → PUT → commit →
+  verify, with a 300 s socket timeout for the transfer and its commit.
+  **Each retry re-registers the file:** found on sandbox that day,
+  Zenodo *removes* a file entry whose upload was cut off, and a re-PUT
+  to the old entry is itself cut off ~30 s in (`EOF occurred in
+  violation of protocol`) — so the client's bare-PUT retry (the July
+  "rewind" fix) can never recover a dropped large upload; the file-level
+  loop deletes any leftover entry and starts over. Only transient
+  failures (dropped connection, 5xx, 429, not landed intact) are
+  retried. Every file (not just multipart) is re-listed after commit and
+  must match (`_entry_matches`). With that, `single_put_max_mb` was
+  raised to 51200 in the deployment config (operator decision): 5–50 GB
+  files go unattended, and the web/sheet show a large-upload warning
+  above 5 GB (`LARGE_FILE_BYTES`). Sandbox E2E: see roadmap 2026-10-05.
 - `zenodo.plan_upload` classifies a package from file sizes alone
   (`auto` / `manual` — a file above `single_put_max_mb` / `over_quota`)
   and every caller uses it: the API upload refuses `over_quota` up front

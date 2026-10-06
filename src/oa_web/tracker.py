@@ -184,6 +184,7 @@ def upload_view(config: Config, archive: dict[str, Any], row_code: str) -> dict[
             "The system cannot upload to this draft (Zenodo integration is off, "
             "or the draft is on another Zenodo environment).")),
         "over_quota": plan.mode == "over_quota",
+        "large_warning": plan.large_warning if can_auto else "",
         "job": UPLOADS.get(archive["publication_id"]),
     }
 

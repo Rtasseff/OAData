@@ -33,14 +33,20 @@ class FakeZenodo:
         self.published: set[str] = set()
         self.next_id = 100
         self.calls: list[tuple[str, str]] = []
+        self.attempts: dict[tuple[str, str], int] = {}   # retry budget per call
+        # Errors raised by the next single-PUT content uploads, in order.
+        # A transient one also removes the file entry — what real Zenodo
+        # does with an upload cut off mid-transfer (sandbox, 2026-10-05).
+        self.fail_content_puts: list = []
         self.multipart_supported = True
         self.deny_part_put = False      # real Zenodo 2026-07-04: init OK, part PUT 403
         self.report_md5 = True
         self.corrupt_on_commit = False
 
     def request(self, method, path, json_body=None, data=None,
-                content_type=None, content_length=None):
+                content_type=None, content_length=None, attempts=3, timeout=None):
         self.calls.append((method, path))
+        self.attempts[(method, path)] = attempts
         if method == "POST" and path == "/api/records":
             rid = str(self.next_id)
             self.next_id += 1
@@ -96,6 +102,11 @@ class FakeZenodo:
         if method == "PUT" and path.endswith("/content"):
             rid = path.split("/")[3]
             key = urllib.parse.unquote(path.split("/")[-2])
+            if self.fail_content_puts:
+                err = self.fail_content_puts.pop(0)
+                if err.kind == "transient":
+                    self.files[rid].pop(key, None)
+                raise err
             content = data.read() if hasattr(data, "read") else data
             self.files[rid][key]["_content"] = content
             return 200, {}
@@ -582,7 +593,7 @@ def test_multipart_verification_failure_is_an_error(tmp_path, settings):
     fake.files["100"] = {}
     res = zenodo.upload_files(fake, "100", _big_folder(tmp_path), _mp(settings))
     assert not res.ok
-    assert "does not match" in res.errors[0]
+    assert "did not land intact" in res.errors[0]
 
 
 def test_stale_pending_entry_is_replaced(tmp_path, settings):
@@ -708,3 +719,105 @@ def test_upload_files_refuses_over_quota_without_api_calls(tmp_path, settings):
     assert not res.ok
     assert "Manage storage" in res.errors[0] and "zenodo_files_uploaded" in res.errors[0]
     assert fake.calls == []
+
+
+def _one_file(tmp_path):
+    fake = FakeZenodo()
+    fake.records["100"] = {}
+    fake.files["100"] = {}
+    folder = tmp_path / "pub"
+    folder.mkdir()
+    (folder / "data.zip").write_bytes(b"zip-bytes")
+    return fake, folder
+
+
+def _dropped():
+    return zenodo.ZenodoError("transient", "connection to Zenodo failed: EOF")
+
+
+PUT = ("PUT", "/api/records/100/draft/files/data.zip/content")
+
+
+def test_dropped_upload_is_re_registered_and_retried(tmp_path, settings, monkeypatch):
+    monkeypatch.setattr(zenodo.time, "sleep", lambda s: None)
+    fake, folder = _one_file(tmp_path)
+    fake.fail_content_puts = [_dropped(), _dropped()]
+    res = zenodo.upload_files(fake, "100", folder, settings)
+    assert res.ok and res.uploaded == ["data.zip"]
+    assert fake.files["100"]["data.zip"]["status"] == "completed"
+    assert fake.calls.count(PUT) == 3
+    registers = [c for c in fake.calls if c == ("POST", "/api/records/100/draft/files")]
+    assert len(registers) == 3                 # the entry is re-created for every retry
+    assert fake.attempts[PUT] == 1             # the loop owns retries, not the client
+
+
+def test_upload_gives_up_after_the_retry_budget(tmp_path, settings, monkeypatch):
+    monkeypatch.setattr(zenodo.time, "sleep", lambda s: None)
+    fake, folder = _one_file(tmp_path)
+    fake.fail_content_puts = [_dropped() for _ in range(1 + zenodo.UPLOAD_RETRIES)]
+    res = zenodo.upload_files(fake, "100", folder, settings)
+    assert not res.ok and "all 4 attempts" in res.errors[0]
+    assert fake.calls.count(PUT) == 4
+
+
+def test_retry_clears_a_leftover_entry_first(tmp_path, settings, monkeypatch):
+    monkeypatch.setattr(zenodo.time, "sleep", lambda s: None)
+    fake, folder = _one_file(tmp_path)
+    leftover = zenodo.ZenodoError("transient", "HTTP 502 from Zenodo after retries", 502)
+    fake.fail_content_puts = [leftover]
+    real_request = fake.request
+
+    def keep_entry(method, path, **kw):         # a drop that leaves a pending entry
+        try:
+            return real_request(method, path, **kw)
+        except zenodo.ZenodoError:
+            fake.files["100"]["data.zip"] = {"key": "data.zip", "status": "pending"}
+            raise
+
+    fake.request = keep_entry
+    assert zenodo.upload_files(fake, "100", folder, settings).ok
+    assert ("DELETE", "/api/records/100/draft/files/data.zip") in fake.calls
+
+
+def test_rejected_upload_is_not_retried(tmp_path, settings, monkeypatch):
+    monkeypatch.setattr(zenodo.time, "sleep", lambda s: None)
+    fake, folder = _one_file(tmp_path)
+    fake.fail_content_puts = [zenodo.ZenodoError("data", "HTTP 400 from Zenodo", 400)]
+    res = zenodo.upload_files(fake, "100", folder, settings)
+    assert not res.ok and fake.calls.count(PUT) == 1
+
+
+def test_client_retries_a_dropped_transfer_up_to_the_budget(monkeypatch, tmp_path):
+    tries = []
+
+    def fake_urlopen(req, timeout=None):
+        tries.append(req.data.read())
+        raise OSError("connection reset by peer")
+
+    monkeypatch.setattr(zenodo.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(zenodo.time, "sleep", lambda s: None)
+    p = tmp_path / "f.bin"
+    p.write_bytes(b"HELLO")
+    client = zenodo.ZenodoClient("https://x.invalid", "tok")
+    with open(p, "rb") as f, pytest.raises(zenodo.ZenodoError):
+        client.request("PUT", "/y", data=f, content_length=5, attempts=4)
+    assert tries == [b"HELLO"] * 4            # first try + 3 retries, each from byte 0
+
+
+def test_plan_warns_about_large_files_the_system_will_upload(tmp_path, settings):
+    settings.single_put_max_mb = 51200        # deployment setting since 2026-10-05
+    folder = tmp_path / "pub"
+    folder.mkdir()
+    _sparse(folder / "data.zip", 20_000_000_000)
+    (folder / "README.txt").write_text("readme")
+    plan = zenodo.plan_upload(folder, settings)
+    assert plan.mode == "auto" and plan.large == ["data.zip"]
+    assert "20.0 GB" in plan.large_warning and "hour" in plan.large_warning
+    assert "3 times" in plan.large_warning
+
+
+def test_plan_no_warning_for_ordinary_files(tmp_path, settings):
+    folder = tmp_path / "pub"
+    folder.mkdir()
+    _sparse(folder / "data.zip", 4_000_000_000)
+    assert zenodo.plan_upload(folder, settings).large_warning == ""

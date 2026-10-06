@@ -146,9 +146,28 @@ digest always agree, before and after any attempt:
 
 | Package | What happens | Sheet row | Web UI |
 |---|---|---|---|
-| every file ≤ 5 GB (`[zenodo] single_put_max_mb`), total ≤ 50 GB | the system uploads it: the next `oa auto` run, or right away | `zenodo_upload_files` — done=1 uploads now | **Upload now** (runs in the background) |
-| a file > 5 GB, total ≤ 50 GB | **upload by hand** — too large for the system's unattended upload | `zenodo_files_uploaded` | *Upload now* greyed out with the reason; **Uploaded by hand** |
+| total ≤ 50 GB and every file ≤ `[zenodo] single_put_max_mb` (raised to 51200 here on 2026-10-05, i.e. up to the quota) | the system uploads it: the next `oa auto` run, or right away. A file over 5 GB carries a **large-upload warning** (below) | `zenodo_upload_files` — done=1 uploads now | **Upload now** (runs in the background) |
+| a file > `single_put_max_mb` (only with the code default 5120 = 5 GB) | **upload by hand** — too large for the system's unattended upload | `zenodo_files_uploaded` | *Upload now* greyed out with the reason; **Uploaded by hand** |
 | total > 50 GB (or > 100 files) | over Zenodo's standard quota — see the policy below | `zenodo_files_uploaded` | as above, with the policy text |
+
+**Large uploads (a file over 5 GB):** expect up to an hour or more per
+attempt, and Zenodo sometimes drops a large upload part-way — a known
+issue we have seen, in the browser too. The system sends each file in
+one transfer; a dropped transfer is retried from the start up to 3 times
+(`zenodo.UPLOAD_RETRIES`), every file is checked against the local copy
+(md5) after it lands, and if all attempts fail the next automatic run
+tries again. Zenodo offers no resumable upload to API users (multipart
+is still disabled, re-probed 2026-10-05). The web page and the sheet note
+say this next to the upload button.
+
+**Choosing a hand upload instead:** possible whenever the upload step is
+showing — after a draft was created from the web page or the sheet
+(until the next automatic run), or after an automatic upload failed.
+A draft the *scheduled run* creates is uploaded in that same run, so
+there is no window for those. A finished hand upload with the same file
+name is recognised by checksum by the next run and not re-sent (record
+it anyway with *Uploaded by hand*); a hand upload still in progress when
+a run starts is treated as an incomplete file and restarted by the run.
 
 **Uploading by hand:** get the package files (.zip, README.txt,
 manuscript) from the SharePoint folder — download them, or use a
@@ -501,11 +520,11 @@ Large packages: files above `[zenodo] multipart_threshold_mb` try
 Zenodo's multipart transfer (per-part retry — a mid-transfer drop
 costs one ~200 MB part, not the file). **As of 2026-07-04 Zenodo
 denies the part uploads (403)** — the code detects this and falls
-back automatically (files up to 5 GB would use multipart by
-themselves the day Zenodo enables it; see zenodo_design.md § Large
-files). Files above `single_put_max_mb` (5 GB) and packages over 50 GB
-go by hand —
-see § Uploading the data to the draft. The same manual path appears in
+back automatically to one transfer per file, retried from the start up
+to 3 times on a drop and verified after it lands (see zenodo_design.md
+§ Large files). Since 2026-10-05 `single_put_max_mb` is raised to the
+50 GB quota, so 5–50 GB files go automatically, with a warning; only
+packages over 50 GB go by hand — see § Uploading the data to the draft. The same manual path appears in
 the digest when smaller uploads keep failing across runs.
 
 Zenodo credentials: `~/.zenodorc` (mode 600), sections `[zenodo]`

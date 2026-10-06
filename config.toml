@@ -68,7 +68,12 @@ manifest_dir = "./output/zenodo_uploads"
 # the data to the draft for the policy.
 multipart_threshold_mb = 1024      # > 1 GB → try multipart
 multipart_part_size_mb = 200
-single_put_max_mb = 5120           # > 5 GB single-PUT fallback → manual
+# Raised 2026-10-05 after the sandbox test (6.5 GB, forced drop → one
+# retry, md5 verified): the system sends files up to Zenodo's 50 GB quota
+# in one transfer, redone from scratch up to 3 times if Zenodo drops it
+# (zenodo.UPLOAD_RETRIES); files over 5 GB carry a "large upload" warning.
+# The code default 5120 keeps files over 5 GB for a hand upload.
+single_put_max_mb = 51200
 
 [automation]                  # per-signal-class gates for `oa auto` (cron entry point)
 enabled = true

@@ -69,6 +69,7 @@
       <h3>Package to upload <span class="small">({{ c.upload.files|length }} file{{ c.upload.files|length|pluralize }}, {{ c.upload.total_text }})</span></h3>
       {% if c.upload.files %}<ul class="files">{% for f in c.upload.files %}<li><span>{{ f.name }}</span><span class="sz">{{ f.size_text }}</span></li>{% endfor %}</ul>{% endif %}
       {% if c.upload.can_auto %}<p class="small ok">The system can upload this package itself.</p>
+      {% if c.upload.large_warning %}<div class="msg warning">{{ c.upload.large_warning }}</div>{% endif %}
       {% else %}<div class="msg warning"><strong>{% if c.upload.over_quota %}Over Zenodo's 50 GB limit — manual upload only.{% else %}Manual upload needed.{% endif %}</strong> {{ c.upload.reason }}</div>{% endif %}
     </div>
     {% endif %}

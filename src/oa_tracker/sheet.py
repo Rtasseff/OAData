@@ -212,6 +212,7 @@ def _upload_task(archive: dict, zen, env_ok: bool) -> tuple[str, str]:
             f"the API ({len(plan.files)} file(s), {plan.total / 1e9:.1f} GB); the "
             "next `oa auto` run also does it. Uploaded it by hand instead? Change "
             "task_code to zenodo_files_uploaded, done=1."
+            + (f" {plan.large_warning}" if plan.large_warning else "")
         )
     why = plan.reason or "The system cannot upload to this draft (Zenodo integration off or another environment)."
     return "zenodo_files_uploaded", (

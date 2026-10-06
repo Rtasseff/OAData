@@ -23,9 +23,12 @@ step — its own step, before the review ([sop.md](sop.md) § *Uploading
 the data to the draft*) — lists the package with decimal sizes and has
 **Upload now** (the same API upload as `oa auto`, run in the background;
 the page refreshes until it finishes) and **Uploaded by hand — record
-it** (`zenodo_files_uploaded`). *Upload now* is greyed out with the
-reason when the package must go by hand (a file over 5 GB, or over
-Zenodo's 50 GB — with the CIC biomaGUNE policy text). Email steps have **Email
+it** (`zenodo_files_uploaded`). A file over 5 GB adds a warning above
+the buttons (up to an hour or more; Zenodo sometimes drops large
+uploads; the automatic upload retries 3 times). *Upload now* is greyed
+out with the reason when the package must go by hand (a file over
+`single_put_max_mb`, or over Zenodo's 50 GB — with the CIC biomaGUNE
+policy text). Email steps have **Email
 sent** (drafts are still written to `output/email_drafts/`, sending
 stays manual; the page offers the draft as a download); the Zenodo
 review step shows the DOI/URL the system reserved and **confirm**

@@ -605,3 +605,11 @@ def test_sheet_create_draft_row_says_no_upload(test_config):
     _seed_active(test_config, status="OPEN_READY_FOR_ZENODO_DRAFT")
     note = _rows(test_config)[0]["note"]
     assert "no data is uploaded" in note and "next step" in note
+
+
+def test_sheet_large_file_uploads_with_a_warning_when_the_limit_allows(test_config, tmp_path):
+    test_config.zenodo.single_put_max_mb = 51200
+    _system_draft(test_config, tmp_path, zip_size=20_000_000_000)
+    rows = _rows(test_config)
+    assert [r["task_code"] for r in rows] == ["zenodo_upload_files"]
+    assert "up to an hour" in rows[0]["note"] and "3 times" in rows[0]["note"]

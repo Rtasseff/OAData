@@ -60,6 +60,16 @@ from oa_tracker.config import Config, ZenodoSettings
 _MAX_BYTES = 50_000_000_000
 _MAX_FILES = 100
 
+# A file this size gets the "large upload" warning (decimal, like the quota).
+LARGE_FILE_BYTES = 5_000_000_000
+# Retries of a dropped file transfer (on top of the first attempt). Each
+# retry re-sends that file from byte 0 — Zenodo has no resumable upload
+# while multipart stays disabled for API users.
+UPLOAD_RETRIES = 3
+# Socket timeout for file transfers and their commit: Zenodo may take a
+# while to answer after the last byte of a multi-GB body.
+_TRANSFER_TIMEOUT = 300
+
 OVER_QUOTA_ADVICE = (
     "CIC biomaGUNE policy is to respect the 50 GB limit: ask the data contact "
     "to bring the package under 50 GB if at all possible. Extra storage is for "
@@ -129,6 +139,8 @@ class ZenodoClient:
         data: bytes | Any = None,
         content_type: str | None = None,
         content_length: int | None = None,
+        attempts: int = 3,
+        timeout: int | None = None,
     ) -> tuple[int, dict]:
         url = path if path.startswith("http") else f"{self.base_url}{path}"
         body = data
@@ -136,7 +148,8 @@ class ZenodoClient:
             body = json.dumps(json_body).encode()
             content_type = "application/json"
         last_exc: Exception | None = None
-        for attempt in range(3):
+        last = attempts - 1
+        for attempt in range(attempts):
             # A streamed body (open file / _PartReader) is spent by a
             # failed attempt — rewind it or the retry sends zero bytes.
             if attempt and hasattr(body, "seek"):
@@ -148,7 +161,7 @@ class ZenodoClient:
             if content_length is not None:
                 req.add_header("Content-Length", str(content_length))
             try:
-                with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                with urllib.request.urlopen(req, timeout=timeout or self._timeout) as resp:
                     txt = resp.read().decode("utf-8")
                     return resp.status, (json.loads(txt) if txt.strip() else {})
             except urllib.error.HTTPError as e:
@@ -157,11 +170,11 @@ class ZenodoClient:
                     detail = e.read().decode("utf-8", errors="replace")[:500]
                 except Exception:
                     pass
-                if e.code == 429 and attempt < 2:
+                if e.code == 429 and attempt < last:
                     time.sleep(int(e.headers.get("Retry-After", "10")))
                     last_exc = e
                     continue
-                if 500 <= e.code < 600 and attempt < 2:
+                if 500 <= e.code < 600 and attempt < last:
                     time.sleep(2 ** (attempt + 1))
                     last_exc = e
                     continue
@@ -180,7 +193,7 @@ class ZenodoClient:
                     "transient", f"HTTP {e.code} from Zenodo after retries: {detail}", e.code
                 ) from e
             except OSError as e:  # DNS/conn/timeouts
-                if attempt < 2:
+                if attempt < last:
                     time.sleep(2 ** (attempt + 1))
                     last_exc = e
                     continue
@@ -621,6 +634,7 @@ class UploadPlan:
     error: str = ""                  # nothing uploadable / name collision
     too_big_for_auto: list[str] = field(default_factory=list)  # keys above auto_limit
     over_quota: bool = False         # beyond Zenodo's standard per-record quota
+    large: list[str] = field(default_factory=list)  # keys above LARGE_FILE_BYTES
 
     @property
     def total(self) -> int:
@@ -638,6 +652,21 @@ class UploadPlan:
         if self.too_big_for_auto:
             return "manual"
         return "auto"
+
+    @property
+    def large_warning(self) -> str:
+        """What to expect from a file above LARGE_FILE_BYTES ("" if none)."""
+        if not self.large:
+            return ""
+        big = ", ".join(f"{k} ({_gb(size)})" for k, _, size in self.files if k in self.large)
+        return (
+            f"Large file: {big}. An upload this size can take up to an hour or "
+            "more, and Zenodo sometimes drops large uploads part-way — a known "
+            "issue we have seen. The automatic upload retries a dropped transfer "
+            f"up to {UPLOAD_RETRIES} times (each retry starts that file again); "
+            "if all fail, the next automatic run tries again. Uploading by hand "
+            "has the same risk, without the automatic retry."
+        )
 
     @property
     def reason(self) -> str:
@@ -690,6 +719,7 @@ def plan_upload(folder: Path, settings: ZenodoSettings) -> UploadPlan:
     # scripts/probe_zenodo_multipart.py ever shows multipart working, this
     # is the rule to relax (upload_files already uses multipart when it can).
     plan.too_big_for_auto = [k for k, _, size in plan.files if size > plan.auto_limit]
+    plan.large = [k for k, _, size in plan.files if size > LARGE_FILE_BYTES]
     return plan
 
 
@@ -877,6 +907,74 @@ def _entry_matches(entry: dict | None, local_md5: str, local_size: int) -> bool:
     return entry.get("status") == "completed" and entry.get("size") == local_size
 
 
+def _verify_landed(client: ZenodoClient, record_id: str, key: str,
+                   local_md5: str, local_size: int) -> None:
+    """The draft's entry must match the local file (md5 when the server
+    reports one, else committed-status + size) — raise otherwise."""
+    committed = list_draft_files(client, record_id).get(key)
+    if not _entry_matches(committed, local_md5, local_size):
+        raise ZenodoError(
+            "transient",
+            f"upload of {key} did not land intact on the draft "
+            f"(status {(committed or {}).get('status')!r}, checksum "
+            f"{(committed or {}).get('checksum')!r}, size "
+            f"{(committed or {}).get('size')!r} vs {local_size})",
+        )
+
+
+def _single_put(
+    client: ZenodoClient,
+    record_id: str,
+    key: str,
+    path: Path,
+    local_size: int,
+    local_md5: str,
+    on_progress: Callable[[str], None] | None = None,
+) -> None:
+    """Register → PUT → commit → verify one file, redone from scratch when
+    the transfer drops (up to ``UPLOAD_RETRIES`` times).
+
+    Each retry re-registers the file: Zenodo removes a file entry whose
+    upload was cut off, and a re-PUT to the old entry is itself cut off
+    ~30 s in (verified on sandbox 2026-10-05) — retrying the bare PUT, as
+    the client's own retry would, never succeeds. A leftover entry is
+    deleted first. Only transient failures (dropped connection, 5xx,
+    429, a file that did not land intact) are retried."""
+    q = urllib.parse.quote(key)
+    files = f"/api/records/{record_id}/draft/files"
+    last: ZenodoError | None = None
+    for attempt in range(1 + UPLOAD_RETRIES):
+        try:
+            if attempt:
+                time.sleep(5 * 2 ** (attempt - 1))
+                if on_progress:
+                    on_progress(f"retry {attempt}/{UPLOAD_RETRIES} of {key} after: {last}")
+                if key in list_draft_files(client, record_id):
+                    delete_draft_file(client, record_id, key)
+            client.request("POST", files, json_body=[{"key": key}])
+            with open(path, "rb") as f:
+                client.request(
+                    "PUT", f"{files}/{q}/content", data=f,
+                    content_type="application/octet-stream",
+                    content_length=local_size, attempts=1, timeout=_TRANSFER_TIMEOUT,
+                )
+            try:
+                client.request("POST", f"{files}/{q}/commit", timeout=_TRANSFER_TIMEOUT)
+            except ZenodoError:
+                pass  # a commit refused after a slow first answer — the check decides
+            _verify_landed(client, record_id, key, local_md5, local_size)
+            return
+        except ZenodoError as e:
+            if e.kind != "transient" and e.status != 429:
+                raise
+            last = e
+    raise ZenodoError(
+        "transient",
+        f"{key}: upload dropped on all {1 + UPLOAD_RETRIES} attempts (last: {last}) — "
+        "the next automatic run tries again",
+    )
+
+
 def upload_files(
     client: ZenodoClient,
     record_id: str,
@@ -951,35 +1049,12 @@ def upload_files(
                 if not used_multipart:
                     if on_progress:
                         on_progress(f"uploading {key} ({local_size} bytes)")
-                    client.request(
-                        "POST", f"/api/records/{record_id}/draft/files",
-                        json_body=[{"key": key}],
-                    )
-                    with open(path, "rb") as f:
-                        client.request(
-                            "PUT",
-                            f"/api/records/{record_id}/draft/files/{urllib.parse.quote(key)}/content",
-                            data=f,
-                            content_type="application/octet-stream",
-                            content_length=local_size,
-                        )
-                    client.request(
-                        "POST",
-                        f"/api/records/{record_id}/draft/files/{urllib.parse.quote(key)}/commit",
-                    )
+                    _single_put(client, record_id, key, path, local_size, local_md5,
+                                on_progress)
                 else:
                     # Multipart went through — verify the assembled file
-                    # before trusting it (md5 when the server reports one,
-                    # else committed-status + size).
-                    committed = list_draft_files(client, record_id).get(key)
-                    if not _entry_matches(committed, local_md5, local_size):
-                        raise ZenodoError(
-                            "transient",
-                            f"multipart upload of {key} committed but the draft "
-                            f"entry does not match the local file "
-                            f"(checksum {(committed or {}).get('checksum')!r}, "
-                            f"size {(committed or {}).get('size')!r} vs {local_size})",
-                        )
+                    # before trusting it.
+                    _verify_landed(client, record_id, key, local_md5, local_size)
                 result.uploaded.append(key)
             manifest_entries.append({
                 "key": key, "path": str(path), "md5": local_md5,

@@ -550,3 +550,19 @@ def test_sync_redirect_stays_on_this_site(client, test_config, jobs):
     test_config.automation.enabled = False
     r = client.post("/sync/", {"next": "//evil.example.org/"})
     assert r["Location"] == "/"
+
+
+def test_large_file_upload_now_stays_available_with_a_warning(client, test_config,
+                                                              tmp_path, zen):
+    test_config.zenodo.single_put_max_mb = 51200
+    _system_draft(test_config, tmp_path, zip_size=20_000_000_000)
+    page = client.get("/paper/100/").content.decode()
+    card = page.split('id="zenodo_upload_files"')[1].split("</form>")[0]
+    assert 'value="now">' in card                       # enabled
+    assert "Large file: data.zip (20.0 GB)" in card
+    assert "up to an hour" in card and "3 times" in card
+
+
+def test_small_package_has_no_large_file_warning(client, test_config, tmp_path, zen):
+    _system_draft(test_config, tmp_path)
+    assert "Large file:" not in client.get("/paper/100/").content.decode()

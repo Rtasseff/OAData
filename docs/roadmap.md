@@ -1641,3 +1641,17 @@ Zenodo upload as its own step + web jobs (2026-10-05, branch
 - 3243's package is 70.4 GB: the data contact has been asked to reduce
   it; its empty production draft 23159530 (DOI reserved) waits for the
   upload.
+- **5–50 GB uploads now automatic (same day, operator decision).**
+  Multipart re-probed on sandbox: still disabled (part PUT 403). Instead
+  each file is one transfer with up to 3 retries (`_single_put`), and
+  `single_put_max_mb` is raised to 51200 in `config.toml`; the web page
+  and the sheet warn on files over 5 GB (can take an hour+, Zenodo
+  sometimes drops large uploads, retried automatically). **Found while
+  testing:** Zenodo *removes* a file entry whose upload is cut off, and a
+  re-PUT to that entry is cut off ~30 s in — so the July bare-PUT retry
+  could never recover a dropped large upload (first 6.5 GB sandbox run:
+  forced drop + 3 failed retries). Fix: every retry re-registers the
+  file (deleting any leftover entry). Sandbox E2E after the fix (draft
+  614298 kept): 6.5 GB random file, forced drop at 1 GB → one retry
+  completed it, 10.3 min total (12.1 MB/s incl. the wasted 1 GB), md5
+  verified, re-run 8 s with nothing re-sent.
