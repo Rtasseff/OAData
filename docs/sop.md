@@ -169,6 +169,24 @@ name is recognised by checksum by the next run and not re-sent (record
 it anyway with *Uploaded by hand*); a hand upload still in progress when
 a run starts is treated as an incomplete file and restarted by the run.
 
+**Known failure mode — an incomplete package recorded as uploaded
+(accepted 2026-10-06).** The package is checked once, at QA. If the data
+contact removes or replaces files after QA but before the upload (first
+seen on 3243: the 70 GB zip removed to make a smaller one), the next
+automatic run uploads whatever is in the folder — e.g. only README.txt
+and the manuscript — records the upload as done, and the paper moves on
+to *review and publish* without its zip. The same can happen if a new
+zip is still syncing to this machine when a run starts. Nothing checks
+the package again. What catches it is the review step: publishing is
+never automatic, and the review page lists the folder contents next to
+the link to the draft — compare them with the draft's files. To fix:
+`oa action <pub_id> zenodo_upload_files` sends the missing or changed
+files to the draft (files already there are skipped by checksum; same
+retries), or upload them by hand on Zenodo; then review and publish.
+Left this way on purpose (a handful of operators, a rare case). If
+publishing were ever automated, a package re-check before publish would
+be needed.
+
 **Uploading by hand:** get the package files (.zip, README.txt,
 manuscript) from the SharePoint folder — download them, or use a
 OneDrive-synced copy — open the draft on Zenodo, drag the files onto it
