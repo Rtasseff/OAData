@@ -121,7 +121,11 @@ applying `sharepoint_proposals.tsv`.
   the `oa auto` push, scoped to one row, using the cached headless token.
   The page shows the result on reload ("SharePoint List: row updated" or
   a warning); a failed push never undoes the recorded action and the next
-  `oa auto` / `oa sharepoint sync` reconciles anyway. The *pull* side
+  `oa auto` / `oa sharepoint sync` reconciles anyway. The warning stays
+  until the next push for that paper (the result is kept in memory, not
+  re-checked): after fixing the cause — typically an expired token, renewed
+  by running `oa sharepoint sync` once in a terminal — press *Try again*
+  on the warning. The *pull* side
   (proposals data contacts make on the List) stays with `oa auto` /
   `sync`. Turn the push off with `sharepoint_push = false` under `[web]`.
 * **Never writes to the SharePoint sync.** The QA view lists the

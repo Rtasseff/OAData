@@ -11,7 +11,8 @@
 </div>
 
 {% if upload_job %}<div class="msg {% if upload_job.state == 'ok' %}success{% elif upload_job.state == 'running' %}info{% else %}warning{% endif %}">{{ upload_job.text }} <span class="small">({% if upload_job.state == 'running' %}started {{ upload_job.when }} by {{ upload_job.by }} — this page refreshes by itself{% else %}{{ upload_job.when }}{% endif %})</span></div>{% endif %}
-{% if last_push %}<div class="msg {% if last_push.ok %}success{% elif last_push.ok is None %}info{% else %}warning{% endif %}">{{ last_push.text }} <span class="small">({{ last_push.when }}{% if last_push.ok is None %} — reload to see the result{% endif %})</span></div>{% endif %}
+{% if last_push %}<div class="msg {% if last_push.ok %}success{% elif last_push.ok is None %}info{% else %}warning{% endif %}">{{ last_push.text }} <span class="small">({{ last_push.when }}{% if last_push.ok is None %} — reload to see the result{% endif %})</span>{% if last_push.ok is False %}
+  <form method="post" action="{% url 'paper_action' a.publication_id %}" class="msgform">{% csrf_token %}<input type="hidden" name="form" value="sp_push"><button type="submit" class="btn secondary">Try again</button></form>{% endif %}</div>{% endif %}
 <div class="cols">
 <div>
   {% for c in cards %}

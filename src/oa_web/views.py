@@ -179,6 +179,8 @@ def paper_action(request, pub_id: str):
             name=p.get("name", ""), email=p.get("email", ""),
             notify=p.get("notify") == "1",
         )
+    elif p.get("form") == "sp_push":
+        out = tracker.retry_push(config, pub_id)
     elif p.get("form") == "exemption":
         out = tracker.apply_exemption(
             config, request.user.get_username(), pub_id,

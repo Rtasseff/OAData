@@ -218,10 +218,26 @@ def push_to_sharepoint(config: Config, pub_id: str) -> None:
             log.warning("SharePoint push for %s failed: %s", pub_id, e)
             LAST_PUSH[pub_id] = {
                 "when": _now(), "ok": False,
-                "text": f"SharePoint List not updated ({e}) — the next automatic run will do it.",
+                "text": f"SharePoint List not updated ({e}). Fix that and press "
+                        "“Try again”, or leave it — the next automatic run will do it.",
             }
 
     threading.Thread(target=run, name=f"sp-push-{pub_id}", daemon=True).start()
+
+
+def retry_push(config: Config, pub_id: str) -> "Outcome":
+    """"Try again" on a failed List update (e.g. after re-authenticating
+    with `oa sharepoint sync`): the same background push as after a button."""
+    out = Outcome()
+    if not (settings.OA_SHAREPOINT_PUSH and config.sharepoint.enabled):
+        out.errors.append("Updating the SharePoint List from this site is turned off.")
+        return out
+    if (LAST_PUSH.get(pub_id) or {}).get("ok", False) is None:
+        out.errors.append("The SharePoint List update is already running.")
+        return out
+    push_to_sharepoint(config, pub_id)
+    out.ok = True
+    return out
 
 
 def _now() -> str:

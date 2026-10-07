@@ -301,6 +301,17 @@ def test_button_press_pushes_that_row_to_sharepoint(test_config, monkeypatch):
     assert "token expired" in tracker.LAST_PUSH["100"]["text"]
     assert _status(test_config, "100") == "OPEN_ZENODO_DRAFT_CREATED"
 
+    # "Try again" (after re-authenticating) re-runs the push and clears the warning.
+    monkeypatch.setattr(auto, "push_one", lambda cfg, pub: pushed.append(pub) or "row updated")
+    assert tracker.retry_push(test_config, "100").ok
+    for t in threads:
+        t.join(5)
+    assert pushed == ["100", "100"]
+    assert tracker.LAST_PUSH["100"]["ok"] is True
+
+    monkeypatch.setattr(dj, "OA_SHAREPOINT_PUSH", False)
+    assert not tracker.retry_push(test_config, "100").ok
+
 
 # ── Exemptions (same list and routing as the Tracker List) ────────────
 
