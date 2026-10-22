@@ -169,6 +169,30 @@ def test_pages_require_login(test_config, monkeypatch):
     assert r.status_code == 302 and r["Location"].startswith("/login/")
 
 
+def test_health_needs_no_login(test_config, monkeypatch, tmp_path):
+    monkeypatch.setattr(tracker, "get_config", lambda: test_config)
+    for url in ("/health", "/health/"):
+        r = Client(HTTP_HOST="10.10.2.195:4082").get(url)
+        assert r.status_code == 200 and r.content == b"ok\n"
+    test_config.database = tmp_path / "missing.sqlite"
+    r = Client().get("/health")
+    assert r.status_code == 503
+    assert not test_config.database.exists()   # the probe never creates it
+
+
+def test_login_through_the_port_forward(web_user):
+    """The Windows forwarder relays raw TCP: the browser's Host/Origin is the
+    LAN address, and the CSRF origin check must accept it without config."""
+    lan = "10.10.2.195:4082"
+    c = Client(enforce_csrf_checks=True, HTTP_HOST=lan)
+    c.get("/login/")
+    r = c.post("/login/", {
+        "username": "alice", "password": "pw-for-tests",
+        "csrfmiddlewaretoken": c.cookies["csrftoken"].value,
+    }, HTTP_ORIGIN=f"http://{lan}", HTTP_REFERER=f"http://{lan}/login/")
+    assert r.status_code == 302 and r["Location"] == "/"
+
+
 def test_pages_render(client, test_config):
     _insert(test_config.database, "100", OPEN_ACTIVE, pub_title="A paper about things")
     for url in ("/", "/?show=todo", "/?show=all&q=things", "/actions/", "/report/",

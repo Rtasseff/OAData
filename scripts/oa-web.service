@@ -1,0 +1,27 @@
+# systemd *user* unit that keeps the web UI (`oa web`) running inside WSL:
+# starts with WSL, restarts if it dies. The WorkstationOps op
+# oadata-web-forward relays Windows 0.0.0.0:4082 (http://10.10.2.195:4082/)
+# to port 4082 here; it probes /health. See docs/web_ui.md, "Always-on service".
+#
+# Install or update (from the project root):
+#   mkdir -p ~/.config/systemd/user && cp scripts/oa-web.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now oa-web
+#   sudo loginctl enable-linger "$USER"   # once: start at WSL boot, without a login
+#
+# After code changes: systemctl --user restart oa-web
+# (it stops a running "Upload now" / automatic update — check the site first).
+# Logs: journalctl --user -u oa-web
+
+[Unit]
+Description=OA Archive Tracker web UI (oa web on port 4082)
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=%h/projects/OAData
+ExecStart=%h/projects/OAData/.venv/bin/oa web --host 0.0.0.0 --port 4082
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

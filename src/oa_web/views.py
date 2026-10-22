@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import sqlite3
+from contextlib import closing
+
 import markdown
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.safestring import mark_safe
+from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
 from oa_tracker.report import build_report
@@ -64,6 +68,20 @@ def action_list(request):
     return render(request, "oa_web/actions.html", {
         "rows": rows, "nav": "actions", **_sync_context(config),
     })
+
+
+@never_cache
+def health(request):
+    """Liveness probe for the Windows port forwarder (no login): 200 "ok"
+    when the tracker database answers, 503 otherwise."""
+    try:
+        uri = f"{tracker.get_config().database.resolve().as_uri()}?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True)) as conn:
+            conn.execute("SELECT 1 FROM archives LIMIT 1")
+    except Exception:
+        return HttpResponse("tracker database unavailable\n", status=503,
+                            content_type="text/plain")
+    return HttpResponse("ok\n", content_type="text/plain")
 
 
 def _sync_context(config) -> dict:

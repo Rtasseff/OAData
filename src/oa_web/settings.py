@@ -122,3 +122,14 @@ WHITENOISE_USE_FINDERS = True
 WHITENOISE_AUTOREFRESH = True
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Warnings and errors (e.g. the traceback of a page that crashed) go to
+# stderr — the journal when run as the oa-web service
+# (`journalctl --user -u oa-web`). Django alone drops them when DEBUG is off.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"plain": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"}},
+    "handlers": {"stderr": {"class": "logging.StreamHandler", "formatter": "plain"}},
+    "root": {"handlers": ["stderr"], "level": "WARNING"},
+}

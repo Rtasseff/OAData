@@ -1655,3 +1655,18 @@ Zenodo upload as its own step + web jobs (2026-10-05, branch
   614298 kept): 6.5 GB random file, forced drop at 1 GB → one retry
   completed it, 10.3 min total (12.1 MB/s incl. the wasted 1 GB), md5
   verified, re-run 8 s with nothing re-sent.
+
+Web UI shared on the internal network (2026-10-22):
+
+- `oa web` now runs as the systemd user service `oa-web` on WSL port
+  4082 (`scripts/oa-web.service`; starts with WSL, restarts on failure),
+  replacing the hand-started server on 8080; linger enabled on this
+  workstation (`sudo loginctl enable-linger rtasseff`, done once — redo
+  only on a rebuilt WSL). The WorkstationOps op
+  `oadata-web-forward` publishes it as http://10.10.2.195:4082/, the same
+  pattern as the OMERO (4080) and XNAT (4081) trials. Every login gets
+  full tracker access, attributed per user. Details:
+  [web_ui.md](web_ui.md#always-on-service-the-shared-site).
+- New `/health` (no login; 200 while the tracker DB answers, else 503)
+  for the forwarder's probe; Django warnings/tracebacks now reach the
+  service journal (they were dropped with DEBUG off).

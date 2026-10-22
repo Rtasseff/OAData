@@ -148,8 +148,10 @@ Run from the project root (it reads `./config.toml`, like the CLI), or
 point elsewhere with `oa web --config PATH` / `OA_CONFIG=PATH`.
 
 **More people:** sign in at `/admin/` as the superuser → Users → Add.
-Ordinary users need no staff/superuser flag. `python -m oa_web
-changepassword <user>` resets a password.
+Ordinary users need no staff/superuser flag: every login can read and
+do everything on the tracker pages (each action is recorded as
+`web:<user>`); the superuser flag only adds `/admin/` (managing logins).
+`python -m oa_web changepassword <user>` resets a password.
 
 **Other machines:** `oa web --host 0.0.0.0`. Any host name/address is
 accepted by default (internal network); the optional config section can
@@ -166,6 +168,36 @@ restrict that and tune the rest:
 It is plain HTTP — fine on the internal network, not for the internet.
 The serving machine needs what the CLI needs: the OneDrive sync,
 `~/.zenodorc`, and DB/VPN access for Zenodo draft creation.
+
+### Always-on service (the shared site)
+
+The copy everyone uses runs as a systemd *user* service inside WSL,
+`oa-web` (unit file `scripts/oa-web.service`, installed to
+`~/.config/systemd/user/`): `oa web --host 0.0.0.0 --port 4082`, started
+with WSL and restarted 5 s after any crash. On the Windows side the
+WorkstationOps op `oadata-web-forward` relays `0.0.0.0:4082` to it, so
+the internal network uses **http://10.10.2.195:4082/** (on the
+workstation itself `localhost:4082` works too). It is the same process
+as a hand-started `oa web` — same checkout, venv, `config.toml`,
+`~/.zenodorc` and SharePoint token cache — so nothing is duplicated.
+
+```bash
+systemctl --user status oa-web          # running? since when?
+systemctl --user restart oa-web         # after a code change (not mid-upload: it stops web jobs)
+journalctl --user -u oa-web -f          # its log: warnings and page tracebacks
+```
+
+Install or reinstall: the commands at the top of the unit file. `sudo
+loginctl enable-linger $USER` (once) starts it at WSL boot even before
+anyone logs in; without it, it starts with the first WSL session (the
+WorkstationOps keepalives hold one).
+
+**Health check:** `GET /health` (no login) answers `200 ok` while the
+tracker database is readable, `503` otherwise — the forwarder probes it.
+Nothing in the site assumes a host or port: redirects are relative
+(`/` → `/login/?next=/`), any Host header is accepted, and the CSRF
+check compares the browser's Origin with the Host the forwarder passes
+through, so a new address needs no settings change.
 
 **WSL note:** Windows reaches a server inside WSL through `localhost`
 port forwarding — but only if nothing on the Windows side already owns
