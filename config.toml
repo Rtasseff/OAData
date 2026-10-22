@@ -19,7 +19,7 @@ client_id = "fbd87ebd-fd7e-4e4c-967a-9932bde32da1"   # OA Archive Tracker Entra 
 site = "biomagune.sharepoint.com:/sites/PublicationsData"
 list_name = "OA Archive Tracker"
 # Protocol/SOP document — shown in the List's SOP column AND linked in email drafts.
-sop_url = "https://biomagune.sharepoint.com/:w:/s/ResearchDataManagement/IQBZr-ga4BCNQpXNesqWrKkIAbQ64o7l1RYH3iBm0fEgd-0?e=5IhaD6"
+sop_url = "https://intranet.cicbiomagune.es/content/32-open-access-archiving-publication-data"
 # The List view users land on from email links (their own data-contact papers).
 tracker_url = "https://biomagune.sharepoint.com/sites/PublicationsData/Lists/OA%20Archive%20Tracker/My%20datacontact%20papers.aspx"
 # Links the Folder column to each publication's SharePoint folder ({pub_id} is filled per row).

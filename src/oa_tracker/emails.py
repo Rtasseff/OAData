@@ -53,10 +53,7 @@ _CHEAT_STATUSES = {
 # Zenodo/DB steps, not the author's, so reminders stop.
 _REMINDER_STATUSES = {st.OPEN_INACTIVE, st.OPEN_ACTIVE}
 
-_PROTOCOL_URL = (
-    "https://biomagune.sharepoint.com/:w:/s/ResearchDataManagement/"
-    "IQBZr-ga4BCNQpXNesqWrKkIAbQ64o7l1RYH3iBm0fEgd-0?e=5IhaD6"
-)
+_PROTOCOL_URL = "https://intranet.cicbiomagune.es/content/32-open-access-archiving-publication-data"
 
 _SHAREPOINT_FOLDER_BASE = (
     "https://biomagune.sharepoint.com/sites/PublicationsData/"
