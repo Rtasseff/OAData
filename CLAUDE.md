@@ -37,6 +37,8 @@ src/oa_tracker/
     auto.py          — unattended automation engine behind `oa auto` (cron entry point)
 src/oa_web/          — Django web UI (`oa web`; optional extras `.[web]`) — docs/web_ui.md
     guide.py         — per-task-code operator wording + buttons (follows the SOP)
+    access.py        — login levels: plain = read only, Staff = read/write,
+                       Superuser = + manage logins; @write_required on POST views
     tracker.py       — service layer: reads via sheet.build_rows/report.build_report,
                        writes via actions.apply_single with source="web:<user>"
     views.py, urls.py, settings.py, templates/, static/

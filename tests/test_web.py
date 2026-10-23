@@ -152,7 +152,7 @@ def test_draft_download_is_confined_to_the_paper(test_config):
 def web_user():
     call_command("migrate", interactive=False, verbosity=0)
     from django.contrib.auth import get_user_model
-    return get_user_model().objects.create_user("alice", password="pw-for-tests")
+    return get_user_model().objects.create_user("alice", password="pw-for-tests", is_staff=True)
 
 
 @pytest.fixture
@@ -201,6 +201,61 @@ def test_pages_render(client, test_config):
         assert r.status_code == 200, url
     assert b"A paper about things" in client.get("/").content
     assert client.get("/paper/nope/").status_code == 404
+
+
+def _login(username, **flags):
+    from django.contrib.auth import get_user_model
+    user, _ = get_user_model().objects.get_or_create(username=username, defaults=flags)
+    c = Client(HTTP_HOST="localhost")
+    c.force_login(user)
+    return c
+
+
+def test_read_only_login_sees_everything_but_cannot_act(test_config, monkeypatch):
+    """No staff/superuser flag = read only: pages render without buttons,
+    and a write that gets through anyway is refused, not recorded."""
+    monkeypatch.setattr(tracker, "get_config", lambda: test_config)
+    monkeypatch.setattr(tracker, "start_sync", lambda *a: pytest.fail("sync ran"))
+    test_config.automation.enabled = True
+    _insert(test_config.database, "100", OPEN_ACTIVE)
+    _insert(test_config.database, "101", OPEN_INACTIVE)
+    ro = _login("viewer")
+    for url in ("/", "/actions/", "/report/", "/history/", "/paper/100/", "/paper/101/"):
+        page = ro.get(url).content.decode()
+        assert "read-only" in page, url
+        assert 'method="post" action="/paper/' not in page, url
+        assert "Run the automatic update now" not in page, url
+    assert "Apply exemption" not in ro.get("/").content.decode()
+    assert "the buttons for this step are hidden" in ro.get("/paper/100/").content.decode()
+
+    r = ro.post("/paper/100/do/", {
+        "task_code": "qa_pass", "choice": "pass", "expected_status": OPEN_ACTIVE,
+    })
+    assert r.status_code == 302 and r["Location"] == "/paper/100/"
+    assert _status(test_config, "100") == OPEN_ACTIVE
+    assert tracker.events_for(test_config, "100") == []
+    assert "Your login is read-only" in ro.get("/paper/100/").content.decode()
+    r = ro.post("/paper/101/do/", {
+        "form": "exemption", "exemption": "no_data", "expected_status": OPEN_INACTIVE,
+    })
+    assert _status(test_config, "101") == OPEN_INACTIVE
+    r = ro.post("/sync/", {"next": "/actions/"})
+    assert r.status_code == 302 and r["Location"] == "/"
+
+
+def test_staff_acts_superuser_also_manages_logins(test_config, monkeypatch):
+    monkeypatch.setattr(tracker, "get_config", lambda: test_config)
+    test_config.automation.enabled = True
+    _insert(test_config.database, "100", OPEN_ACTIVE)
+    staff = _login("editor", is_staff=True)
+    page = staff.get("/paper/100/").content.decode()
+    assert 'name="choice" value="pass"' in page and "read-only" not in page
+    assert "Run the automatic update now" in staff.get("/").content.decode()
+    assert "Logins" not in page
+    assert staff.get("/admin/auth/user/").status_code == 403
+    boss = _login("boss", is_staff=True, is_superuser=True)
+    assert ">Logins</a>" in boss.get("/paper/100/").content.decode()
+    assert boss.get("/admin/auth/user/").status_code == 200
 
 
 def test_button_returns_to_the_paper_showing_the_next_step(client, test_config):

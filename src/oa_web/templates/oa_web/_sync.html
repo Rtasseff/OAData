@@ -5,7 +5,7 @@
     {% elif last_update %}<span class="small">Last automatic update: {{ last_update }}</span>
     {% endif %}
   </div>
-  {% if automation_enabled %}
+  {% if automation_enabled and can_act %}
   <form method="post" action="{% url 'sync' %}">{% csrf_token %}
     <input type="hidden" name="next" value="{{ request.get_full_path }}">
     <button class="btn secondary" type="submit"{% if sync.state == "running" %} disabled{% endif %} title="Scan the folders, sync with the SharePoint List and apply the automatic steps — the same as the scheduled run">Run the automatic update now</button>

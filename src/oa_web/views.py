@@ -16,6 +16,7 @@ from django.views.decorators.http import require_POST
 from oa_tracker.report import build_report
 
 from oa_web import guide, tracker
+from oa_web.access import write_required
 
 
 @login_required
@@ -97,6 +98,7 @@ def _sync_context(config) -> dict:
 
 @login_required
 @require_POST
+@write_required
 def sync(request):
     out = tracker.start_sync(tracker.get_config(), request.user.get_username())
     for m in out.messages:
@@ -188,6 +190,7 @@ def paper(request, pub_id: str):
 
 @login_required
 @require_POST
+@write_required
 def paper_action(request, pub_id: str):
     config = tracker.get_config()
     p = request.POST

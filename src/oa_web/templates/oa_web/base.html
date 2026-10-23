@@ -18,7 +18,8 @@
     <a href="{% url 'history' %}" class="{% if nav == 'history' %}on{% endif %}">History</a>
   </nav>
   <div class="user">
-    <span>{{ user.get_username }}</span>
+    <span>{{ user.get_username }}{% if not can_act %} <span class="ro" title="This login can view everything but not record actions">read-only</span>{% endif %}</span>
+    {% if user.is_superuser %}<a href="{% url 'admin:auth_user_changelist' %}">Logins</a>{% endif %}
     <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit">Sign out</button></form>
   </div>
   {% endif %}

@@ -1670,3 +1670,6 @@ Web UI shared on the internal network (2026-10-22):
 - New `/health` (no login; 200 while the tracker DB answers, else 503)
   for the forwarder's probe; Django warnings/tracebacks now reach the
   service journal (they were dropped with DEBUG off).
+- Login levels (2026-10-23, operator decision): no flag = read only
+  (buttons hidden, writes refused), Staff = read and write, Superuser =
+  also manages logins (*Logins* link in the header). `oa_web/access.py`.

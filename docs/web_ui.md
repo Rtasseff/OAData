@@ -147,11 +147,19 @@ oa web                                  # http://127.0.0.1:8000/
 Run from the project root (it reads `./config.toml`, like the CLI), or
 point elsewhere with `oa web --config PATH` / `OA_CONFIG=PATH`.
 
-**More people:** sign in at `/admin/` as the superuser → Users → Add.
-Ordinary users need no staff/superuser flag: every login can read and
-do everything on the tracker pages (each action is recorded as
-`web:<user>`); the superuser flag only adds `/admin/` (managing logins).
-`python -m oa_web changepassword <user>` resets a password.
+**More people:** sign in as a superuser → *Logins* (top right; or
+`/admin/`) → Add user, then pick the level with the two flags under
+*Permissions* (`src/oa_web/access.py`):
+
+| Flags | Level | Can |
+|---|---|---|
+| neither | read only | see every page and download email drafts; no buttons (a write that gets through anyway is refused) |
+| **Staff status** | read and write | everything on the tracker pages; each action is recorded as `web:<user>` |
+| **Superuser status** (+ Staff) | read, write, manage logins | the above plus *Logins* / `/admin/` |
+
+Read-only logins see a *read-only* tag by their name. Ordinary users
+cannot change their own password: a superuser resets it on the login's
+admin page, or `python -m oa_web changepassword <user>`.
 
 **Other machines:** `oa web --host 0.0.0.0`. Any host name/address is
 accepted by default (internal network); the optional config section can

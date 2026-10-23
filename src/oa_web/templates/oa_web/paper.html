@@ -11,7 +11,7 @@
 </div>
 
 {% if upload_job %}<div class="msg {% if upload_job.state == 'ok' %}success{% elif upload_job.state == 'running' %}info{% else %}warning{% endif %}">{{ upload_job.text }} <span class="small">({% if upload_job.state == 'running' %}started {{ upload_job.when }} by {{ upload_job.by }} — this page refreshes by itself{% else %}{{ upload_job.when }}{% endif %})</span></div>{% endif %}
-{% if last_push %}<div class="msg {% if last_push.ok %}success{% elif last_push.ok is None %}info{% else %}warning{% endif %}">{{ last_push.text }} <span class="small">({{ last_push.when }}{% if last_push.ok is None %} — reload to see the result{% endif %})</span>{% if last_push.ok is False %}
+{% if last_push %}<div class="msg {% if last_push.ok %}success{% elif last_push.ok is None %}info{% else %}warning{% endif %}">{{ last_push.text }} <span class="small">({{ last_push.when }}{% if last_push.ok is None %} — reload to see the result{% endif %})</span>{% if last_push.ok is False and can_act %}
   <form method="post" action="{% url 'paper_action' a.publication_id %}" class="msgform">{% csrf_token %}<input type="hidden" name="form" value="sp_push"><button type="submit" class="btn secondary">Try again</button></form>{% endif %}</div>{% endif %}
 <div class="cols">
 <div>
@@ -75,6 +75,9 @@
     </div>
     {% endif %}
 
+    {% if not can_act %}
+    {% if c.main or c.pid_buttons %}<div class="notebox">Read-only login: the buttons for this step are hidden.</div>{% endif %}
+    {% else %}
     {% if c.main %}
     <form method="post" action="{% url 'paper_action' a.publication_id %}">{% csrf_token %}
       <input type="hidden" name="task_code" value="{{ c.row.task_code }}">
@@ -103,6 +106,7 @@
     </form>
     {% if c.main %}</div></details>{% endif %}
     {% endfor %}
+    {% endif %}
     {% else %}
     <h2>{{ c.row.task_text }}</h2>
     <div class="notebox">This kind of action is handled from the command line ({{ c.row.task_code }}).</div>
@@ -115,7 +119,7 @@
   </div>
   {% endfor %}
 
-  {% if exemptions %}
+  {% if exemptions and can_act %}
   <div class="card" id="exemption">
     <details class="exempt"{% if not cards %} open{% endif %}>
       <summary>Apply an exemption</summary>
@@ -177,7 +181,7 @@
   <div class="card"><h2>Notes</h2><pre class="notes">{{ a.notes }}</pre></div>
   {% endif %}
 
-  {% if a.is_open %}
+  {% if a.is_open and can_act %}
   <div class="card">
     <h2>Other actions</h2>
     <details class="other">
