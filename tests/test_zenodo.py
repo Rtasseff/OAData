@@ -366,6 +366,19 @@ def test_discover_files_package_mode(tmp_path):
     assert [p.name for p in skipped] == ["raw_measurements.csv"]
 
 
+def test_plan_upload_includes_ticked_files_outside_the_package(tmp_path):
+    (tmp_path / "data.zip").write_bytes(b"z")
+    (tmp_path / "DATASET DESCRIPTION.txt").write_text("readme by another name")
+    (tmp_path / "raw.csv").write_text("x")
+    settings = ZenodoSettings()
+    plan = zenodo.plan_upload(tmp_path, settings)
+    assert [k for k, _, _ in plan.files] == ["data.zip"]
+    assert plan.skipped == ["DATASET DESCRIPTION.txt", "raw.csv"] and plan.included == []
+    plan = zenodo.plan_upload(tmp_path, settings, include=["DATASET DESCRIPTION.txt", "gone.txt"])
+    assert [k for k, _, _ in plan.files] == ["DATASET DESCRIPTION.txt", "data.zip"]
+    assert plan.included == ["DATASET DESCRIPTION.txt"] and plan.skipped == ["raw.csv"]
+
+
 def test_discover_files_manuscript_variants(tmp_path):
     (tmp_path / "data.zip").write_bytes(b"z")
     (tmp_path / "manuscript.docx").write_bytes(b"d")

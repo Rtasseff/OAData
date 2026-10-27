@@ -27,6 +27,22 @@
 <main class="inner">
   {% for m in messages %}<div class="msg {{ m.tags }}">{{ m }}</div>{% endfor %}
   {% block content %}{% endblock %}
+  <p class="small didreset" id="did-reset" hidden><a href="#">Ask “Have you done this?” again for every step</a></p>
 </main>
+{% if can_act %}
+<dialog id="did-dialog" class="did-dialog">
+  <form method="dialog">
+    <h3>Done already?</h3>
+    <p class="small">This button only <strong>records</strong> that it was done — the system does not do it for you.</p>
+    <p class="did-q" id="did-text"></p>
+    <label class="did-skip"><input type="checkbox" id="did-skip"> Don’t ask again for this step on this computer</label>
+    <div class="btns">
+      <button class="btn did" value="yes">Yes — record it</button>
+      <button class="btn secondary" value="no">Not yet</button>
+    </div>
+  </form>
+</dialog>
+<script src="{% static 'oa_web/did.js' %}" defer></script>
+{% endif %}
 </body>
 </html>

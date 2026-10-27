@@ -546,6 +546,14 @@ def _advance(config: Config, result: AutoRunResult) -> None:
                             f"Draft: {url}. Then record it: “Uploaded by hand” on the "
                             "web page, or done=1 on the sheet's zenodo_files_uploaded row"
                         )
+                    elif plan.skipped:
+                        result.awaiting_operator.append(
+                            f"{pub_id}: upload HELD — the folder also has files outside "
+                            f"the package ({', '.join(plan.skipped)}). On the web page, "
+                            "tick the ones that belong in the deposit and press “Upload "
+                            "now” (or upload without them: done=1 on the sheet's "
+                            f"zenodo_upload_files row). Draft: {url}"
+                        )
                     elif not gates.auto_zenodo_upload:
                         result.awaiting_operator.append(
                             f"{pub_id}: the package is not on the Zenodo draft yet ({url}) — "
@@ -589,12 +597,16 @@ def _advance(config: Config, result: AutoRunResult) -> None:
 def _auto_upload(config: Config, archive: dict, result: AutoRunResult, retry: bool) -> None:
     """Upload a draft's package when the system can (``zenodo.plan_upload``
     says ``auto``). Packages that must be uploaded by hand are left alone —
-    the worklist says so every run, without an error or an API call."""
+    the worklist says so every run, without an error or an API call. So is
+    a folder that also holds files outside the package (e.g. a README under
+    another name, 3096): whether they belong in the deposit is a person's
+    call — ticked on the web upload card, or uploaded by hand."""
     from oa_tracker import zenodo as z
     from oa_tracker.actions import apply_single
 
     pub_id = archive["publication_id"]
-    if z.plan_upload(Path(archive["folder_path"]), config.zenodo).mode != "auto":
+    plan = z.plan_upload(Path(archive["folder_path"]), config.zenodo)
+    if plan.mode != "auto" or plan.skipped:
         return
     r, _, _ = apply_single(config, pub_id, "zenodo_upload_files", done=1)
     if r.applied and not r.errors:

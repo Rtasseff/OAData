@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from oa_tracker import db, status as st
 from oa_tracker.config import Config
@@ -326,7 +326,7 @@ def _apply_row_inner(
     if task_code in ("zenodo_create_draft", "zenodo_upload_files", "zenodo_publish"):
         return _apply_zenodo_row(
             conn, archive, task_code, new_status, note, now, config,
-            source, result, row_label,
+            source, result, row_label, include=row.get("include") or (),
         )
 
     # Zenodo validate/confirm on a SYSTEM-created draft: because the system
@@ -703,8 +703,10 @@ def _apply_zenodo_row(
     source: str,
     result: ApplyResult,
     row_label: str,
+    include: Sequence[str] = (),
 ) -> tuple[bool, str | None, str | None]:
     """Perform the Zenodo API side effect for an apply row, then record it.
+    ``include``: files outside the package to upload too (zenodo.plan_upload).
 
     The status is written only after the API call succeeds, so a failed
     call leaves the archive exactly where it was (safe to re-apply).
@@ -788,7 +790,8 @@ def _apply_zenodo_row(
 
         if task_code == "zenodo_upload_files":
             from pathlib import Path as _P
-            res = zenodo.upload_files(client, str(code), _P(archive["folder_path"]), zset)
+            res = zenodo.upload_files(client, str(code), _P(archive["folder_path"]), zset,
+                                      include=include)
             if not res.ok:
                 result.errors.append(f"{row_label} ({pub_id}): upload failed — {res.summary}")
                 return (False, old_status, None)
@@ -1078,6 +1081,7 @@ def apply_single(
     url: str = "",
     note: str = "",
     source: str = "cli",
+    include: Sequence[str] = (),
 ) -> tuple[ApplyResult, str | None, str | None]:
     """Apply a single action to one archive, as invoked from the CLI.
 
@@ -1085,6 +1089,8 @@ def apply_single(
     parsing / history append / sheet rewriting. Returns the accumulated
     ApplyResult plus the (old_status, new_status) tuple so the caller
     can report the transition. ``source`` is recorded on the audit event.
+    ``include`` (zenodo_upload_files only): files outside the package the
+    operator chose to upload with it — see zenodo.plan_upload.
     """
     result = ApplyResult()
     now = _now()
@@ -1095,6 +1101,7 @@ def apply_single(
         "pid": pid,
         "url": url,
         "note": note,
+        "include": list(include),
     }
     with db.get_connection(config.database) as conn:
         _, old_status, new_status = _apply_row(

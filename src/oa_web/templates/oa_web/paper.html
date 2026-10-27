@@ -12,7 +12,7 @@
 
 {% if upload_job %}<div class="msg {% if upload_job.state == 'ok' %}success{% elif upload_job.state == 'running' %}info{% else %}warning{% endif %}">{{ upload_job.text }} <span class="small">({% if upload_job.state == 'running' %}started {{ upload_job.when }} by {{ upload_job.by }} — this page refreshes by itself{% else %}{{ upload_job.when }}{% endif %})</span></div>{% endif %}
 {% if last_push %}<div class="msg {% if last_push.ok %}success{% elif last_push.ok is None %}info{% else %}warning{% endif %}">{{ last_push.text }} <span class="small">({{ last_push.when }}{% if last_push.ok is None %} — reload to see the result{% endif %})</span>{% if last_push.ok is False and can_act %}
-  <form method="post" action="{% url 'paper_action' a.publication_id %}" class="msgform">{% csrf_token %}<input type="hidden" name="form" value="sp_push"><button type="submit" class="btn secondary">Try again</button></form>{% endif %}</div>{% endif %}
+  <form method="post" action="{% url 'paper_action' a.publication_id %}" class="msgform">{% csrf_token %}<input type="hidden" name="form" value="sp_push"><button type="submit" class="btn">Try again</button></form>{% endif %}</div>{% endif %}
 <div class="cols">
 <div>
   {% for c in cards %}
@@ -69,6 +69,12 @@
     <div class="pkgplan">
       <h3>Package to upload <span class="small">({{ c.upload.files|length }} file{{ c.upload.files|length|pluralize }}, {{ c.upload.total_text }})</span></h3>
       {% if c.upload.files %}<ul class="files">{% for f in c.upload.files %}<li><span>{{ f.name }}</span><span class="sz">{{ f.size_text }}</span></li>{% endfor %}</ul>{% endif %}
+      {% if c.upload.skipped %}
+      <div class="msg warning skipped">
+        <strong>Also in the folder, not part of the package — not uploaded{% if c.upload.tick %} unless you tick it{% endif %}:</strong>
+        <ul class="files">{% for f in c.upload.skipped %}<li>{% if c.upload.tick %}<label><input type="checkbox" name="include" value="{{ f.name }}" form="upload-{{ c.row.task_code }}"> {{ f.name }}</label>{% else %}<span>{{ f.name }}</span>{% endif %}<span class="sz">{{ f.size_text }}</span></li>{% endfor %}</ul>
+        <span class="small">The upload takes only the .zip, README*.txt and the manuscript (.pdf/.doc/.docx). {% if c.upload.tick %}If one of these belongs in the deposit — e.g. a README under another name — tick it, then press “Upload now”. The automatic run never sends them.{% else %}If one belongs in the deposit (e.g. a README under another name), upload it to the draft by hand as well.{% endif %}</span>
+      </div>{% endif %}
       {% if c.upload.can_auto %}<p class="small ok">The system can upload this package itself.</p>
       {% if c.upload.large_warning %}<div class="msg warning">{{ c.upload.large_warning }}</div>{% endif %}
       {% else %}<div class="msg warning"><strong>{% if c.upload.over_quota %}Over Zenodo's 50 GB limit — manual upload only.{% else %}Manual upload needed.{% endif %}</strong> {{ c.upload.reason }}</div>{% endif %}
@@ -79,7 +85,7 @@
     {% if c.main or c.pid_buttons %}<div class="notebox">Read-only login: the buttons for this step are hidden.</div>{% endif %}
     {% else %}
     {% if c.main %}
-    <form method="post" action="{% url 'paper_action' a.publication_id %}">{% csrf_token %}
+    <form method="post" action="{% url 'paper_action' a.publication_id %}"{% if c.upload %} id="upload-{{ c.row.task_code }}"{% endif %}>{% csrf_token %}
       <input type="hidden" name="task_code" value="{{ c.row.task_code }}">
       <input type="hidden" name="expected_status" value="{{ a.status }}">
       <div class="fields">
@@ -87,8 +93,9 @@
         <div><label>{{ c.spec.note_hint }}</label><textarea name="note" rows="2"></textarea></div>
       </div>
       <div class="btns">
-        {% for b in c.main %}<button class="btn {{ b.style }}" type="submit" name="choice" value="{{ b.choice }}"{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}{% if c.upload and c.upload.job.state == "running" %} disabled{% elif b.background and not c.upload.can_auto %} disabled title="Not available for this package — see above"{% endif %}>{{ b.label }}</button>{% endfor %}
+        {% for b in c.main %}<button class="btn {{ b.style }}{% if b.did %} did{% endif %}" type="submit" name="choice" value="{{ b.choice }}"{% if b.did %} data-did="{{ b.did }}" data-did-key="{{ c.row.task_code }}:{{ b.choice }}"{% endif %}{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}{% if c.upload and c.upload.job.state == "running" %} disabled{% elif b.background and not c.upload.can_auto %} disabled title="Not available for this package — see above"{% endif %}>{{ b.label }}</button>{% endfor %}
       </div>
+      {% if c.has_did %}<p class="small didhint"><span class="didmark">✓</span> Green buttons only <strong>record</strong> something you have already done yourself — they do not do it for you. Blue buttons make the system do it.</p>{% endif %}
     </form>
     {% endif %}
 
@@ -102,7 +109,7 @@
         <div><label>Dataset URL</label><input type="url" name="url" placeholder="https://zenodo.org/records/1234567" required{% if b.prefill and zen %} value="{{ zen.record }}"{% endif %}></div>
         <div><label>{{ c.spec.note_hint }}</label><textarea name="note" rows="2"></textarea></div>
       </div>
-      <div class="btns"><button class="btn {{ b.style }}" type="submit" name="choice" value="{{ b.choice }}"{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}>{{ b.label }}</button></div>
+      <div class="btns"><button class="btn {{ b.style }}{% if b.did %} did{% endif %}" type="submit" name="choice" value="{{ b.choice }}"{% if b.did %} data-did="{{ b.did }}" data-did-key="{{ c.row.task_code }}:{{ b.choice }}"{% endif %}{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}>{{ b.label }}</button></div>
     </form>
     {% if c.main %}</div></details>{% endif %}
     {% endfor %}

@@ -30,7 +30,7 @@ from oa_tracker.sheet import generate_sheet  # noqa: E402
 from oa_tracker.status import (  # noqa: E402
     OPEN_ACTIVE, OPEN_INACTIVE, OPEN_READY_FOR_ZENODO_DRAFT, OPEN_ZENODO_PUBLISHED,
 )
-from oa_web import tracker  # noqa: E402
+from oa_web import guide, tracker  # noqa: E402
 
 
 def _insert(db_path, pub_id, status, **kwargs):
@@ -258,6 +258,25 @@ def test_staff_acts_superuser_also_manages_logins(test_config, monkeypatch):
     assert boss.get("/admin/auth/user/").status_code == 200
 
 
+def test_buttons_that_only_record_are_green_and_ask_first(client, test_config):
+    """Buttons recording something done outside the system (QA checked,
+    email sent, published, folder deleted) are marked and carry the popup
+    question; buttons that make the system act are not."""
+    _insert(test_config.database, "100", OPEN_ACTIVE)
+    qa = client.get("/paper/100/").content.decode()
+    assert ('class="btn primary did" type="submit" name="choice" value="pass" '
+            'data-did="Have you checked the package') in qa
+    assert 'data-did-key="qa_pass:pass"' in qa
+    assert "Green buttons only <strong>record</strong>" in qa
+    assert 'id="did-dialog"' in qa and "oa_web/did.js" in qa
+    for code in ("remind_sent", "db_updated", "folder_removed", "closed_folder_removed",
+                 "zenodo_validated", "zenodo_upload_files"):
+        assert any(b.did for b in guide.SPECS[code].buttons), code
+    assert not any(b.did for b in guide.SPECS["zenodo_create_draft"].buttons
+                   if b.choice == "done")
+    assert all(not b.did for b in guide.UPLOAD.buttons if b.background)
+
+
 def test_button_returns_to_the_paper_showing_the_next_step(client, test_config):
     _insert(test_config.database, "100", OPEN_ACTIVE)
     r = client.post("/paper/100/do/", {
@@ -343,6 +362,48 @@ def test_corrected_identifiers_are_recorded_as_entered(test_config):
     out = tracker.perform(test_config, "alice", "101", "zenodo_validated", "correct",
                           "OPEN_ZENODO_DRAFT_CREATED", pid="10.5281/zenodo.5")
     assert not out.ok and _status(test_config, "101") == "OPEN_ZENODO_DRAFT_CREATED"
+
+
+def test_quick_presses_push_one_after_another_with_the_newest_state(test_config, monkeypatch):
+    """3096: "DB updated" then "folder deleted" two seconds apart. The
+    second push must not run alongside the first (which read the older
+    state); queued, the last write to the List is the newest state."""
+    import threading
+    import time
+    from django.conf import settings as dj
+    from oa_tracker import auto
+    from oa_tracker.config import SharePointSettings
+
+    test_config.sharepoint = SharePointSettings(enabled=True)
+    monkeypatch.setattr(dj, "OA_SHAREPOINT_PUSH", True)
+    _insert(test_config.database, "100", OPEN_ACTIVE)
+    running, overlaps, written = [], [], []
+
+    def slow_push(cfg, pub):
+        if running:
+            overlaps.append(pub)
+        running.append(pub)
+        seen = _status(cfg, pub)              # what push_one reads
+        time.sleep(0.2)                       # the Graph round-trips
+        written.append(seen)
+        running.pop()
+        return "row updated"
+    monkeypatch.setattr(auto, "push_one", slow_push)
+    threads = []
+    real_thread = threading.Thread
+    monkeypatch.setattr(tracker.threading, "Thread",
+                        lambda **kw: threads.append(real_thread(**kw)) or threads[-1])
+
+    tracker.push_to_sharepoint(test_config, "100")
+    time.sleep(0.05)
+    with get_connection(test_config.database) as conn:
+        conn.execute("UPDATE archives SET status = ? WHERE publication_id = '100'",
+                     (OPEN_READY_FOR_ZENODO_DRAFT,))
+    tracker.push_to_sharepoint(test_config, "100")
+    for t in threads:
+        t.join(5)
+    assert overlaps == []
+    assert written == [OPEN_ACTIVE, OPEN_READY_FOR_ZENODO_DRAFT]
 
 
 def test_button_press_pushes_that_row_to_sharepoint(test_config, monkeypatch):
@@ -548,6 +609,15 @@ def test_new_draft_asks_for_the_upload_before_the_review(client, test_config, tm
     assert 'id="zenodo_validated"' not in page
 
 
+def test_upload_now_is_blue_uploaded_by_hand_is_green(client, test_config, tmp_path, zen):
+    _system_draft(test_config, tmp_path)
+    card = client.get("/paper/100/").content.decode().split('id="zenodo_upload_files"')[1]
+    now = card.split('value="now"')[0].rsplit("<button", 1)[1]
+    manual = card.split('value="manual"')[1].split(">", 1)[0]
+    assert "did" not in now
+    assert 'data-did="Have you uploaded every package file' in manual
+
+
 def test_upload_now_runs_and_moves_on_to_the_review(test_config, tmp_path, zen, jobs):
     _system_draft(test_config, tmp_path)
     out = tracker.perform(test_config, "alice", "100", "zenodo_upload_files", "now",
@@ -558,6 +628,44 @@ def test_upload_now_runs_and_moves_on_to_the_review(test_config, tmp_path, zen, 
     ev = tracker.events_for(test_config, "100")[0]
     assert (ev["action_code"], ev["source"]) == ("zenodo_upload_files", "web:alice")
     assert _codes(test_config) == ["zenodo_validated"]
+
+
+def test_files_outside_the_package_are_listed_and_can_be_ticked(
+        client, test_config, tmp_path, zen, jobs):
+    """3096: a README under another name is not part of the package — the
+    card says so before the upload, and a ticked file goes up with it."""
+    _system_draft(test_config, tmp_path)
+    folder = tmp_path / "pub100"
+    (folder / "DATASET DESCRIPTION.txt").write_text("what is in the zip")
+    (folder / "notes.csv").write_text("x")
+    page = client.get("/paper/100/").content.decode()
+    assert "not part of the package — not uploaded unless you tick it" in page
+    assert ('<input type="checkbox" name="include" value="DATASET DESCRIPTION.txt" '
+            'form="upload-zenodo_upload_files">') in page
+    assert 'id="upload-zenodo_upload_files"' in page
+    ro = _login("viewer")
+    ro_page = ro.get("/paper/100/").content.decode()
+    assert "DATASET DESCRIPTION.txt" in ro_page and 'name="include"' not in ro_page
+
+    r = client.post("/paper/100/do/", {
+        "task_code": "zenodo_upload_files", "choice": "now",
+        "expected_status": "OPEN_ZENODO_DRAFT_CREATED",
+        "include": ["DATASET DESCRIPTION.txt"],
+    })
+    assert r.status_code == 302
+    assert set(zen.files["4242"]) == {"data.zip", "README.txt", "DATASET DESCRIPTION.txt"}
+    assert "with DATASET DESCRIPTION.txt" in tracker.UPLOADS["100"]["text"]
+    note = tracker.events_for(test_config, "100")[0]["note"]
+    assert "included on request (outside package): DATASET DESCRIPTION.txt" in note
+    assert "not uploaded (outside package): notes.csv" in note
+
+
+def test_ticked_file_gone_from_the_folder_starts_nothing(test_config, tmp_path, zen, jobs):
+    _system_draft(test_config, tmp_path)
+    out = tracker.perform(test_config, "alice", "100", "zenodo_upload_files", "now",
+                          "OPEN_ZENODO_DRAFT_CREATED", include=["DESCRIPTION.txt"])
+    assert not out.ok and "Not in the folder any more: DESCRIPTION.txt" in out.errors[0]
+    assert zen.files["4242"] == {} and "100" not in tracker.UPLOADS
 
 
 def test_upload_now_greyed_out_for_a_package_over_the_auto_limit(client, test_config,

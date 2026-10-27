@@ -26,6 +26,11 @@ class Button:
     alt_summary: str = ""   # needs_pid_url beside other buttons: the fold-out's heading
     prefill: bool = False   # pre-fill DOI + URL from the Zenodo record on file
     background: bool = False  # starts a background job (the upload) instead of applying a code
+    # Set on buttons that only RECORD something the operator did outside the
+    # system (sent an email, published on Zenodo, deleted the folder…): the
+    # question the "have you done this?" popup asks. Such buttons are green
+    # with a ✓; buttons that make the system act keep their own style.
+    did: str = ""
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,8 @@ ELSEWHERE = Button(
     "elsewhere", "Record the DOI and URL — deposited elsewhere",
     apply_code="archived_external", style="secondary", needs_pid_url=True,
     alt_summary="Deposited elsewhere (not by the system) — record its DOI and URL",
+    did="Is the data already deposited in that repository, under the DOI and URL "
+        "you entered?",
 )
 ELSEWHERE_STEP = (
     "If the data is already deposited somewhere else — a Zenodo record made "
@@ -70,7 +77,9 @@ UPLOAD = ActionSpec(
     steps=(
         "The draft record exists on Zenodo (its DOI is reserved) but holds no "
         "data yet. The package to upload — the .zip, README.txt and manuscript "
-        "from the SharePoint folder — is listed below.",
+        "from the SharePoint folder — is listed below. Any other file in the "
+        "folder is listed separately and is not uploaded unless you tick it "
+        "(e.g. a README saved under another name).",
         "Automatic: the next automatic run uploads it, or press “Upload now” to "
         "start it straight away. It runs in the background; this page shows when "
         "it has finished.",
@@ -86,7 +95,9 @@ UPLOAD = ActionSpec(
     buttons=(
         Button("now", "Upload now", background=True),
         Button("manual", "Uploaded by hand — record it",
-               apply_code="zenodo_files_uploaded", style="secondary"),
+               apply_code="zenodo_files_uploaded", style="secondary",
+               did="Have you uploaded every package file to the Zenodo draft yourself, "
+                   "and has each one finished?"),
     ),
     links=("zenodo", "folder"),
 )
@@ -106,7 +117,9 @@ SPECS: dict[str, ActionSpec] = {
             ELSEWHERE_STEP,
         ),
         buttons=(
-            Button("pass", "QA pass"),
+            Button("pass", "QA pass",
+                   did="Have you checked the package in the SharePoint folder — the "
+                       ".zip, the README and the manuscript?"),
             Button("fail", "QA fail — keep waiting", apply_code="qa_hold",
                    style="danger", needs_note=True),
             ELSEWHERE,
@@ -117,7 +130,7 @@ SPECS: dict[str, ActionSpec] = {
     "remind_sent": ActionSpec(
         title="Send the reminder email",
         steps=_EMAIL_STEPS,
-        buttons=(Button("done", "Email sent"),),
+        buttons=(Button("done", "Email sent", did="Have you sent this email from Outlook?"),),
         email_stem="reminder_{pub_id}_{n}",
     ),
     "contact_pi_manual": ActionSpec(
@@ -131,26 +144,26 @@ SPECS: dict[str, ActionSpec] = {
             "To give up on the deposit instead, use “Close as exception” "
             "under Other actions, with a note explaining why.",
         ),
-        buttons=(Button("done", "PI contacted"),),
+        buttons=(Button("done", "PI contacted", did="Have you contacted the PI yourself?"),),
         email_stem="reminder_{pub_id}_{n}_PASTDUE",
         note_hint="Optional note — what was said or agreed",
     ),
     "handover_sent": ActionSpec(
         title="Send the handover notice to the new data contact",
         steps=_EMAIL_STEPS,
-        buttons=(Button("done", "Email sent"),),
+        buttons=(Button("done", "Email sent", did="Have you sent this email from Outlook?"),),
         email_stem="handover_{pub_id}",
     ),
     "completion_sent": ActionSpec(
         title="Send the completion email (data archived)",
         steps=_EMAIL_STEPS,
-        buttons=(Button("done", "Email sent"),),
+        buttons=(Button("done", "Email sent", did="Have you sent this email from Outlook?"),),
         email_stem="completion_{pub_id}",
     ),
     "reject_done_sent": ActionSpec(
         title="Send the “not done yet” email",
         steps=_EMAIL_STEPS,
-        buttons=(Button("done", "Email sent"),),
+        buttons=(Button("done", "Email sent", did="Have you sent this email from Outlook?"),),
         email_stem="reject_done_{pub_id}",
     ),
     "reject_done": ActionSpec(
@@ -189,7 +202,9 @@ SPECS: dict[str, ActionSpec] = {
             "tracker can find the DOI and URL later, then confirm.",
             ELSEWHERE_STEP,
         ),
-        buttons=(Button("done", "Draft created on Zenodo"), ELSEWHERE),
+        buttons=(Button("done", "Draft created on Zenodo",
+                         did="Have you created the deposit on Zenodo yourself?"),
+                  ELSEWHERE),
         fields=("zenodo_code",),
         links=("folder",),
     ),
@@ -211,12 +226,14 @@ SPECS: dict[str, ActionSpec] = {
             "is not published yet you get a message and nothing changes.",
         ),
         buttons=(
-            Button("done", "Published on Zenodo — confirm"),
+            Button("done", "Published on Zenodo — confirm",
+                   did="Have you clicked Publish on Zenodo?"),
             # Same path as done=1 + pid/url on this row in the sheet:
             # apply's fast-track records the identifiers as entered.
             Button("correct", "Published on Zenodo — record these identifiers",
                    style="secondary", needs_pid_url=True, prefill=True,
-                   alt_summary="Different DOI or URL on Zenodo? Edit them and record"),
+                   alt_summary="Different DOI or URL on Zenodo? Edit them and record",
+                   did="Have you clicked Publish on Zenodo?"),
         ),
         links=("zenodo", "folder", "expected"),
     ),
@@ -243,7 +260,8 @@ SPECS: dict[str, ActionSpec] = {
             "the tracker knows the record — check them against Zenodo.",
             "Use the dataset's DOI — never the paper's DOI.",
         ),
-        buttons=(Button("done", "Record DOI and URL", needs_pid_url=True, prefill=True),),
+        buttons=(Button("done", "Record DOI and URL", needs_pid_url=True, prefill=True,
+                         did="Have you published the deposit on Zenodo?"),),
         links=("zenodo",),
     ),
     "db_updated": ActionSpec(
@@ -253,7 +271,9 @@ SPECS: dict[str, ActionSpec] = {
             "enter the dataset DOI and URL shown below (repository: Zenodo).",
             "Confirm here once it is saved.",
         ),
-        buttons=(Button("done", "Database updated"),),
+        buttons=(Button("done", "Database updated",
+                         did="Have you entered the dataset DOI and URL in the institutional "
+                             "publication database and saved it?"),),
         links=("doi", "pubdb"),
     ),
     "folder_removed": ActionSpec(
@@ -263,7 +283,8 @@ SPECS: dict[str, ActionSpec] = {
             "folder on SharePoint (the tracker never deletes anything itself).",
             "Confirming closes the archive as “data archived”.",
         ),
-        buttons=(Button("done", "Folder deleted — close archive"),),
+        buttons=(Button("done", "Folder deleted — close archive",
+                         did="Have you deleted this publication’s folder on SharePoint?"),),
         links=("folder", "doi"),
     ),
     "closed_folder_removed": ActionSpec(
@@ -275,7 +296,8 @@ SPECS: dict[str, ActionSpec] = {
             "on this server — OneDrive can take a few minutes to catch up. The "
             "next automatic scan records the removal by itself either way.",
         ),
-        buttons=(Button("done", "Folder deleted"),),
+        buttons=(Button("done", "Folder deleted",
+                         did="Have you deleted this publication’s folder on SharePoint?"),),
         links=("folder",),
     ),
     "close_publication_only": ActionSpec(
@@ -296,7 +318,9 @@ SPECS: dict[str, ActionSpec] = {
             "(put the answer in the note); the item comes back until the database "
             "is fixed or you close the archive under Other actions.",
         ),
-        buttons=(Button("done", "Acknowledge"),),
+        buttons=(Button("done", "Acknowledge",
+                         did="Have you asked the Project Office / IT about this paper’s "
+                             "mandate?"),),
         note_hint="Note — who you asked and what they said",
     ),
 }

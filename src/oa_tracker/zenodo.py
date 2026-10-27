@@ -47,7 +47,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from oa_tracker.config import Config, ZenodoSettings
 
@@ -631,6 +631,7 @@ class UploadPlan:
     auto_limit: int                  # bytes: largest file the system uploads itself
     files: list[tuple[str, Path, int]] = field(default_factory=list)  # (key, path, bytes)
     skipped: list[str] = field(default_factory=list)   # outside the upload mode
+    included: list[str] = field(default_factory=list)  # outside it, sent on request
     error: str = ""                  # nothing uploadable / name collision
     too_big_for_auto: list[str] = field(default_factory=list)  # keys above auto_limit
     over_quota: bool = False         # beyond Zenodo's standard per-record quota
@@ -692,13 +693,26 @@ class UploadPlan:
         return ""
 
 
-def plan_upload(folder: Path, settings: ZenodoSettings) -> UploadPlan:
+def plan_upload(folder: Path, settings: ZenodoSettings,
+                include: Iterable[str] = ()) -> UploadPlan:
     """Classify an archive folder's package for upload (read-only: lists and
-    stats the files, never opens them)."""
+    stats the files, never opens them).
+
+    ``include`` names files outside the package (as ``skipped`` lists them)
+    that the operator chose to send with it — e.g. a README under another
+    name; anything else in it is ignored."""
     plan = UploadPlan(auto_limit=settings.single_put_max_mb * 1024**2)
+    wanted = set(include)
     try:
         to_upload, skipped = discover_files(folder, settings.upload_files)
-        plan.skipped = [p.name for p in skipped]
+        for p in skipped:
+            rel = p.relative_to(folder).as_posix()
+            if rel in wanted:
+                plan.included.append(rel)
+                to_upload.append(p)
+            else:
+                plan.skipped.append(rel)
+        to_upload.sort()
         if not to_upload:
             plan.error = f"no uploadable files found in {folder}"
             return plan
@@ -865,6 +879,7 @@ class UploadResult:
     already_present: list[str] = field(default_factory=list)
     replaced: list[str] = field(default_factory=list)
     skipped_local: list[str] = field(default_factory=list)   # not in upload mode
+    included: list[str] = field(default_factory=list)  # outside it, sent on request
     manual_required: list[str] = field(default_factory=list)  # too big for unattended
     errors: list[str] = field(default_factory=list)
 
@@ -882,6 +897,8 @@ class UploadResult:
             parts.append(f"replaced {len(self.replaced)}")
         if self.manual_required:
             parts.append(f"MANUAL UPLOAD NEEDED: {', '.join(self.manual_required)}")
+        if self.included:
+            parts.append(f"included on request (outside package): {', '.join(self.included)}")
         if self.skipped_local:
             parts.append(f"not uploaded (outside package): {', '.join(self.skipped_local)}")
         if self.errors:
@@ -981,6 +998,7 @@ def upload_files(
     folder: Path,
     settings: ZenodoSettings,
     on_progress: Callable[[str], None] | None = None,
+    include: Iterable[str] = (),
 ) -> UploadResult:
     """Upload the archive folder's files to the draft, idempotently.
 
@@ -989,11 +1007,12 @@ def upload_files(
     missing files are uploaded. A manifest is written next to the upload
     (``manifest_dir/<record_id>/manifest.json``) for the audit trail.
     Flattening: nested files upload under ``subdir_name`` keys (collision
-    → error, never overwrite).
+    → error, never overwrite). ``include``: see :func:`plan_upload`.
     """
     result = UploadResult()
-    plan = plan_upload(folder, settings)
+    plan = plan_upload(folder, settings, include)
     result.skipped_local = plan.skipped
+    result.included = plan.included
     if plan.error:
         result.errors.append(plan.error)
         return result

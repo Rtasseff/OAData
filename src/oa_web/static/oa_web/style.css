@@ -117,6 +117,21 @@ button.btn:hover { background: var(--accent-dark); }
 button.btn.danger { background: #fff; color: var(--err); border-color: #d9a1a1; }
 button.btn.danger:hover { background: var(--err-bg); }
 button.btn.secondary { background: #fff; color: var(--ink); border-color: #c4ccd6; }
+/* "Records what you did" (guide.Button.did): green with a tick, apart from
+   the blue buttons that make the system act. */
+button.btn.did { background: var(--ok); border-color: var(--ok); color: #fff; }
+button.btn.did:hover { background: #17633b; }
+button.btn.did::before { content: "✓ "; font-weight: 700; }
+.didmark { color: var(--ok); font-weight: 700; }
+button.btn.did.secondary { background: #fff; color: var(--ok); border-color: #8cc4a5; }
+button.btn.did.secondary:hover { background: var(--ok-bg); }
+.didhint { margin: 10px 0 0; }
+.did-dialog { border: 1px solid var(--line); border-radius: 10px; padding: 22px 24px; max-width: 460px; width: calc(100% - 32px); }
+.did-dialog::backdrop { background: rgba(23, 50, 77, .45); }
+.did-dialog h3 { margin: 0 0 8px; }
+.did-dialog .did-q { font-weight: 600; font-size: 16px; margin: 14px 0; }
+.did-dialog .did-skip { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--muted); margin-bottom: 16px; }
+.didreset { margin-top: 24px; }
 .pkg { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .pill { font-size: 12.5px; padding: 2px 9px; border-radius: 999px; }
 .pill.yes { background: var(--ok-bg); color: var(--ok); }
@@ -169,3 +184,5 @@ button.btn:disabled, button.btn:disabled:hover { background: #eef1f5; color: #98
 .pkgplan h3 { font-size: 14px; margin: 0 0 6px; }
 .pkgplan .ok { color: var(--ok); margin: 8px 0 0; }
 .pkgplan .msg { margin: 10px 0 0; }
+.pkgplan .skipped ul.files { margin: 6px 0; }
+.pkgplan .skipped label { display: flex; gap: 8px; align-items: center; cursor: pointer; }

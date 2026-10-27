@@ -16,7 +16,7 @@ from django.views.decorators.http import require_POST
 from oa_tracker.report import build_report
 
 from oa_web import guide, tracker
-from oa_web.access import write_required
+from oa_web.access import can_act, write_required
 
 
 @login_required
@@ -152,6 +152,8 @@ def paper(request, pub_id: str):
         upload = None
         if row["task_code"] in tracker.UPLOAD_CODES:
             upload = tracker.upload_view(config, archive, row["task_code"])
+            # Files outside the package can be ticked to go with "Upload now".
+            upload["tick"] = can_act(request.user) and upload["can_auto"]
             if (upload["job"] or {}).get("state") == "running":
                 refresh = 10
         cards.append({
@@ -163,6 +165,7 @@ def paper(request, pub_id: str):
             # A fold-out for correcting pre-filled identifiers is dropped
             # when the system has no Zenodo record to pre-fill them from.
             "main": [b for b in buttons if not b.needs_pid_url],
+            "has_did": any(b.did for b in buttons if not b.needs_pid_url),
             "pid_buttons": [
                 b for b in buttons if b.needs_pid_url
                 and not (b.prefill and b.alt_summary and not zen)
@@ -215,6 +218,7 @@ def paper_action(request, pub_id: str):
             expected_status=p.get("expected_status", ""),
             note=p.get("note", ""), pid=p.get("pid", ""), url=p.get("url", ""),
             zenodo_code=p.get("zenodo_code", ""), other=p.get("other") == "1",
+            include=p.getlist("include"),
         )
     for m in out.messages:
         messages.success(request, m)

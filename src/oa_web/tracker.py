@@ -12,7 +12,7 @@ import csv
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from django.conf import settings
 
@@ -166,17 +166,30 @@ def zenodo_links(config: Config, archive: dict[str, Any]) -> dict[str, str]:
 UPLOAD_CODES = ("zenodo_upload_files", "zenodo_files_uploaded")
 
 
-def upload_view(config: Config, archive: dict[str, Any], row_code: str) -> dict[str, Any]:
-    """What the upload card shows: the package, whether the system can
+def upload_view(config: Config, archive: dict[str, Any], row_code: str,
+                include: Sequence[str] = ()) -> dict[str, Any]:
+    """What the upload card shows: the package, the folder's files outside
+    it (not uploaded unless ticked — ``include``), whether the system can
     upload it ("Upload now" greyed out with the reason when not), and any
     upload running in the background or failed from this page."""
     from oa_tracker import zenodo
 
-    plan = zenodo.plan_upload(Path(archive["folder_path"]), config.zenodo)
+    folder = Path(archive["folder_path"])
+    plan = zenodo.plan_upload(folder, config.zenodo, include)
     can_auto = row_code == "zenodo_upload_files" and plan.mode == "auto"
+
+    def _size(name: str) -> int | None:
+        try:
+            return (folder / name).stat().st_size
+        except OSError:
+            return None
+
     return {
         "files": [{"name": key, "size": size, "size_text": size_text(size)}
                   for key, _, size in plan.files],
+        "skipped": [{"name": n, "size_text": size_text(s) if (s := _size(n)) is not None else ""}
+                    for n in plan.skipped],
+        "included": plan.included,
         "total": plan.total,
         "total_text": size_text(plan.total),
         "can_auto": can_auto,
@@ -202,6 +215,19 @@ log = logging.getLogger("oa_web")
 # page. In-memory only; the morning `oa auto` reconciles regardless.
 LAST_PUSH: dict[str, dict[str, Any]] = {}
 
+# One push at a time per paper: two quick presses (e.g. "DB updated" then
+# "folder deleted", 3096) each start a push, and push_one reads the paper's
+# state when it runs — unserialised, the first push could read the old
+# state yet finish last, leaving the List a step behind. Queued, the later
+# push always reads (and writes) the newest state.
+_PUSH_LOCKS: dict[str, threading.Lock] = {}
+_PUSH_LOCKS_GUARD = threading.Lock()
+
+
+def _push_lock(pub_id: str) -> threading.Lock:
+    with _PUSH_LOCKS_GUARD:
+        return _PUSH_LOCKS.setdefault(pub_id, threading.Lock())
+
 
 def push_to_sharepoint(config: Config, pub_id: str) -> None:
     """Push this paper's List row now, without making the page wait."""
@@ -212,7 +238,8 @@ def push_to_sharepoint(config: Config, pub_id: str) -> None:
     def run() -> None:
         from oa_tracker.auto import push_one
         try:
-            text = push_one(config, pub_id)
+            with _push_lock(pub_id):
+                text = push_one(config, pub_id)
             LAST_PUSH[pub_id] = {"when": _now(), "ok": True, "text": f"SharePoint List: {text}"}
         except Exception as e:  # network/token/Graph — never breaks the recorded action
             log.warning("SharePoint push for %s failed: %s", pub_id, e)
@@ -274,12 +301,20 @@ def _release_run_lock(fd: int) -> None:
 
 
 def start_upload(config: Config, username: str, archive: dict[str, Any],
-                 row_code: str) -> "Outcome":
+                 row_code: str, include: Sequence[str] = ()) -> "Outcome":
     """"Upload now": run the same API upload as the automatic run, in the
-    background (a large package takes minutes), recorded as web:<user>."""
+    background (a large package takes minutes), recorded as web:<user>.
+    ``include``: files outside the package the operator ticked to send too."""
     out = Outcome()
     pub_id = archive["publication_id"]
-    view = upload_view(config, archive, row_code)
+    view = upload_view(config, archive, row_code, include)
+    gone = [n for n in include if n not in view["included"]]
+    if gone:
+        out.errors.append(
+            f"Not in the folder any more: {', '.join(gone)}. Nothing was started — "
+            "check the list below and press “Upload now” again."
+        )
+        return out
     if not view["can_auto"]:
         out.errors.append(f"The system cannot upload this package: {view['reason']}")
         return out
@@ -300,11 +335,14 @@ def start_upload(config: Config, username: str, archive: dict[str, Any],
         try:
             result, _, _ = actions.apply_single(
                 config, pub_id, "zenodo_upload_files", done=1, source=f"web:{username}",
+                include=view["included"],
             )
             if result.applied and not result.errors:
                 _retire_sheet_row(config, archive, row_code, "zenodo_upload_files", "", "", "")
+                extra = (f" (with {', '.join(view['included'])})"
+                         if view["included"] else "")
                 UPLOADS[pub_id] = {"state": "ok", "when": _now(), "by": username,
-                                   "text": "Package uploaded to the Zenodo draft."}
+                                   "text": f"Package uploaded to the Zenodo draft{extra}."}
             else:
                 problems = "; ".join(_clean(e) for e in result.errors) or "nothing was recorded"
                 UPLOADS[pub_id] = {
@@ -425,10 +463,12 @@ def perform(
     url: str = "",
     zenodo_code: str = "",
     other: bool = False,
+    include: Sequence[str] = (),
 ) -> Outcome:
     """Record one button press. ``task_code`` is the pending row the button
     sits on (or an always-available decision when ``other``); the button's
-    ``choice`` picks what is applied."""
+    ``choice`` picks what is applied. ``include``: files outside the package
+    ticked on the upload card ("Upload now" only)."""
     out = Outcome()
     archive = get_archive(config, pub_id)
     if archive is None:
@@ -473,7 +513,7 @@ def perform(
         pid = url = ""
 
     if button.background:
-        return start_upload(config, username, archive, task_code)
+        return start_upload(config, username, archive, task_code, include)
 
     apply_code = button.apply_code or task_code
 

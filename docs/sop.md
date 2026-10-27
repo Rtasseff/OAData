@@ -150,6 +150,20 @@ digest always agree, before and after any attempt:
 | a file > `single_put_max_mb` (only with the code default 5120 = 5 GB) | **upload by hand** — too large for the system's unattended upload | `zenodo_files_uploaded` | *Upload now* greyed out with the reason; **Uploaded by hand** |
 | total > 50 GB (or > 100 files) | over Zenodo's standard quota — see the policy below | `zenodo_files_uploaded` | as above, with the policy text |
 
+**Files outside the package are not uploaded.** The upload takes the
+`.zip`, `README*.txt` and the manuscript (`.pdf`/`.doc`/`.docx`) only
+(`[zenodo] upload_files = "package"`). Anything else in the folder — e.g.
+a README saved as "DATASET DESCRIPTION ….txt" (3096, 2026-10-23) — is
+listed on the web upload card under *Also in the folder, not part of the
+package*: tick the ones that belong in the deposit before **Upload now**
+and they go up with it (recorded as "included on request" in the audit
+note). The automatic run never sends them, and it **holds the upload**
+of such a folder for a person to decide (digest: "upload HELD"; the
+sheet row says the same) — tick and *Upload now*, or upload without
+them. The upload's audit note lists what it left out ("not uploaded
+(outside package): …"). Found after an upload: drag the file onto the
+draft on Zenodo before review.
+
 **Large uploads (a file over 5 GB):** expect up to an hour or more per
 attempt, and Zenodo sometimes drops a large upload part-way — a known
 issue we have seen, in the browser too. The system sends each file in

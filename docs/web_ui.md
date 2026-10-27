@@ -15,6 +15,16 @@ page covers only running the site and how it fits with the CLI.
 | **History** | The audit trail (`events` table), newest first. | — |
 | **Paper** (click an action or a title) | What to do for each pending action, the links needed (SharePoint folder, Zenodo draft, email draft download, DOI/URL to copy), and the button that records it. After a button the same page reloads showing the next step. | `oa action` |
 
+**Two kinds of button.** Blue buttons make the system do the step
+(create the Zenodo draft, upload, run the automatic update, retry the
+List). Green buttons with a ✓ only **record** something done outside
+the system — QA checked, email sent, published on Zenodo, publication
+DB updated, folder deleted, uploaded by hand (`guide.Button.did`). A
+green button first asks "Have you …?" in a popup, with *Don't ask again
+for this step on this computer* (kept in that browser; a link at the
+foot of every page brings the questions back). Red buttons are
+irreversible or negative decisions.
+
 Buttons per step: QA has **QA pass** (the next step, creating the
 Zenodo draft, follows on the same page — or the next `oa auto` run does
 it) and **QA fail** (requires a note → `qa_hold`); the draft step has
@@ -23,7 +33,10 @@ step — its own step, before the review ([sop.md](sop.md) § *Uploading
 the data to the draft*) — lists the package with decimal sizes and has
 **Upload now** (the same API upload as `oa auto`, run in the background;
 the page refreshes until it finishes) and **Uploaded by hand — record
-it** (`zenodo_files_uploaded`). A file over 5 GB adds a warning above
+it** (`zenodo_files_uploaded`). Other files in the folder are listed
+under *Also in the folder, not part of the package* with tick boxes:
+ticked ones go up with *Upload now* (read-only logins and hand-upload
+packages see the list without boxes). A file over 5 GB adds a warning above
 the buttons (up to an hour or more; Zenodo sometimes drops large
 uploads; the automatic upload retries 3 times). *Upload now* is greyed
 out with the reason when the package must go by hand (a file over
@@ -121,7 +134,8 @@ applying `sharepoint_proposals.tsv`.
   the `oa auto` push, scoped to one row, using the cached headless token.
   The page shows the result on reload ("SharePoint List: row updated" or
   a warning); a failed push never undoes the recorded action and the next
-  `oa auto` / `oa sharepoint sync` reconciles anyway. The warning stays
+  `oa auto` / `oa sharepoint sync` reconciles anyway. Pushes for one paper
+  run one after another, so quick presses leave the newest state. The warning stays
   until the next push for that paper (the result is kept in memory, not
   re-checked): after fixing the cause — typically an expired token, renewed
   by running `oa sharepoint sync` once in a terminal — press *Try again*

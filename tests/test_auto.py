@@ -556,6 +556,25 @@ def test_auto_leaves_a_too_big_package_for_hand_upload(zen_config):
     assert not any("validate the Zenodo draft" in w for w in result.awaiting_operator)
 
 
+def test_auto_holds_the_upload_when_the_folder_has_files_outside_the_package(zen_config):
+    """3096: a README under another name. The draft is made, but the upload
+    waits for a person to decide (web tick box / hand upload) — every run."""
+    folder = _folder_with_package(zen_config)
+    (folder / "DATASET DESCRIPTION.txt").write_text("the real readme")
+    _seed(zen_config, status=st.OPEN_ACTIVE, user_done_flag=1,
+          package_has_zip=1, package_has_readme=1, package_has_manuscript=1)
+    for _ in range(2):
+        result = auto.AutoRunResult(started_at=NOW)
+        auto._advance(zen_config, result)
+        assert not result.errors
+        assert any("upload HELD" in w and "DATASET DESCRIPTION.txt" in w
+                   for w in result.awaiting_operator)
+    assert zen_config._fake_zenodo.files["100"] == {}  # draft made, nothing uploaded
+    from oa_tracker.sheet import build_rows
+    row = next(r for r in build_rows(zen_config) if r["task_code"] == "zenodo_upload_files")
+    assert "automatic run holds this upload" in row["note"]
+
+
 def test_auto_retry_skips_over_quota_package_every_run(zen_config):
     folder = _folder_with_package(zen_config)
     _sparse(folder / "data.zip", 60_000_000_000)

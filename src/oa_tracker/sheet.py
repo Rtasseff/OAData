@@ -207,11 +207,16 @@ def _upload_task(archive: dict, zen, env_ok: bool) -> tuple[str, str]:
     url = z.record_ui_url(zen, archive["zenodo_code"])
     plan = z.plan_upload(Path(archive["folder_path"]), zen)
     if plan.mode == "auto" and zen.enabled and env_ok:
+        when = (
+            f" The folder also has files outside the package ({', '.join(plan.skipped)}), "
+            "so the automatic run holds this upload: done=1 uploads the package "
+            "WITHOUT them; to include one, tick it on the web page and press "
+            "“Upload now”, or upload it by hand as well."
+        ) if plan.skipped else " The next `oa auto` run also does it."
         return "zenodo_upload_files", (
             f"Draft {url} holds no data yet. done=1 uploads the package now via "
-            f"the API ({len(plan.files)} file(s), {plan.total / 1e9:.1f} GB); the "
-            "next `oa auto` run also does it. Uploaded it by hand instead? Change "
-            "task_code to zenodo_files_uploaded, done=1."
+            f"the API ({len(plan.files)} file(s), {plan.total / 1e9:.1f} GB).{when} "
+            "Uploaded it by hand instead? Change task_code to zenodo_files_uploaded, done=1."
             + (f" {plan.large_warning}" if plan.large_warning else "")
         )
     why = plan.reason or "The system cannot upload to this draft (Zenodo integration off or another environment)."

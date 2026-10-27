@@ -1670,6 +1670,16 @@ Web UI shared on the internal network (2026-10-22):
 - New `/health` (no login; 200 while the tracker DB answers, else 503)
   for the forwarder's probe; Django warnings/tracebacks now reach the
   service journal (they were dropped with DEBUG off).
+- Upload card lists files outside the package with tick boxes (3096: a
+  README saved as "DATASET DESCRIPTION ….txt" was silently left out);
+  ticked ones go up with *Upload now* ("included on request" in the
+  audit note). `oa auto` now holds the upload of such a folder for a
+  person (2026-10-23, operator decision).
+- List pushes for one paper run one after another (3096: "DB updated" +
+  "folder deleted" two seconds apart left the List a step behind).
+- Blue = the system does it; green ✓ = records what you did, with a
+  "Have you …?" popup and a per-step "don't ask again" (operator request,
+  2026-10-23).
 - Login levels (2026-10-23, operator decision): no flag = read only
   (buttons hidden, writes refused), Staff = read and write, Superuser =
   also manages logins (*Logins* link in the header). `oa_web/access.py`.
