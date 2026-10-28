@@ -29,6 +29,9 @@ class EmailSettings:
     sender_title: str = "Data Quality Officer"
     sender_email: str = ""          # used as the From header in .eml drafts; blank → omit From
     draft_format: str = "txt"       # "txt" | "eml" | "both"
+    # The web page's "Send now" on email steps: sends the draft through
+    # Microsoft Graph from ``sender_email`` (oa_tracker.mailer).
+    send_from_web: bool = False
 
 
 @dataclass
@@ -227,6 +230,7 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
             sender_title=email_raw.get("sender_title", email_defaults.sender_title),
             sender_email=email_raw.get("sender_email", email_defaults.sender_email),
             draft_format=email_raw.get("draft_format", email_defaults.draft_format),
+            send_from_web=email_raw.get("send_from_web", email_defaults.send_from_web),
         ),
         zenodo=ZenodoSettings(
             enabled=zen_raw.get("enabled", zen_defaults.enabled),

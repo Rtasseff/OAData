@@ -135,6 +135,11 @@ def history(request):
     })
 
 
+def _last_qa_hold(events: list[dict]) -> dict | None:
+    """The QA fail that is keeping the QA step hidden (events are newest first)."""
+    return next((e for e in events if e["action_code"] == "qa_hold"), None)
+
+
 @login_required
 def paper(request, pub_id: str):
     """One paper: details, what to do next (with the buttons), audit trail."""
@@ -160,6 +165,9 @@ def paper(request, pub_id: str):
             "upload": upload,
             "row": row, "spec": spec,
             "drafts": tracker.email_drafts(config, archive, spec) if spec else [],
+            # "Send now" steps show the email itself, as it would be sent.
+            "mail": tracker.mail_view(config, archive, spec)
+            if any(b.sends for b in buttons) else None,
             # Buttons that ask for a DOI + URL get their own form (folded
             # away under their alt_summary when they are the alternative).
             # A fold-out for correcting pre-filled identifiers is dropped
@@ -172,16 +180,19 @@ def paper(request, pub_id: str):
             ],
         })
     show_folder = any(c["spec"] and "folder" in c["spec"].links for c in cards)
+    events = tracker.events_for(config, pub_id)
 
     return render(request, "oa_web/paper.html", {
         "a": archive, "cards": cards, "zen": zen,
         "zenodo_enabled": config.zenodo.enabled,
-        "others": guide.OTHER if archive["is_open"] else {},
+        "others": ({**guide.OTHER, **guide.QA_HELD_OTHER} if archive["qa_held"]
+                   else guide.OTHER) if archive["is_open"] else {},
+        "qa_hold": _last_qa_hold(events) if archive["qa_held"] else None,
         "exemptions": guide.EXEMPTIONS if archive["can_exempt"] else (),
         "files": tracker.folder_listing(archive) if show_folder else None,
         "show_folder": show_folder,
         "pub_db_url": tracker.pub_db_url(pub_id),
-        "events": tracker.events_for(config, pub_id),
+        "events": events,
         "last_push": tracker.LAST_PUSH.get(pub_id),
         # A finished or failed web upload whose step is gone (it succeeded)
         # still gets its message once.
@@ -218,7 +229,7 @@ def paper_action(request, pub_id: str):
             expected_status=p.get("expected_status", ""),
             note=p.get("note", ""), pid=p.get("pid", ""), url=p.get("url", ""),
             zenodo_code=p.get("zenodo_code", ""), other=p.get("other") == "1",
-            include=p.getlist("include"),
+            include=p.getlist("include"), draft_digest=p.get("draft_digest", ""),
         )
     for m in out.messages:
         messages.success(request, m)

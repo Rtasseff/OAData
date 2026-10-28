@@ -210,6 +210,32 @@ def test_auto_qc_advances_through_draft_and_upload(zen_config):
     assert any("validate the Zenodo draft" in w for w in result.awaiting_operator)
 
 
+def test_auto_qc_respects_a_qa_fail_on_the_same_folder(zen_config,
+                                                       data_required_mandate):
+    """The operator failed QA; a 'done' tick on the unchanged folder
+    doesn't overturn it. Once the folder changes, auto-QC applies again."""
+    folder = _folder_with_package(zen_config)
+    (folder / "paper.pdf").write_bytes(b"%PDF")
+    _seed(zen_config, status=st.OPEN_ACTIVE, user_done_flag=0,
+          package_has_zip=1, package_has_readme=1, package_has_manuscript=1)
+    apply_single(zen_config, "3290", "qa_hold", done=1, note="README is empty")
+    with db.get_connection(zen_config.database) as conn:
+        db.upsert_archive(conn, publication_id="3290", user_done_flag=1)
+    result = auto.AutoRunResult(started_at=NOW)
+    auto._advance(zen_config, result)
+    with db.get_connection(zen_config.database) as conn:
+        assert db.get_archive(conn, "3290")["status"] == st.OPEN_ACTIVE
+    assert any("QA failed and the folder hasn't changed" in m for m in result.mismatches)
+
+    (folder / "README.txt").write_text("a proper description")
+    from oa_tracker.scanner import scan_folders
+    scan_folders(zen_config)
+    result = auto.AutoRunResult(started_at=NOW)
+    auto._advance(zen_config, result)
+    with db.get_connection(zen_config.database) as conn:
+        assert db.get_archive(conn, "3290")["status"] != st.OPEN_ACTIVE, result.mismatches
+
+
 def test_auto_qc_mismatch_done_without_package(zen_config):
     _seed(zen_config, status=st.OPEN_ACTIVE, user_done_flag=1,
           package_has_zip=1, package_has_readme=0)

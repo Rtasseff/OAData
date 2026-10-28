@@ -417,6 +417,17 @@ def _apply_row_inner(
             existing_notes = archive.get("notes") or ""
             separator = "\n" if existing_notes else ""
             extra["notes"] = f"{existing_notes}{separator}[{now}] {note}"
+        if task_code == "qa_hold":
+            # Remember the folder exactly as it was reviewed: the QA step
+            # stays hidden until something in it changes (checks.qa_held).
+            # Read-only look at the folder; unreadable → no hold recorded,
+            # and QA keeps being offered as before.
+            from oa_tracker import scanner
+            sig = scanner.folder_signature(Path(archive["folder_path"])) \
+                if archive.get("folder_path") else None
+            if sig is not None:
+                extra.update(scanner.signature_updates(archive, sig, now))
+                extra["qa_hold_signature"] = sig
         if extra:
             db.upsert_archive(conn, publication_id=pub_id, **extra)
         db.insert_event(

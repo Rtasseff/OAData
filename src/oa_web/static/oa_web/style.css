@@ -148,6 +148,7 @@ details.other:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
 details.other summary { cursor: pointer; font-weight: 600; font-size: 14px; }
 details.other .body { padding-top: 10px; }
 .allclear { border-left: 4px solid var(--ok); }
+.heldqa { border-left: 4px solid var(--warn); }
 details.exempt > summary { cursor: pointer; font-weight: 600; font-size: 16px; }
 details.exempt > p.small { margin: 8px 0 12px; }
 .choices { display: grid; gap: 6px; margin-bottom: 12px; }
@@ -161,6 +162,11 @@ label.choice .ctext { display: block; font-weight: 500; }
 .exempt-form .ext-only { display: none; }
 .exempt-form:has(input[value="external"]:checked) .ext-only { display: grid; }
 pre.notes { white-space: pre-wrap; font: 13px/1.5 ui-monospace, monospace; margin: 0; color: #3c4a59; }
+/* the email a "Send now" step would send, as it would be sent */
+.mail { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 14px; background: #fafbfc; }
+.mail .kv { margin-bottom: 10px; }
+pre.mailbody { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13.5px; line-height: 1.5;
+  margin: 0; padding-top: 10px; border-top: 1px solid var(--line); max-height: 28em; overflow: auto; }
 
 /* report */
 .prose h1 { font-size: 20px; }

@@ -50,6 +50,8 @@ here), no licence, no mailbox access.
 >    I expect `GroupMailbox` (the Microsoft 365 group behind the
 >    PublicationsData SharePoint site); `SharedMailbox` is also possible.
 >    Step 3 is the same command for both.
+>    **(Wrong check, see "IT's follow-up" below: plain `Get-Recipient` can
+>    miss Microsoft 365 groups; use `Get-UnifiedGroup`.)**
 > 3. Grant Send As
 >    ([Add-RecipientPermission](https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/add-recipientpermission?view=exchange-ps);
 >    it pauses to confirm, or add `-Confirm:$false`):
@@ -106,6 +108,41 @@ Notes behind the request (from the reference page, last updated
 Practical note (experience, not doc-guaranteed): permission changes in
 Exchange Online can take a while to propagate. If a test send fails right
 after the grant, wait an hour and retry before reporting it broken.
+
+### IT's follow-up (2026-10-27): "is it an Exchange mailbox?"
+
+IT thought PublicationsData had no mailbox and proposed creating a
+mailbox or distribution list first. It already has one. It is not a user
+or shared mailbox; it is the **Microsoft 365 group** created with the
+PublicationsData SharePoint site, and every Microsoft 365 group has its
+own Exchange Online mailbox (Exchange type `GroupMailbox`).
+
+- **Evidence (Graph, read-only, 2026-10-27):** the site's document
+  library (`GET /sites/biomagune.sharepoint.com:/sites/PublicationsData:/drive`)
+  is owned by the group `PublicationsData@biomagune.onmicrosoft.com`
+  (id `8686d407-226b-40f0-ab01-e98cc1a4da06`). The operator is a member
+  and an owner of that group.
+- **Microsoft:** a Microsoft 365 group comes with "A shared Outlook inbox"
+  ([Microsoft 365 Groups overview for administrators](https://learn.microsoft.com/en-us/microsoft-365/admin/create-groups/office-365-groups)).
+  The [permissions page](https://learn.microsoft.com/en-us/exchange/recipients-in-exchange-online/manage-permissions-for-recipients)
+  lists "Microsoft 365 groups" among the recipient types that support
+  **Send as**, so no new mailbox or distribution list is needed.
+- **Why it looked missing:** in the Exchange admin center it's under
+  **Recipients → Groups** (Microsoft 365), not **Mailboxes**. Also the
+  `Get-Recipient` check in the request can miss it. Microsoft: "In cloud
+  environments, to return Microsoft 365 Groups, you need to use the
+  RecipientTypeDetails parameter with the value GroupMailbox". The right
+  check is
+  ([Get-UnifiedGroup](https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/get-unifiedgroup?view=exchange-ps)):
+  `Get-UnifiedGroup -Identity "PublicationsData@biomagune.onmicrosoft.com" | Format-List DisplayName,PrimarySmtpAddress,RecipientTypeDetails,HiddenFromAddressListsEnabled`
+- **A new mailbox wouldn't help:** it couldn't take this address while
+  the group holds it, and this address is the one in the SOPs that
+  people already write to.
+- **Check `HiddenFromAddressListsEnabled`:** if it is `True`, Microsoft's
+  hidden-from-address-lists caveat above may block Send As. Changing it
+  makes the group findable in the address book
+  ([Set-UnifiedGroup](https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/set-unifiedgroup?view=exchange-ps)),
+  so it's a decision for IT and the site owners, not part of the ask.
 
 ---
 
@@ -164,16 +201,24 @@ only PublicationsData. The sent copy lands in the operator's Sent Items.
   IT ask is the Send As grant above. After it, re-run the from-PublicationsData
   send to self: expect `202`, and the received message shows only
   PublicationsData as sender.
+- **2026-10-28, after IT's grant:** the same from-PublicationsData send
+  to self returned `202` (accepted). The grant works.
 
 **Rollout** (new paths go through the operator first, then get promoted):
 
-1. IT grants Send As → re-run the spike send → set
-   `[email] sender_email` (the `.eml` drafts pick it up too).
-2. **Send from the web page:** a "Send" button on each email draft. The
-   operator reads the draft and presses it, and it goes out from
-   PublicationsData. The matching "email sent" step is then recorded
-   automatically (audit source `web:<user>`). The From is always
-   PublicationsData; the event records who pressed the button.
+1. ✅ 2026-10-28: IT granted Send As, the spike send was delivered,
+   `[email] sender_email` is set (the `.eml` drafts pick it up too).
+2. ✅ 2026-10-28: **Send now** on the web page's email steps
+   (`oa_tracker/mailer.py`, switch `[email] send_from_web`). The card
+   shows the email as it will go out, read from the draft file; *Send
+   now* sends exactly that file from PublicationsData through the
+   SharePoint sign-in (same token cache — `Mail.Send.Shared` is redeemed
+   from it silently, no second login) and records the step (audit
+   source `web:<user>`, sender and recipients in the note). One attempt,
+   never retried, and one send at a time per paper, so nothing goes out
+   twice. A refusal records nothing; a timeout says to check Sent Items
+   first. If the sign-in has expired, `oa sharepoint sync` in a
+   terminal renews it for both.
 3. **Automatic sending** by `oa auto`, switched on per email kind
    (reminder, completion, handover, …) in `[automation]` once step 2 has
    run for a while without surprises. If the cached login has expired,

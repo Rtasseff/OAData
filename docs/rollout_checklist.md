@@ -19,10 +19,10 @@ ticked.
   to rotate their exposed "biblio" token. IT asks (token rotation, Entra
   app trim, MariaDB password) have been handed off — **our part is done**;
   they're off this list.
-- ⏳ Office-address sending: operator pursues the Send As grant next
-  week — the ready-made ask is `docs/email_from_office_address.md`.
-  After the grant: set `[email] sender_email` in config.toml and
-  test-send one draft to yourself.
+- ✅ Office-address sending (2026-10-28): Send As granted, test
+  delivered, `[email] sender_email` set, **Send now** on the web page.
+  Next: automatic sending per email kind, once *Send now* has run for a
+  while — `docs/email_from_office_address.md` §Rollout.
 
 ## Next actions (in order)
 
@@ -77,12 +77,9 @@ the sandbox code first (`oa action <pub> reset_zenodo_code`, then let
 
 ## Later / follow-ups
 
-- [ ] **Office-address Send As grant** (next week) →
-      `docs/email_from_office_address.md`, then `[email] sender_email`.
-- [ ] **Auto-send reminder emails** via Graph delegated `Mail.Send` —
-      only after the automation earns trust, spike first; notes in
-      `docs/email_from_office_address.md` §Later. (The old
-      `Mail.Send.Shared` scope no longer exists in the permissions
-      reference — re-verify at implementation time.)
+- [x] **Office-address Send As grant** — done 2026-10-28.
+- [ ] **Auto-send emails** per kind from `oa auto` — after *Send now*
+      has run for a while; `docs/email_from_office_address.md` §Rollout
+      step 3 (`Mail.Send.Shared` works, verified 2026-10-27).
 - [ ] Stage 4 (central-DB write-back) still needs an IT write grant;
       until then `db_updated` stays a manual step.

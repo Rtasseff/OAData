@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from oa_tracker import db, status as st
-from oa_tracker.checks import has_data_contact, reject_reasons
+from oa_tracker.checks import has_data_contact, qa_held, reject_reasons
 from oa_tracker.config import Config
 
 SHEET_COLUMNS = [
@@ -114,6 +114,16 @@ def proposal_row(
     else:
         row["reminder_count"] = "0"
     return row
+
+
+def _qa_recheck_note(conn, pub_id: str) -> str:
+    """For a QA row that is back because the folder changed after a fail."""
+    ev = db.get_last_event(conn, pub_id, "qa_hold")
+    if ev is None:
+        return ""
+    why = f" (\"{ev['note']}\")" if ev.get("note") else ""
+    return (f"Folder changed since QA failed on {ev['ts'][:10]}{why} — "
+            "check the new contents.")
 
 
 def _package_note(archive: dict[str, Any]) -> str:
@@ -336,12 +346,19 @@ def build_rows(config: Config) -> list[dict[str, str]]:
             # stays OPEN_ACTIVE and the reminder row is the right next
             # step — exactly the "QA must precede reminder" rule.
             next_task = st.next_task_for_status(cur_status)
+            # QA failed and the folder is unchanged since: nothing new to
+            # check — the QA row comes back once the folder changes, and
+            # meanwhile the reminder (below) is the next step.
+            if qa_held(archive):
+                next_task = None
             if next_task:
                 task = next_task
                 note = auto_note
 
                 if cur_status == st.OPEN_ACTIVE:
                     note = _join_notes(note, _package_note(archive))
+                    if archive.get("qa_hold_signature"):
+                        note = _join_notes(note, _qa_recheck_note(conn, pub_id))
 
                 # Zenodo-aware rows: when the API integration is on, the
                 # sheet offers the API-backed codes so done=1 performs the

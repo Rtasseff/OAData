@@ -17,11 +17,13 @@ from typing import Any, Sequence
 from django.conf import settings
 
 import fcntl
+import hashlib
 import logging
 import os
 import threading
 
-from oa_tracker import actions, db, status as st
+from oa_tracker import actions, db, mailer, status as st
+from oa_tracker.checks import qa_held
 from oa_tracker.config import Config, load_config
 from oa_tracker.emails import _folder_url, generate_emails
 from oa_tracker.sheet import SHEET_COLUMNS, build_rows
@@ -55,6 +57,7 @@ def decorate(archive: dict[str, Any], config: Config) -> dict[str, Any]:
     archive["is_open"] = archive["status"] in st.OPEN_STATUSES
     archive["can_exempt"] = archive["status"] in guide.EXEMPTION_STATUSES
     archive["folder_url"] = _folder_url(archive, config)
+    archive["qa_held"] = qa_held(archive)
     return archive
 
 
@@ -135,6 +138,29 @@ def email_drafts(config: Config, archive: dict[str, Any], spec: guide.ActionSpec
     )
     d = config.email_drafts_dir
     return [p.name for p in (d / f"{stem}.eml", d / f"{stem}.txt") if p.is_file()]
+
+
+def mail_view(config: Config, archive: dict[str, Any], spec: guide.ActionSpec) -> dict[str, Any]:
+    """The email on a "Send now" card: who it goes to and what it says (the
+    draft file on disk, exactly what would be sent), and whether "Send now"
+    can send it — the reason when not. ``digest`` identifies the file's
+    content, so a send only goes out if the draft is still what was read."""
+    names = email_drafts(config, archive, spec)
+    if not names:
+        return {"can_send": False, "reason": "There is no draft file for this email yet."}
+    path = config.email_drafts_dir / names[0]   # the .eml when there is one
+    try:
+        raw = path.read_bytes()
+        draft = mailer.read_draft(path)
+    except (OSError, ValueError) as e:
+        return {"can_send": False, "reason": f"The draft could not be read ({e})."}
+    reason = mailer.unavailable_reason(config) or (
+        f"Not sendable as is: {draft.problem()}." if draft.problem() else "")
+    return {
+        "draft": draft, "file": path.name, "digest": hashlib.sha256(raw).hexdigest(),
+        "sender": config.email.sender_email,
+        "can_send": not reason, "reason": reason,
+    }
 
 
 def draft_path(config: Config, pub_id: str, filename: str) -> Path | None:
@@ -227,6 +253,17 @@ _PUSH_LOCKS_GUARD = threading.Lock()
 def _push_lock(pub_id: str) -> threading.Lock:
     with _PUSH_LOCKS_GUARD:
         return _PUSH_LOCKS.setdefault(pub_id, threading.Lock())
+
+
+# One "Send now" at a time per paper: a double click, or two people on the
+# same card, must not send the email twice — the second press waits, then
+# finds the step already recorded.
+_SEND_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _send_lock(pub_id: str) -> threading.Lock:
+    with _PUSH_LOCKS_GUARD:
+        return _SEND_LOCKS.setdefault(pub_id, threading.Lock())
 
 
 def push_to_sharepoint(config: Config, pub_id: str) -> None:
@@ -464,11 +501,13 @@ def perform(
     zenodo_code: str = "",
     other: bool = False,
     include: Sequence[str] = (),
+    draft_digest: str = "",
 ) -> Outcome:
     """Record one button press. ``task_code`` is the pending row the button
     sits on (or an always-available decision when ``other``); the button's
     ``choice`` picks what is applied. ``include``: files outside the package
-    ticked on the upload card ("Upload now" only)."""
+    ticked on the upload card ("Upload now" only). ``draft_digest``: the
+    email draft as the page showed it ("Send now" only)."""
     out = Outcome()
     archive = get_archive(config, pub_id)
     if archive is None:
@@ -483,7 +522,9 @@ def perform(
         return out
 
     if other:
-        spec = guide.OTHER.get(task_code)
+        spec = guide.OTHER.get(task_code) or (
+            guide.QA_HELD_OTHER.get(task_code) if archive["qa_held"] else None
+        )
         offered = spec is not None and archive["is_open"]
     else:
         spec = guide.SPECS.get(task_code)
@@ -514,6 +555,8 @@ def perform(
 
     if button.background:
         return start_upload(config, username, archive, task_code, include)
+    if button.sends:
+        return send_email(config, username, archive, task_code, spec, note, draft_digest)
 
     apply_code = button.apply_code or task_code
 
@@ -528,6 +571,59 @@ def perform(
 
     return _record(config, username, archive, task_code, apply_code, button.label,
                    note, pid, url, out)
+
+
+def send_email(config: Config, username: str, archive: dict[str, Any], row_code: str,
+               spec: guide.ActionSpec, note: str, draft_digest: str) -> Outcome:
+    """"Send now": send the step's draft from the office address, then
+    record the step exactly as "Email sent" does. Nothing is recorded when
+    the send fails; a send that went out but could not be recorded says so,
+    so it is never sent twice."""
+    out = Outcome()
+    pub_id = archive["publication_id"]
+    with _send_lock(pub_id):
+        # Re-checked under the lock: a second press waiting here finds the
+        # first one's record and stops.
+        if not any(r["task_code"] == row_code for r in pending_by_pub(config).get(pub_id, [])):
+            out.errors.append("This email is no longer pending — it was already sent or recorded.")
+            return out
+        view = mail_view(config, archive, spec)
+        if not view["can_send"]:
+            out.errors.append(f"Not sent. {view['reason']}")
+            return out
+        if draft_digest != view["digest"]:
+            out.errors.append(
+                "Not sent: the email changed since this page was opened (the drafts "
+                "were regenerated). Read it again below, then press “Send now”."
+            )
+            return out
+        draft = view["draft"]
+        try:
+            mailer.send_draft(config, draft)
+        except mailer.SendError as e:
+            log.warning("Send for %s (%s) failed: %s", pub_id, row_code, e)
+            if e.maybe_sent:
+                out.errors.append(
+                    f"It is not certain the email went out: {e}. Nothing was recorded. "
+                    "Check your Outlook Sent Items: if it is there, press “Email sent”; "
+                    "if not, press “Send now” again."
+                )
+            else:
+                out.errors.append(f"Not sent: {e}. Nothing was recorded.")
+            return out
+
+        sent = f"Sent with “Send now” from {view['sender']} to {draft.to_text}" + (
+            f", cc {draft.cc_text}" if draft.cc else "") + "."
+        _record(config, username, archive, row_code, row_code, "email sent",
+                f"{sent} {note}".strip(), "", "", out)
+    if out.ok:
+        out.messages.insert(0, f"Email sent to {draft.to_text} from {view['sender']}.")
+    else:
+        out.errors.insert(0, (
+            f"The email WAS sent to {draft.to_text}, but recording it failed. Do not "
+            "send it again — press “Email sent” to record it."
+        ))
+    return out
 
 
 def apply_exemption(

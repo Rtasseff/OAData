@@ -27,7 +27,9 @@ irreversible or negative decisions.
 
 Buttons per step: QA has **QA pass** (the next step, creating the
 Zenodo draft, follows on the same page — or the next `oa auto` run does
-it) and **QA fail** (requires a note → `qa_hold`); the draft step has
+it) and **QA fail** (requires a note → `qa_hold`; the QA step then
+stays hidden — "QA failed — waiting for new data" — until the folder
+changes, with **QA pass anyway** under Other actions meanwhile); the draft step has
 **Create the Zenodo draft now** (record + reserved DOI only); the upload
 step — its own step, before the review ([sop.md](sop.md) § *Uploading
 the data to the draft*) — lists the package with decimal sizes and has
@@ -41,9 +43,19 @@ the buttons (up to an hour or more; Zenodo sometimes drops large
 uploads; the automatic upload retries 3 times). *Upload now* is greyed
 out with the reason when the package must go by hand (a file over
 `single_put_max_mb`, or over Zenodo's 50 GB — with the CIC biomaGUNE
-policy text). Email steps have **Email
-sent** (drafts are still written to `output/email_drafts/`, sending
-stays manual; the page offers the draft as a download); the Zenodo
+policy text). Email steps (reminder, handover,
+completion, "not done yet") show the email itself — From, To, Cc,
+Subject and text, read from the draft in `output/email_drafts/` — with
+**Send now** (blue: sends that draft from `[email] sender_email`, the
+office address, and records the step as sent, `web:<user>`, the
+recipients in the note) and **Email sent** (green: records an email
+sent from Outlook; the draft is still a download). *Send now* is greyed
+out with the reason when `[email] send_from_web` is off, no draft
+exists or an address is incomplete; it refuses if the draft was
+regenerated after the page was opened, sends nothing when pressed twice,
+and records nothing when Microsoft refuses the send (see
+[email_from_office_address.md](email_from_office_address.md)). The PI
+step (`contact_pi_manual`) stays personal: no *Send now*. The Zenodo
 review step shows the DOI/URL the system reserved and **confirm**
 records them after checking the record is public (the CLI's
 `zenodo_validated` auto-record path — nothing is typed). For the rare

@@ -44,6 +44,17 @@ def stub_pub_db(request, monkeypatch):
 
 
 @pytest.fixture
+def data_required_mandate(monkeypatch):
+    """The stubbed pub-DB returns no mandate; make it data-required so a
+    scanned paper gets the normal pipeline rows (QA, reminders, …)."""
+    import dataclasses
+    from oa_tracker import pub_db
+    empty = pub_db.enrich_archive
+    monkeypatch.setattr(pub_db, "enrich_archive", lambda c, p: dataclasses.replace(
+        empty(c, p), oa_paper_required=True, oa_data_required=True))
+
+
+@pytest.fixture
 def tmp_db(tmp_path):
     """Create and initialize a temporary database."""
     db_path = tmp_path / "test.sqlite"

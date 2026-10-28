@@ -115,6 +115,46 @@ def _package_state(folder: Path) -> tuple[bool, bool, bool]:
     return (has_zip, has_readme, has_manuscript)
 
 
+# Files that change without anyone touching the data: Office lock files
+# (``~$…``, present while a document is open), hidden files, and the
+# folder-view files Windows writes by itself.
+_SIGNATURE_IGNORED = ("desktop.ini", "thumbs.db")
+
+
+def folder_signature(folder: Path) -> str | None:
+    """Fingerprint of the folder's contents: every file's relative path,
+    size and modification time (to the second), hashed. Any upload,
+    deletion, rename or replacement changes it. ``None`` when the folder
+    can't be read — callers then keep whatever they had."""
+    import hashlib
+    if not folder.is_dir():
+        return None
+    try:
+        entries = sorted(
+            f"{p.relative_to(folder).as_posix()}\t{s.st_size}\t{int(s.st_mtime)}"
+            for p in folder.rglob("*")
+            if p.is_file() and not p.name.startswith(("~$", "."))
+            and p.name.lower() not in _SIGNATURE_IGNORED
+            for s in (p.stat(),)
+        )
+    except OSError:
+        return None
+    return hashlib.sha1("\n".join(entries).encode()).hexdigest()
+
+
+def signature_updates(existing: dict[str, Any] | None, sig: str | None,
+                      now: str) -> dict[str, Any]:
+    """Archive fields for a fresh look at the folder: the fingerprint, and
+    ``last_changed_at`` when it differs from the one on record."""
+    if sig is None:
+        return {}
+    out: dict[str, Any] = {"folder_signature": sig}
+    old = (existing or {}).get("folder_signature")
+    if old is not None and old != sig:
+        out["last_changed_at"] = now
+    return out
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -227,6 +267,7 @@ def _scan_placeholder(
         "package_has_readme": int(has_readme),
         "package_has_manuscript": int(has_manuscript),
         "package_checked_at": now,
+        **signature_updates(existing, folder_signature(folder), now),
     }
     if existing["unexpected_missing_folder"]:
         updates["unexpected_missing_folder"] = 0
@@ -307,6 +348,9 @@ def scan_folders(config: Config) -> ScanResult:
                 }
 
                 existing = db.get_archive(conn, pub_id)
+                package_kw.update(
+                    signature_updates(existing, folder_signature(folder), now)
+                )
 
                 enriched: dict[str, Any] = {}
                 if pub_conn is not None:

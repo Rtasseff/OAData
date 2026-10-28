@@ -31,6 +31,7 @@ class Button:
     # question the "have you done this?" popup asks. Such buttons are green
     # with a ✓; buttons that make the system act keep their own style.
     did: str = ""
+    sends: bool = False     # sends the step's email draft from the office address, then records the row
 
 
 @dataclass(frozen=True)
@@ -66,11 +67,16 @@ ELSEWHERE_STEP = (
 )
 
 _EMAIL_STEPS = (
-    "Open the draft below (it opens in Outlook as a ready-to-send message), "
-    "review it and send it.",
-    "Then confirm here that it was sent — the draft and this action stop "
-    "recurring once it is recorded.",
+    "Read the email below. “Send now” sends it from the office address and "
+    "records it as sent, in one go.",
+    "Or open the draft in Outlook, send it from there, then press “Email "
+    "sent”. Once it is recorded, the draft and this action stop recurring.",
 )
+
+# "Send now" on the email steps (oa_tracker.mailer); "Email sent" stays for
+# an email sent from Outlook.
+SEND = Button("send", "Send now", sends=True)
+EMAIL_SENT = Button("done", "Email sent", did="Have you sent this email from Outlook?")
 
 UPLOAD = ActionSpec(
     title="Upload the data to the Zenodo draft",
@@ -130,7 +136,7 @@ SPECS: dict[str, ActionSpec] = {
     "remind_sent": ActionSpec(
         title="Send the reminder email",
         steps=_EMAIL_STEPS,
-        buttons=(Button("done", "Email sent", did="Have you sent this email from Outlook?"),),
+        buttons=(SEND, EMAIL_SENT),
         email_stem="reminder_{pub_id}_{n}",
     ),
     "contact_pi_manual": ActionSpec(
@@ -151,19 +157,19 @@ SPECS: dict[str, ActionSpec] = {
     "handover_sent": ActionSpec(
         title="Send the handover notice to the new data contact",
         steps=_EMAIL_STEPS,
-        buttons=(Button("done", "Email sent", did="Have you sent this email from Outlook?"),),
+        buttons=(SEND, EMAIL_SENT),
         email_stem="handover_{pub_id}",
     ),
     "completion_sent": ActionSpec(
         title="Send the completion email (data archived)",
         steps=_EMAIL_STEPS,
-        buttons=(Button("done", "Email sent", did="Have you sent this email from Outlook?"),),
+        buttons=(SEND, EMAIL_SENT),
         email_stem="completion_{pub_id}",
     ),
     "reject_done_sent": ActionSpec(
         title="Send the “not done yet” email",
         steps=_EMAIL_STEPS,
-        buttons=(Button("done", "Email sent", did="Have you sent this email from Outlook?"),),
+        buttons=(SEND, EMAIL_SENT),
         email_stem="reject_done_{pub_id}",
     ),
     "reject_done": ActionSpec(
@@ -356,6 +362,19 @@ OTHER: dict[str, ActionSpec] = {
 }
 
 
+# Offered under "Other actions" only while QA is on hold (failed, folder
+# unchanged since — the QA step itself is then hidden): passing it anyway,
+# e.g. when the data contact explained that the package is fine after all.
+QA_HELD_OTHER: dict[str, ActionSpec] = {
+    "qa_pass": ActionSpec(
+        title="QA pass anyway",
+        steps=("The QA check is hidden because it failed and nothing in the "
+               "folder has changed since. If the package is fine after all "
+               "(for example the data contact explained), pass it here.",),
+        buttons=(Button("pass", "QA pass"),),
+        note_hint="Note (optional): why it passes after all",
+    ),
+}
 
 # ── Exemptions ────────────────────────────────────────────────────────
 # The same closed list as the Tracker List's "Propose exemption" column,

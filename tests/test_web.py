@@ -64,8 +64,16 @@ def test_qa_pass_advances_and_audits_the_user(test_config):
     assert (event["action_code"], event["source"]) == ("qa_pass", "web:alice")
 
 
+def _folder(config, pub_id="100"):
+    folder = config.sharepoint_root / pub_id
+    folder.mkdir()
+    (folder / "data.csv").write_text("1,2")
+    return folder
+
+
 def test_qa_fail_needs_a_note_and_holds(test_config):
-    _insert(test_config.database, "100", OPEN_ACTIVE)
+    _insert(test_config.database, "100", OPEN_ACTIVE,
+            folder_path=str(_folder(test_config)))
     out = tracker.perform(test_config, "alice", "100", "qa_pass", "fail", OPEN_ACTIVE)
     assert not out.ok and "note" in out.errors[0]
     assert tracker.events_for(test_config, "100") == []
@@ -75,8 +83,67 @@ def test_qa_fail_needs_a_note_and_holds(test_config):
     assert out.ok
     assert _status(test_config, "100") == OPEN_ACTIVE
     assert tracker.events_for(test_config, "100")[0]["action_code"] == "qa_hold"
-    # QA is offered again afterwards.
+    # Not asked for again while the folder is as it was reviewed.
+    assert "100" not in tracker.pending_by_pub(test_config)
+    assert tracker.get_archive(test_config, "100")["qa_held"]
+
+
+def test_qa_check_returns_when_the_folder_changes(test_config, data_required_mandate):
+    from oa_tracker.scanner import scan_folders
+    folder = _folder(test_config)
+    def qa_rows():
+        return [r for r in tracker.pending_by_pub(test_config).get("100", [])
+                if r["task_code"] == "qa_pass"]
+
+    scan_folders(test_config)                      # new_active, fingerprinted
+    assert qa_rows()
+    tracker.perform(test_config, "alice", "100", "qa_pass", "fail", OPEN_ACTIVE,
+                    note="data not zipped")
+    assert qa_rows() == []
+
+    scan_folders(test_config)                      # nothing changed: still held
+    assert qa_rows() == []
+    # An Office lock file (someone has a document open) isn't a change.
+    (folder / "~$notes.docx").write_text("lock")
+    scan_folders(test_config)
+    assert qa_rows() == []
+
+    (folder / "data.zip").write_bytes(b"zip")    # the contact uploads
+    scan_folders(test_config)
+    rows = qa_rows()
+    assert len(rows) == 1
+    assert "Folder changed since QA failed on" in rows[0]["note"]
+    assert '"data not zipped"' in rows[0]["note"]
+    assert not tracker.get_archive(test_config, "100")["qa_held"]
+
+
+def test_qa_fail_without_a_readable_folder_keeps_asking(test_config):
+    """No folder to fingerprint → no hold recorded; QA stays on offer."""
+    _insert(test_config.database, "100", OPEN_ACTIVE)   # folder doesn't exist
+    out = tracker.perform(test_config, "alice", "100", "qa_pass", "fail", OPEN_ACTIVE,
+                          note="README missing")
+    assert out.ok
     assert [r["task_code"] for r in tracker.pending_by_pub(test_config)["100"]] == ["qa_pass"]
+
+
+def test_qa_pass_anyway_only_while_held(client, test_config):
+    _insert(test_config.database, "100", OPEN_ACTIVE,
+            folder_path=str(_folder(test_config)))
+    anyway = dict(other=True)
+    out = tracker.perform(test_config, "alice", "100", "qa_pass", "pass", OPEN_ACTIVE, **anyway)
+    assert not out.ok                              # not held: use the QA card
+    assert "QA failed — waiting" not in client.get("/paper/100/").content.decode()
+
+    tracker.perform(test_config, "alice", "100", "qa_pass", "fail", OPEN_ACTIVE,
+                    note="no README")
+    page = client.get("/paper/100/").content.decode()
+    assert "QA failed — waiting for new data" in page and "no README" in page
+    assert "QA pass anyway" in page
+    assert "QA failed — waiting for new data" in client.get("/").content.decode()
+
+    out = tracker.perform(test_config, "alice", "100", "qa_pass", "pass", OPEN_ACTIVE, **anyway)
+    assert out.ok, out.errors
+    assert _status(test_config, "100") == OPEN_READY_FOR_ZENODO_DRAFT
 
 
 def test_stray_pid_cannot_fast_track(test_config):
@@ -109,6 +176,106 @@ def test_email_sent_cannot_be_recorded_twice(test_config):
     assert not tracker.perform(test_config, "alice", "100", "handover_sent", "done", OPEN_INACTIVE).ok
     sent = [e for e in tracker.events_for(test_config, "100") if e["action_code"] == "handover_sent"]
     assert len(sent) == 1
+
+
+@pytest.fixture
+def outbox(test_config, monkeypatch):
+    """"Send now" switched on, with Microsoft replaced by a list: nothing
+    in these tests can send a real email."""
+    from oa_tracker import mailer
+    from oa_tracker.config import EmailSettings, SharePointSettings
+    test_config.email = EmailSettings(sender_email="office@cicbiomagune.es",
+                                      send_from_web=True, draft_format="eml")
+    test_config.sharepoint = SharePointSettings(client_id="test-client")
+    sent = []
+    monkeypatch.setattr(mailer, "send_draft", lambda config, draft: sent.append(draft))
+    return sent
+
+
+def _handover_pending(config, pub_id="100"):
+    """A pending handover notice with its draft on disk, as `oa emails` writes it."""
+    from oa_tracker.emails import _render_eml
+    _insert(config.database, pub_id, OPEN_INACTIVE)
+    with get_connection(config.database) as conn:
+        insert_event(conn, pub_id, "data_contact_handover", OPEN_INACTIVE, OPEN_INACTIVE, "auto")
+    (config.email_drafts_dir / f"handover_{pub_id}.eml").write_bytes(_render_eml(
+        "To: Dana Contact <dc@cicbiomagune.es>\n"
+        f"Subject: You are now the data contact for publication {pub_id}\n\n"
+        "Dear Dana,\n\nYou are the data contact now.\n", config))
+
+
+def _mail(config, pub_id="100", code="handover_sent"):
+    return tracker.mail_view(config, tracker.get_archive(config, pub_id), guide.SPECS[code])
+
+
+def test_send_now_sends_the_draft_and_records_it(test_config, outbox):
+    _handover_pending(test_config)
+    mail = _mail(test_config)
+    assert mail["can_send"], mail["reason"]
+    out = tracker.perform(test_config, "alice", "100", "handover_sent", "send", OPEN_INACTIVE,
+                          draft_digest=mail["digest"])
+    assert out.ok, out.errors
+    assert [d.to_text for d in outbox] == ["Dana Contact <dc@cicbiomagune.es>"]
+    assert "Email sent to Dana Contact" in out.messages[0]
+    event = tracker.events_for(test_config, "100")[0]
+    assert (event["action_code"], event["source"]) == ("handover_sent", "web:alice")
+    assert "Send now" in event["note"] and "office@cicbiomagune.es" in event["note"]
+    # A second press (double click, or a second person) sends nothing.
+    again = tracker.perform(test_config, "alice", "100", "handover_sent", "send", OPEN_INACTIVE,
+                            draft_digest=mail["digest"])
+    assert not again.ok and len(outbox) == 1
+
+
+def test_send_now_refuses_a_draft_that_changed_since_it_was_read(test_config, outbox):
+    _handover_pending(test_config)
+    out = tracker.perform(test_config, "alice", "100", "handover_sent", "send", OPEN_INACTIVE,
+                          draft_digest="what the page showed before the drafts were regenerated")
+    assert not out.ok and "changed" in out.errors[0]
+    assert outbox == []
+    assert tracker.events_for(test_config, "100")[0]["action_code"] == "data_contact_handover"
+
+
+@pytest.mark.parametrize("maybe_sent, says", [(False, "Not sent"), (True, "Sent Items")])
+def test_a_failed_send_records_nothing(test_config, outbox, monkeypatch, maybe_sent, says):
+    from oa_tracker import mailer
+
+    def refuse(config, draft):
+        raise mailer.SendError("Microsoft refused it", maybe_sent=maybe_sent)
+    monkeypatch.setattr(mailer, "send_draft", refuse)
+    _handover_pending(test_config)
+    out = tracker.perform(test_config, "alice", "100", "handover_sent", "send", OPEN_INACTIVE,
+                          draft_digest=_mail(test_config)["digest"])
+    assert not out.ok and says in out.errors[0]
+    assert "handover_sent" not in {e["action_code"] for e in tracker.events_for(test_config, "100")}
+    assert any(r["task_code"] == "handover_sent"
+               for r in tracker.pending_by_pub(test_config)["100"])
+
+
+def test_send_now_on_a_reminder_counts_it(test_config, outbox):
+    from oa_tracker.emails import _render_eml
+    _insert(test_config.database, "100", OPEN_INACTIVE, next_reminder_at="2026-01-01T00:00:00",
+            pub_db_last_refreshed_at="2026-01-01T00:00:00", oa_data_required=1)
+    assert any(r["task_code"] == "remind_sent" for r in tracker.pending_by_pub(test_config)["100"])
+    (test_config.email_drafts_dir / "reminder_100_1.eml").write_bytes(_render_eml(
+        "To: Dana <dc@cicbiomagune.es>\nSubject: Reminder\n\nPlease upload.\n", test_config))
+    out = tracker.perform(test_config, "alice", "100", "remind_sent", "send", OPEN_INACTIVE,
+                          draft_digest=_mail(test_config, code="remind_sent")["digest"])
+    assert out.ok, out.errors
+    assert len(outbox) == 1
+    assert tracker.get_archive(test_config, "100")["reminder_count"] == 1
+
+
+def test_send_now_is_off_unless_configured(test_config, monkeypatch):
+    from oa_tracker import mailer
+    monkeypatch.setattr(mailer, "send_draft", lambda *a: pytest.fail("must not send"))
+    _handover_pending(test_config)
+    mail = _mail(test_config)
+    assert not mail["can_send"] and "send_from_web" in mail["reason"]
+    out = tracker.perform(test_config, "alice", "100", "handover_sent", "send", OPEN_INACTIVE,
+                          draft_digest=mail["digest"])
+    assert not out.ok
+    # "Email sent" (sent from Outlook) still records it.
+    assert tracker.perform(test_config, "alice", "100", "handover_sent", "done", OPEN_INACTIVE).ok
 
 
 def test_close_exception_needs_a_note(test_config):
@@ -764,3 +931,27 @@ def test_large_file_upload_now_stays_available_with_a_warning(client, test_confi
 def test_small_package_has_no_large_file_warning(client, test_config, tmp_path, zen):
     _system_draft(test_config, tmp_path)
     assert "Large file:" not in client.get("/paper/100/").content.decode()
+
+
+def test_paper_page_shows_the_email_and_sends_it(client, test_config, outbox):
+    _handover_pending(test_config)
+    html = client.get("/paper/100/").content.decode()
+    assert "Dana Contact &lt;dc@cicbiomagune.es&gt;" in html
+    assert "You are the data contact now." in html
+    assert "office@cicbiomagune.es" in html
+    digest = _mail(test_config)["digest"]
+    assert f'name="draft_digest" value="{digest}"' in html
+    assert 'value="send"' in html and "Send this email now from" in html
+
+    r = client.post("/paper/100/do/", {
+        "task_code": "handover_sent", "choice": "send", "expected_status": OPEN_INACTIVE,
+        "draft_digest": digest, "note": "",
+    }, follow=True)
+    assert len(outbox) == 1
+    assert "Email sent to Dana Contact" in r.content.decode()
+
+
+def test_send_now_is_greyed_out_with_the_reason(client, test_config):
+    _handover_pending(test_config)
+    html = client.get("/paper/100/").content.decode()
+    assert "“Send now” is not available" in html and "send_from_web" in html

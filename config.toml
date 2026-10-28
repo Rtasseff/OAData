@@ -96,7 +96,10 @@ auto_reject_done = false
 [email]                       # outbound email drafts produced by `oa emails`
 sender_name = "Ryan Tasseff"
 sender_title = "Data Quality Officer"
-sender_email = ""             # if set, used as the From header in .eml drafts
+sender_email = "PublicationsData@biomagune.onmicrosoft.com"   # From of .eml drafts and of "Send now" (Send As granted 2026-10-28)
+# "Send now" on the web page's email steps: sends the draft from sender_email through
+# Microsoft Graph (the SharePoint sign-in) and records it as sent. false → button greyed out.
+send_from_web = true
 # How `oa emails` writes drafts:
 #   "eml"  → .eml files: double-click opens a pre-addressed draft in Outlook (review, then Send).
 #   "txt"  → plain-text drafts (the original behavior).  *** ROLLBACK: set this to "txt" ***

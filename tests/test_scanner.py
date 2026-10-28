@@ -748,3 +748,40 @@ def test_closed_archive_without_folder_is_not_flagged(test_config):
                    status="CLOSED_EXCEPTION")
     result = scan_folders(test_config)
     assert result.closed_folder_present == [] and result.closed_folder_removed == []
+
+
+def test_folder_signature_tracks_content_changes(tmp_path):
+    from oa_tracker.scanner import folder_signature
+    folder = tmp_path / "3302"
+    assert folder_signature(folder) is None            # no folder: unknown
+    folder.mkdir()
+    (folder / "data.csv").write_text("1,2")
+    first = folder_signature(folder)
+    assert folder_signature(folder) == first          # stable
+    for junk in ("~$draft.docx", ".hidden", "desktop.ini", "Thumbs.db"):
+        (folder / junk).write_text("x")
+    assert folder_signature(folder) == first          # noise ignored
+    (folder / "sub").mkdir()
+    (folder / "sub" / "more.csv").write_text("3")
+    assert folder_signature(folder) != first          # added, even nested
+    (folder / "sub" / "more.csv").unlink()
+    assert folder_signature(folder) == first          # removed again
+    (folder / "data.csv").write_text("1,2,3")
+    assert folder_signature(folder) != first          # replaced (size)
+
+
+def test_scan_records_last_change(test_config):
+    pub_dir = test_config.sharepoint_root / "1010"
+    pub_dir.mkdir()
+    (pub_dir / "data.txt").write_text("stuff")
+    scan_folders(test_config)
+    with get_connection(test_config.database) as conn:
+        conn.execute("UPDATE archives SET last_changed_at = '2026-01-01T00:00:00'")
+    scan_folders(test_config)                          # unchanged
+    with get_connection(test_config.database) as conn:
+        a = get_archive(conn, "1010")
+    assert a["last_changed_at"] == "2026-01-01T00:00:00" and a["folder_signature"]
+    (pub_dir / "more.txt").write_text("new")
+    scan_folders(test_config)
+    with get_connection(test_config.database) as conn:
+        assert get_archive(conn, "1010")["last_changed_at"] != "2026-01-01T00:00:00"

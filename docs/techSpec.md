@@ -74,6 +74,15 @@ Tables (minimum):
   * `zenodo_env` TEXT NULL — `sandbox`/`production`; pins which Zenodo
     instance a draft lives on so the two can never be confused
 
+  QA hold (v6):
+  * `folder_signature` TEXT NULL — fingerprint of the folder's files
+    (relative path + size + mtime, hashed; `~$`/hidden files,
+    `desktop.ini`, `Thumbs.db` ignored), refreshed by every scan; a
+    change bumps `last_changed_at`
+  * `qa_hold_signature` TEXT NULL — the fingerprint when QA last failed
+    (`qa_hold`). While it equals `folder_signature` the QA step is hidden
+    (`checks.qa_held`): no `qa_pass` sheet row, no auto-QC
+
   The executable source of truth for the schema is `_SCHEMA_SQL` +
   the `_Vn_TO_Vm_ALTERS` lists in `src/oa_tracker/db.py`.
 
@@ -152,7 +161,7 @@ Pipeline + closure (v1):
 * `remind_sent` (updates `last_notified_at`, increments reminder count)
 * `contact_pi_manual` (final-reminder slot — operator contacts PI directly)
 * `qa_pass` (→ `OPEN_READY_FOR_ZENODO_DRAFT`)
-* `qa_hold` (keeps `OPEN_ACTIVE`, writes note)
+* `qa_hold` (keeps `OPEN_ACTIVE`, writes note, records the folder fingerprint — QA isn't offered again until the folder changes)
 * `zenodo_draft_created` (→ `OPEN_ZENODO_DRAFT_CREATED`)
 * `zenodo_validated` (→ `OPEN_ZENODO_DRAFT_VALIDATED`)
 * `zenodo_published` (→ `OPEN_ZENODO_PUBLISHED`, requires PID/URL if available)

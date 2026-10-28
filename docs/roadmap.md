@@ -1683,3 +1683,36 @@ Web UI shared on the internal network (2026-10-22):
 - Login levels (2026-10-23, operator decision): no flag = read only
   (buttons hidden, writes refused), Staff = read and write, Superuser =
   also manages logins (*Logins* link in the header). `oa_web/access.py`.
+
+QA fail sticks until the folder changes (2026-10-27, schema v6):
+
+- 3302: QA failed on the web ("data not zipped, no preprint, no readme")
+  and the QA step was straight back on the page and the sheet —
+  `last_changed_at` only ever recorded activation, so nothing knew the
+  folder hadn't changed. The scanner now fingerprints every folder
+  (`folder_signature`: path + size + mtime of each file, hashed; Office
+  lock/hidden/desktop.ini/Thumbs.db ignored) and bumps `last_changed_at`
+  when it changes. `qa_hold` stores the fingerprint of the folder as
+  reviewed (`qa_hold_signature`, read live at the press). While the two
+  match (`checks.qa_held`) the sheet has no `qa_pass` row, the web shows
+  "QA failed — waiting for new data", and auto-QC won't pass it on a
+  'done' tick (digest mismatch line instead). Any change brings QA back
+  with "Folder changed since QA failed on …". Override: *QA pass anyway*
+  under Other actions (web) or `oa action <pub> qa_pass`.
+- Holds made before v6 have no fingerprint, so their QA step shows once
+  more; failing it again records one.
+
+Emails from the office address (2026-10-28):
+
+- IT granted Send As on PublicationsData (a Microsoft 365 group mailbox,
+  not a user/shared mailbox — IT's "is it a mailbox?" is answered in
+  [email_from_office_address.md](email_from_office_address.md)). The
+  from-PublicationsData test send was delivered.
+- `[email] sender_email` = PublicationsData: `.eml` drafts open in
+  Outlook already from the office address.
+- **Send now** on the web's email steps (`oa_tracker/mailer.py`,
+  `[email] send_from_web`): shows the draft as it will go out, sends that
+  file through Graph `/me/sendMail` as PublicationsData, records the
+  step. No retry, one send per paper at a time, refused if the draft
+  changed since the page loaded; nothing recorded on failure. Not on the
+  PI step. Automatic sending (rollout step 3) is next, per email kind.

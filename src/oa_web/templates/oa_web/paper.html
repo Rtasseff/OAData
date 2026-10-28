@@ -15,6 +15,12 @@
   <form method="post" action="{% url 'paper_action' a.publication_id %}" class="msgform">{% csrf_token %}<input type="hidden" name="form" value="sp_push"><button type="submit" class="btn">Try again</button></form>{% endif %}</div>{% endif %}
 <div class="cols">
 <div>
+  {% if qa_hold %}
+  <div class="card heldqa">
+    <h2>QA failed — waiting for new data</h2>
+    <p class="small" style="margin:0">QA failed on {{ qa_hold.when }}{% if qa_hold.note %}: “{{ qa_hold.note }}”{% endif %}. The folder hasn't changed since, so the QA check is hidden. It comes back by itself when files in the folder are added, changed or removed{% if can_act %} (or pass it anyway under Other actions){% endif %}.</p>
+  </div>
+  {% endif %}
   {% for c in cards %}
   <div class="card action" id="{{ c.row.task_code }}">
     <span class="code">{{ c.row.task_code }}</span>
@@ -34,6 +40,18 @@
     {% if c.spec.email_stem and not c.drafts %}
     <div class="notebox">No draft file for this email yet — it is written to output/email_drafts by the next automatic run{% if not a.data_contact_email or a.data_contact_email == "TBD" %} (this paper has no data contact; set one under Other actions){% endif %}.</div>
     {% endif %}
+    {% if c.mail.draft %}
+    <div class="mail">
+      <dl class="kv">
+        <dt>From</dt><dd>{% if c.mail.sender %}{{ c.mail.sender }}{% else %}— (no office address set){% endif %}</dd>
+        <dt>To</dt><dd>{{ c.mail.draft.to_text }}</dd>
+        {% if c.mail.draft.cc %}<dt>Cc</dt><dd>{{ c.mail.draft.cc_text }}</dd>{% endif %}
+        <dt>Subject</dt><dd>{{ c.mail.draft.subject }}</dd>
+      </dl>
+      <pre class="mailbody">{{ c.mail.draft.body }}</pre>
+    </div>
+    {% endif %}
+    {% if c.mail and not c.mail.can_send and can_act %}<p class="small">“Send now” is not available: {{ c.mail.reason }}</p>{% endif %}
 
     {% if "doi" in c.spec.links %}
     <dl class="kv" style="margin-bottom:14px">
@@ -88,12 +106,13 @@
     <form method="post" action="{% url 'paper_action' a.publication_id %}"{% if c.upload %} id="upload-{{ c.row.task_code }}"{% endif %}>{% csrf_token %}
       <input type="hidden" name="task_code" value="{{ c.row.task_code }}">
       <input type="hidden" name="expected_status" value="{{ a.status }}">
+      {% if c.mail.digest %}<input type="hidden" name="draft_digest" value="{{ c.mail.digest }}">{% endif %}
       <div class="fields">
         {% if "zenodo_code" in c.spec.fields %}<div><label>Zenodo record id (numeric)</label><input type="text" name="zenodo_code" inputmode="numeric" value="{{ a.zenodo_code|default:'' }}"></div>{% endif %}
         <div><label>{{ c.spec.note_hint }}</label><textarea name="note" rows="2"></textarea></div>
       </div>
       <div class="btns">
-        {% for b in c.main %}<button class="btn {{ b.style }}{% if b.did %} did{% endif %}" type="submit" name="choice" value="{{ b.choice }}"{% if b.did %} data-did="{{ b.did }}" data-did-key="{{ c.row.task_code }}:{{ b.choice }}"{% endif %}{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}{% if c.upload and c.upload.job.state == "running" %} disabled{% elif b.background and not c.upload.can_auto %} disabled title="Not available for this package — see above"{% endif %}>{{ b.label }}</button>{% endfor %}
+        {% for b in c.main %}<button class="btn {{ b.style }}{% if b.did %} did{% endif %}" type="submit" name="choice" value="{{ b.choice }}"{% if b.did %} data-did="{{ b.did }}" data-did-key="{{ c.row.task_code }}:{{ b.choice }}"{% endif %}{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}{% if b.sends %}{% if c.mail.can_send %} onclick="return confirm('Send this email now from {{ c.mail.sender|escapejs }} to {{ c.mail.draft.to_text|escapejs }}?')"{% else %} disabled title="{{ c.mail.reason }}"{% endif %}{% endif %}{% if c.upload and c.upload.job.state == "running" %} disabled{% elif b.background and not c.upload.can_auto %} disabled title="Not available for this package — see above"{% endif %}>{{ b.label }}</button>{% endfor %}
       </div>
       {% if c.has_did %}<p class="small didhint"><span class="didmark">✓</span> Green buttons only <strong>record</strong> something you have already done yourself — they do not do it for you. Blue buttons make the system do it.</p>{% endif %}
     </form>

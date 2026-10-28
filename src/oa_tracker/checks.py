@@ -30,6 +30,16 @@ def folder_empty(archive: dict[str, Any]) -> str | None:
     return None
 
 
+def qa_held(archive: dict[str, Any]) -> bool:
+    """QA was failed and the folder is exactly as it was then (same
+    fingerprint): there is nothing new to check, so the QA step stays off
+    the sheet, the web page and auto-QC until the data contact changes
+    something in the folder."""
+    sig = archive.get("qa_hold_signature")
+    return (archive.get("status") == st.OPEN_ACTIVE and sig is not None
+            and sig == archive.get("folder_signature"))
+
+
 REJECT_RULES: tuple[Callable[[dict[str, Any]], str | None], ...] = (
     folder_empty,
 )

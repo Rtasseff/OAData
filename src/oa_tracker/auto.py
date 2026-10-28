@@ -44,7 +44,7 @@ from datetime import datetime
 from pathlib import Path
 
 from oa_tracker import db, status as st
-from oa_tracker.checks import has_data_contact, reject_reasons
+from oa_tracker.checks import has_data_contact, qa_held, reject_reasons
 from oa_tracker.config import Config
 
 
@@ -440,6 +440,15 @@ def _advance(config: Config, result: AutoRunResult) -> None:
             if a["status"] != st.OPEN_ACTIVE or not a.get("user_done_flag"):
                 continue
             if a["publication_id"] in rejected:
+                continue
+            if qa_held(a):
+                # The operator failed QA on exactly this folder; a 'done'
+                # tick alone doesn't overturn that.
+                result.mismatches.append(
+                    f"{a['publication_id']}: user says done but QA failed and "
+                    "the folder hasn't changed since — not auto-passing; QA "
+                    "comes back on the sheet when the folder changes"
+                )
                 continue
             if package_complete(a) and _data_required(a):
                 r, old_s, new_s = apply_single(

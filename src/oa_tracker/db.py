@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -68,7 +68,11 @@ CREATE TABLE IF NOT EXISTS archives (
     zenodo_env               TEXT,
     -- v5: manuscript rule — a .doc/.docx/.pdf beside the zip (a pre-print
     -- version of the paper), required by the updated archiving rules
-    package_has_manuscript   INTEGER
+    package_has_manuscript   INTEGER,
+    -- v6: folder fingerprint (scanner) and the fingerprint the operator
+    -- saw when QA failed — the QA step stays hidden while they match
+    folder_signature         TEXT,
+    qa_hold_signature        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -138,6 +142,15 @@ _V4_TO_V5_ALTERS = [
     "ALTER TABLE archives ADD COLUMN package_has_manuscript INTEGER",
 ]
 
+# v5 → v6: folder fingerprint. The scanner stores a fingerprint of every
+# folder's files (and bumps last_changed_at when it changes); a QA fail
+# records the fingerprint the operator reviewed, so QA isn't asked for
+# again until the data contact changes something in the folder.
+_V5_TO_V6_ALTERS = [
+    "ALTER TABLE archives ADD COLUMN folder_signature TEXT",
+    "ALTER TABLE archives ADD COLUMN qa_hold_signature TEXT",
+]
+
 
 def init_db(path: Path) -> None:
     """Create the database and tables; run any pending migrations."""
@@ -167,6 +180,9 @@ def _migrate(conn: sqlite3.Connection, from_version: int) -> None:
             conn.execute(stmt)
     if from_version < 5:
         for stmt in _V4_TO_V5_ALTERS:
+            conn.execute(stmt)
+    if from_version < 6:
+        for stmt in _V5_TO_V6_ALTERS:
             conn.execute(stmt)
     conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
 
