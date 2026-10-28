@@ -44,17 +44,21 @@ uploads; the automatic upload retries 3 times). *Upload now* is greyed
 out with the reason when the package must go by hand (a file over
 `single_put_max_mb`, or over Zenodo's 50 GB — with the CIC biomaGUNE
 policy text). Email steps (reminder, handover,
-completion, "not done yet") show the email itself — From, To, Cc,
-Subject and text, read from the draft in `output/email_drafts/` — with
-**Send now** (blue: sends that draft from `[email] sender_email`, the
-office address, and records the step as sent, `web:<user>`, the
-recipients in the note) and **Email sent** (green: records an email
-sent from Outlook; the draft is still a download). *Send now* is greyed
-out with the reason when `[email] send_from_web` is off, no draft
-exists or an address is incomplete; it refuses if the draft was
-regenerated after the page was opened, sends nothing when pressed twice,
-and records nothing when Microsoft refuses the send (see
-[email_from_office_address.md](email_from_office_address.md)). The PI
+completion, "not done yet") show the email in editable boxes — To, Cc,
+Subject and text, filled from the draft in `output/email_drafts/`
+(written on the spot when the step came due after the morning run) —
+with **Send now** (blue: sends what the boxes hold from `[email]
+sender_email`, the office address, and records the step as sent,
+`web:<user>`, recipients and "edited before sending" in the note) and
+**Email sent** (green: records an email sent from Outlook; the draft is
+still a download). Read-only logins see the email without the boxes.
+*Send now* is greyed out with the reason when `[email] send_from_web` is
+off or there is no draft (no data contact); it refuses an incomplete
+address, sends nothing when pressed twice, and records nothing when
+Microsoft refuses the send — the edits are kept on the page for another
+try (see [email_from_office_address.md](email_from_office_address.md)).
+These are the emails the 07:00 run did not send itself: those for a
+paper at QA, kinds switched off, or ones that came due since. The PI
 step (`contact_pi_manual`) stays personal: no *Send now*. The Zenodo
 review step shows the DOI/URL the system reserved and **confirm**
 records them after checking the record is public (the CLI's

@@ -205,7 +205,11 @@ def _handover_pending(config, pub_id="100"):
 
 
 def _mail(config, pub_id="100", code="handover_sent"):
-    return tracker.mail_view(config, tracker.get_archive(config, pub_id), guide.SPECS[code])
+    return tracker.mail_view(config, tracker.get_archive(config, pub_id), code)
+
+
+def _fields(mail, **changes):
+    return {**{k: mail[k] for k in ("to", "cc", "subject", "body")}, **changes}
 
 
 def test_send_now_sends_the_draft_and_records_it(test_config, outbox):
@@ -213,30 +217,47 @@ def test_send_now_sends_the_draft_and_records_it(test_config, outbox):
     mail = _mail(test_config)
     assert mail["can_send"], mail["reason"]
     out = tracker.perform(test_config, "alice", "100", "handover_sent", "send", OPEN_INACTIVE,
-                          draft_digest=mail["digest"])
+                          mail=_fields(mail))
     assert out.ok, out.errors
     assert [d.to_text for d in outbox] == ["Dana Contact <dc@cicbiomagune.es>"]
+    assert outbox[0].body == "Dear Dana,\n\nYou are the data contact now.\n"
     assert "Email sent to Dana Contact" in out.messages[0]
     event = tracker.events_for(test_config, "100")[0]
     assert (event["action_code"], event["source"]) == ("handover_sent", "web:alice")
     assert "Send now" in event["note"] and "office@cicbiomagune.es" in event["note"]
+    assert "edited" not in event["note"]
     # A second press (double click, or a second person) sends nothing.
     again = tracker.perform(test_config, "alice", "100", "handover_sent", "send", OPEN_INACTIVE,
-                            draft_digest=mail["digest"])
-    assert not again.ok and len(outbox) == 1
+                            mail=_fields(mail))
+    assert not again.ok and len(outbox) == 1 and not again.keep_mail
 
 
-def test_send_now_refuses_a_draft_that_changed_since_it_was_read(test_config, outbox):
+def test_send_now_sends_the_email_as_edited(test_config, outbox):
+    _handover_pending(test_config)
+    mail = _mail(test_config)
+    out = tracker.perform(test_config, "alice", "100", "handover_sent", "send", OPEN_INACTIVE,
+                          mail=_fields(mail, cc="Pat PI <pi@cicbiomagune.es>",
+                                       body="Dear Dana,\r\n\r\nA personal line.\r\n"))
+    assert out.ok, out.errors
+    sent = outbox[0]
+    assert sent.cc == (("Pat PI", "pi@cicbiomagune.es"),)
+    assert sent.body == "Dear Dana,\n\nA personal line.\n"      # browser CRLFs normalised
+    assert sent.subject == mail["subject"]
+    note = tracker.events_for(test_config, "100")[0]["note"]
+    assert "edited before sending" in note and "cc Pat PI" in note
+
+
+@pytest.mark.parametrize("to", ["", "Dana", "data contact <TBD>"])
+def test_send_now_refuses_an_incomplete_address(test_config, outbox, to):
     _handover_pending(test_config)
     out = tracker.perform(test_config, "alice", "100", "handover_sent", "send", OPEN_INACTIVE,
-                          draft_digest="what the page showed before the drafts were regenerated")
-    assert not out.ok and "changed" in out.errors[0]
-    assert outbox == []
-    assert tracker.events_for(test_config, "100")[0]["action_code"] == "data_contact_handover"
+                          mail=_fields(_mail(test_config), to=to))
+    assert not out.ok and out.keep_mail and outbox == []
 
 
-@pytest.mark.parametrize("maybe_sent, says", [(False, "Not sent"), (True, "Sent Items")])
-def test_a_failed_send_records_nothing(test_config, outbox, monkeypatch, maybe_sent, says):
+@pytest.mark.parametrize("maybe_sent, says, keep", [(False, "Not sent", True),
+                                                    (True, "Sent Items", False)])
+def test_a_failed_send_records_nothing(test_config, outbox, monkeypatch, maybe_sent, says, keep):
     from oa_tracker import mailer
 
     def refuse(config, draft):
@@ -244,25 +265,41 @@ def test_a_failed_send_records_nothing(test_config, outbox, monkeypatch, maybe_s
     monkeypatch.setattr(mailer, "send_draft", refuse)
     _handover_pending(test_config)
     out = tracker.perform(test_config, "alice", "100", "handover_sent", "send", OPEN_INACTIVE,
-                          draft_digest=_mail(test_config)["digest"])
+                          mail=_fields(_mail(test_config)))
     assert not out.ok and says in out.errors[0]
+    # The edits are kept for another try — but not when it may have gone out.
+    assert out.keep_mail is keep
     assert "handover_sent" not in {e["action_code"] for e in tracker.events_for(test_config, "100")}
     assert any(r["task_code"] == "handover_sent"
                for r in tracker.pending_by_pub(test_config)["100"])
 
 
+def _reminder_due(config):
+    _insert(config.database, "100", OPEN_INACTIVE, next_reminder_at="2026-01-01T00:00:00",
+            pub_db_last_refreshed_at="2026-01-01T00:00:00", oa_data_required=1)
+    assert any(r["task_code"] == "remind_sent" for r in tracker.pending_by_pub(config)["100"])
+
+
 def test_send_now_on_a_reminder_counts_it(test_config, outbox):
     from oa_tracker.emails import _render_eml
-    _insert(test_config.database, "100", OPEN_INACTIVE, next_reminder_at="2026-01-01T00:00:00",
-            pub_db_last_refreshed_at="2026-01-01T00:00:00", oa_data_required=1)
-    assert any(r["task_code"] == "remind_sent" for r in tracker.pending_by_pub(test_config)["100"])
+    _reminder_due(test_config)
     (test_config.email_drafts_dir / "reminder_100_1.eml").write_bytes(_render_eml(
         "To: Dana <dc@cicbiomagune.es>\nSubject: Reminder\n\nPlease upload.\n", test_config))
     out = tracker.perform(test_config, "alice", "100", "remind_sent", "send", OPEN_INACTIVE,
-                          draft_digest=_mail(test_config, code="remind_sent")["digest"])
+                          mail=_fields(_mail(test_config, code="remind_sent")))
     assert out.ok, out.errors
     assert len(outbox) == 1
     assert tracker.get_archive(test_config, "100")["reminder_count"] == 1
+
+
+def test_a_step_due_before_the_run_gets_its_draft_on_the_spot(test_config, outbox):
+    """A reminder that came due after the morning run: no draft on disk yet,
+    so the card writes it rather than waiting for tomorrow."""
+    _reminder_due(test_config)
+    assert not (test_config.email_drafts_dir / "reminder_100_1.eml").exists()
+    mail = _mail(test_config, code="remind_sent")
+    assert mail["file"] == "reminder_100_1.eml" and mail["can_send"]
+    assert "Reminder #1 for 100" in mail["body"]
 
 
 def test_send_now_is_off_unless_configured(test_config, monkeypatch):
@@ -272,7 +309,7 @@ def test_send_now_is_off_unless_configured(test_config, monkeypatch):
     mail = _mail(test_config)
     assert not mail["can_send"] and "send_from_web" in mail["reason"]
     out = tracker.perform(test_config, "alice", "100", "handover_sent", "send", OPEN_INACTIVE,
-                          draft_digest=mail["digest"])
+                          mail=_fields(mail))
     assert not out.ok
     # "Email sent" (sent from Outlook) still records it.
     assert tracker.perform(test_config, "alice", "100", "handover_sent", "done", OPEN_INACTIVE).ok
@@ -936,19 +973,35 @@ def test_small_package_has_no_large_file_warning(client, test_config, tmp_path, 
 def test_paper_page_shows_the_email_and_sends_it(client, test_config, outbox):
     _handover_pending(test_config)
     html = client.get("/paper/100/").content.decode()
-    assert "Dana Contact &lt;dc@cicbiomagune.es&gt;" in html
-    assert "You are the data contact now." in html
+    assert 'name="mail_to" value="Dana Contact &lt;dc@cicbiomagune.es&gt;"' in html
+    assert "You are the data contact now.\n</textarea>" in html
     assert "office@cicbiomagune.es" in html
-    digest = _mail(test_config)["digest"]
-    assert f'name="draft_digest" value="{digest}"' in html
     assert 'value="send"' in html and "Send this email now from" in html
 
-    r = client.post("/paper/100/do/", {
-        "task_code": "handover_sent", "choice": "send", "expected_status": OPEN_INACTIVE,
-        "draft_digest": digest, "note": "",
-    }, follow=True)
-    assert len(outbox) == 1
+    post = {"task_code": "handover_sent", "choice": "send", "expected_status": OPEN_INACTIVE,
+            "mail_to": "Dana Contact <dc@cicbiomagune.es>", "mail_cc": "",
+            "mail_subject": "Edited subject", "mail_body": "Edited text.", "note": ""}
+    r = client.post("/paper/100/do/", post, follow=True)
+    assert [d.subject for d in outbox] == ["Edited subject"]
     assert "Email sent to Dana Contact" in r.content.decode()
+
+
+def test_a_failed_send_keeps_the_edits_on_the_page(client, test_config, outbox, monkeypatch):
+    from oa_tracker import mailer
+
+    def refuse(config, draft):
+        raise mailer.SendError("Microsoft refused it")
+    monkeypatch.setattr(mailer, "send_draft", refuse)
+    _handover_pending(test_config)
+    post = {"task_code": "handover_sent", "choice": "send", "expected_status": OPEN_INACTIVE,
+            "mail_to": "Dana Contact <dc@cicbiomagune.es>", "mail_cc": "",
+            "mail_subject": "My subject", "mail_body": "My careful wording.", "note": ""}
+    html = client.post("/paper/100/do/", post, follow=True).content.decode()
+    assert "Not sent" in html and "My careful wording.</textarea>" in html
+    assert "edits from the send that did not go through" in html
+    # Once only: a reload starts again from the generated email.
+    html = client.get("/paper/100/").content.decode()
+    assert "You are the data contact now.\n</textarea>" in html
 
 
 def test_send_now_is_greyed_out_with_the_reason(client, test_config):

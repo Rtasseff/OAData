@@ -165,6 +165,14 @@ pre.notes { white-space: pre-wrap; font: 13px/1.5 ui-monospace, monospace; margi
 /* the email a "Send now" step would send, as it would be sent */
 .mail { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 14px; background: #fafbfc; }
 .mail .kv { margin-bottom: 10px; }
+.mailedit .mrow { display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center;
+  margin-bottom: 6px; font-size: 14px; color: var(--ink); }
+.mailedit .mlabel { color: var(--muted); }
+.mailedit input[type=text], textarea.mailtext { width: 100%; box-sizing: border-box; font: inherit;
+  font-size: 14px; padding: 6px 8px; border: 1px solid #c4ccd6; border-radius: 6px; background: #fff; }
+textarea.mailtext { line-height: 1.5; margin-top: 4px; resize: vertical; }
+.mailedit .msg { margin: 0 0 10px; }
+.mailedit p.small { margin: 6px 0 0; }
 pre.mailbody { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13.5px; line-height: 1.5;
   margin: 0; padding-top: 10px; border-top: 1px solid var(--line); max-height: 28em; overflow: auto; }
 

@@ -27,13 +27,36 @@ from oa_tracker.config import Config
 SCOPES = ("Mail.Send.Shared",)
 SEND_URL = "https://graph.microsoft.com/v1.0/me/sendMail"
 
+# The sendable email steps → the stem of the draft ``oa emails`` writes for
+# them (``{n}`` = the reminder's number). The PI-contact step is not here:
+# that contact stays personal.
+DRAFT_STEMS = {
+    "remind_sent": "reminder_{pub_id}_{n}",
+    "handover_sent": "handover_{pub_id}",
+    "completion_sent": "completion_{pub_id}",
+    "reject_done_sent": "reject_done_{pub_id}",
+}
+
 
 class SendError(RuntimeError):
-    """The email was not sent (or, when ``maybe_sent``, it is unknown)."""
+    """The email was not sent (or, when ``maybe_sent``, it is unknown).
+    ``sign_in``: the Microsoft sign-in failed, so no other send can work."""
 
-    def __init__(self, message: str, maybe_sent: bool = False):
+    def __init__(self, message: str, maybe_sent: bool = False, sign_in: bool = False):
         super().__init__(message)
         self.maybe_sent = maybe_sent
+        self.sign_in = sign_in
+
+
+def draft_file(config: Config, archive: dict[str, Any], code: str) -> Path | None:
+    """The draft on disk for one email step (.eml before .txt), or None."""
+    stem = DRAFT_STEMS[code].format(
+        pub_id=archive["publication_id"], n=(archive.get("reminder_count") or 0) + 1)
+    for path in (config.email_drafts_dir / f"{stem}.eml",
+                 config.email_drafts_dir / f"{stem}.txt"):
+        if path.is_file():
+            return path
+    return None
 
 
 @dataclass(frozen=True)
@@ -45,7 +68,13 @@ class Draft:
 
     @staticmethod
     def _text(pairs: tuple[tuple[str, str], ...]) -> str:
-        return ", ".join(f"{n} <{a}>" if n else a for n, a in pairs)
+        def one(name: str, addr: str) -> str:
+            if not name:
+                return addr
+            if any(c in name for c in ',;:"<>@()[]'):
+                name = '"' + name.replace('"', "") + '"'   # so it reads back as one address
+            return f"{name} <{addr}>"
+        return ", ".join(one(n, a) for n, a in pairs)
 
     @property
     def to_text(self) -> str:
@@ -65,6 +94,14 @@ class Draft:
         if not self.subject.strip():
             return "the draft has no subject"
         return ""
+
+
+def from_fields(to: str, cc: str, subject: str, body: str) -> Draft:
+    """A draft as edited on the web page ("Name <address>, …" lists)."""
+    def addresses(text: str) -> tuple[tuple[str, str], ...]:
+        return tuple((n, a) for n, a in getaddresses([text]) if n or a)
+    return Draft(to=addresses(to), cc=addresses(cc), subject=subject.strip(),
+                 body=body.replace("\r\n", "\n"))
 
 
 def read_draft(path: Path) -> Draft:
@@ -102,9 +139,10 @@ def graph_message(draft: Draft, sender: str) -> dict[str, Any]:
     return {"message": message, "saveToSentItems": True}
 
 
-def unavailable_reason(config: Config) -> str:
-    """Why sending from the web is not possible ("" when it is)."""
-    if not config.email.send_from_web:
+def unavailable_reason(config: Config, web: bool = True) -> str:
+    """Why sending (from the web page, or by the automatic run when not
+    ``web``) is not possible ("" when it is)."""
+    if web and not config.email.send_from_web:
         return "Sending from this site is switched off ([email] send_from_web in config.toml)."
     if not config.email.sender_email:
         return "No office address is configured ([email] sender_email in config.toml)."
@@ -123,7 +161,7 @@ def send_draft(config: Config, draft: Draft, interactive: bool = False) -> None:
         token = GraphClient(config.sharepoint, scopes=SCOPES,
                             interactive=interactive).authenticate()
     except (RuntimeError, ValueError) as e:
-        raise SendError(f"Microsoft sign-in failed ({e})") from None
+        raise SendError(f"Microsoft sign-in failed ({e})", sign_in=True) from None
     _post(token, graph_message(draft, config.email.sender_email))
 
 

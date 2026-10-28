@@ -161,13 +161,20 @@ def paper(request, pub_id: str):
             upload["tick"] = can_act(request.user) and upload["can_auto"]
             if (upload["job"] or {}).get("state") == "running":
                 refresh = 10
+        # "Send now" steps show the email itself, editable (first: it may
+        # write the missing draft). Edits from a send that didn't go
+        # through come back once.
+        mail = None
+        if any(b.sends for b in buttons):
+            mail = tracker.mail_view(config, archive, row["task_code"])
+            kept = request.session.pop(f"mail:{pub_id}:{row['task_code']}", None)
+            if kept and "draft" in mail:
+                mail.update(kept, kept_edits=True)
         cards.append({
             "upload": upload,
             "row": row, "spec": spec,
+            "mail": mail,
             "drafts": tracker.email_drafts(config, archive, spec) if spec else [],
-            # "Send now" steps show the email itself, as it would be sent.
-            "mail": tracker.mail_view(config, archive, spec)
-            if any(b.sends for b in buttons) else None,
             # Buttons that ask for a DOI + URL get their own form (folded
             # away under their alt_summary when they are the alternative).
             # A fold-out for correcting pre-filled identifiers is dropped
@@ -223,14 +230,18 @@ def paper_action(request, pub_id: str):
             note=p.get("note", ""), pid=p.get("pid", ""), url=p.get("url", ""),
         )
     else:
+        mail = ({k: p.get(f"mail_{k}", "") for k in ("to", "cc", "subject", "body")}
+                if p.get("choice") == "send" and "mail_body" in p else None)
         out = tracker.perform(
             config, request.user.get_username(), pub_id,
             task_code=p.get("task_code", ""), choice=p.get("choice", ""),
             expected_status=p.get("expected_status", ""),
             note=p.get("note", ""), pid=p.get("pid", ""), url=p.get("url", ""),
             zenodo_code=p.get("zenodo_code", ""), other=p.get("other") == "1",
-            include=p.getlist("include"), draft_digest=p.get("draft_digest", ""),
+            include=p.getlist("include"), mail=mail,
         )
+        if out.keep_mail:
+            request.session[f"mail:{pub_id}:{p.get('task_code', '')}"] = mail
     for m in out.messages:
         messages.success(request, m)
     for m in out.warnings:

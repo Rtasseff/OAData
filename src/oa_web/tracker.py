@@ -17,7 +17,6 @@ from typing import Any, Sequence
 from django.conf import settings
 
 import fcntl
-import hashlib
 import logging
 import os
 import threading
@@ -140,25 +139,31 @@ def email_drafts(config: Config, archive: dict[str, Any], spec: guide.ActionSpec
     return [p.name for p in (d / f"{stem}.eml", d / f"{stem}.txt") if p.is_file()]
 
 
-def mail_view(config: Config, archive: dict[str, Any], spec: guide.ActionSpec) -> dict[str, Any]:
-    """The email on a "Send now" card: who it goes to and what it says (the
-    draft file on disk, exactly what would be sent), and whether "Send now"
-    can send it — the reason when not. ``digest`` identifies the file's
-    content, so a send only goes out if the draft is still what was read."""
-    names = email_drafts(config, archive, spec)
-    if not names:
-        return {"can_send": False, "reason": "There is no draft file for this email yet."}
-    path = config.email_drafts_dir / names[0]   # the .eml when there is one
+def mail_view(config: Config, archive: dict[str, Any], code: str) -> dict[str, Any]:
+    """The email on a "Send now" card, from its draft on disk — written on
+    the spot when the automatic run hasn't written it yet (a step can come
+    due between runs) — as the fields of the editable form (what the form
+    holds is what is sent), and whether "Send now" can send it (the
+    reason when not)."""
+    path = mailer.draft_file(config, archive, code)
+    if path is None:
+        try:
+            generate_emails(config)
+        except Exception as e:  # drafts are a convenience; say why there is none
+            log.warning("Email drafts could not be regenerated: %s", e)
+        path = mailer.draft_file(config, archive, code)
+    if path is None:
+        return {"can_send": False, "reason": (
+            "No draft could be written for this email — usually the paper has no "
+            "data contact (set one under Other actions).")}
     try:
-        raw = path.read_bytes()
         draft = mailer.read_draft(path)
     except (OSError, ValueError) as e:
         return {"can_send": False, "reason": f"The draft could not be read ({e})."}
-    reason = mailer.unavailable_reason(config) or (
-        f"Not sendable as is: {draft.problem()}." if draft.problem() else "")
+    reason = mailer.unavailable_reason(config)
     return {
-        "draft": draft, "file": path.name, "digest": hashlib.sha256(raw).hexdigest(),
-        "sender": config.email.sender_email,
+        "draft": draft, "file": path.name, "sender": config.email.sender_email,
+        "to": draft.to_text, "cc": draft.cc_text, "subject": draft.subject, "body": draft.body,
         "can_send": not reason, "reason": reason,
     }
 
@@ -481,6 +486,7 @@ class Outcome:
     messages: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    keep_mail: bool = False     # "Send now" didn't send: the page keeps the edited email
 
 
 def _clean(msg: str) -> str:
@@ -501,13 +507,13 @@ def perform(
     zenodo_code: str = "",
     other: bool = False,
     include: Sequence[str] = (),
-    draft_digest: str = "",
+    mail: dict[str, str] | None = None,
 ) -> Outcome:
     """Record one button press. ``task_code`` is the pending row the button
     sits on (or an always-available decision when ``other``); the button's
     ``choice`` picks what is applied. ``include``: files outside the package
-    ticked on the upload card ("Upload now" only). ``draft_digest``: the
-    email draft as the page showed it ("Send now" only)."""
+    ticked on the upload card ("Upload now" only). ``mail``: the email as
+    edited on the card — to, cc, subject, body ("Send now" only)."""
     out = Outcome()
     archive = get_archive(config, pub_id)
     if archive is None:
@@ -556,7 +562,7 @@ def perform(
     if button.background:
         return start_upload(config, username, archive, task_code, include)
     if button.sends:
-        return send_email(config, username, archive, task_code, spec, note, draft_digest)
+        return send_email(config, username, archive, task_code, note, mail)
 
     apply_code = button.apply_code or task_code
 
@@ -574,11 +580,12 @@ def perform(
 
 
 def send_email(config: Config, username: str, archive: dict[str, Any], row_code: str,
-               spec: guide.ActionSpec, note: str, draft_digest: str) -> Outcome:
-    """"Send now": send the step's draft from the office address, then
-    record the step exactly as "Email sent" does. Nothing is recorded when
-    the send fails; a send that went out but could not be recorded says so,
-    so it is never sent twice."""
+               note: str, mail: dict[str, str] | None) -> Outcome:
+    """"Send now": send the email as edited on the card (``mail``; the draft
+    file itself when there is no form) from the office address, then record
+    the step exactly as "Email sent" does. Nothing is recorded when the send
+    fails (``keep_mail``: the page keeps the edits); a send that went out
+    but could not be recorded says so, so it is never sent twice."""
     out = Outcome()
     pub_id = archive["publication_id"]
     with _send_lock(pub_id):
@@ -587,22 +594,26 @@ def send_email(config: Config, username: str, archive: dict[str, Any], row_code:
         if not any(r["task_code"] == row_code for r in pending_by_pub(config).get(pub_id, [])):
             out.errors.append("This email is no longer pending — it was already sent or recorded.")
             return out
-        view = mail_view(config, archive, spec)
-        if not view["can_send"]:
-            out.errors.append(f"Not sent. {view['reason']}")
+        out.keep_mail = mail is not None
+        view = mail_view(config, archive, row_code)
+        reason = mailer.unavailable_reason(config)
+        if reason or (mail is None and "draft" not in view):
+            out.errors.append(f"Not sent. {reason or view['reason']}")
             return out
-        if draft_digest != view["digest"]:
-            out.errors.append(
-                "Not sent: the email changed since this page was opened (the drafts "
-                "were regenerated). Read it again below, then press “Send now”."
-            )
+        draft = mailer.from_fields(**mail) if mail is not None else view["draft"]
+        if draft.problem():
+            out.errors.append(f"Not sent: {draft.problem()}. Nothing was recorded.")
             return out
-        draft = view["draft"]
+        generated = view.get("draft")
+        edited = generated is not None and (
+            (draft.to_text, draft.cc_text, draft.subject, draft.body.strip())
+            != (generated.to_text, generated.cc_text, generated.subject, generated.body.strip()))
         try:
             mailer.send_draft(config, draft)
         except mailer.SendError as e:
             log.warning("Send for %s (%s) failed: %s", pub_id, row_code, e)
             if e.maybe_sent:
+                out.keep_mail = False
                 out.errors.append(
                     f"It is not certain the email went out: {e}. Nothing was recorded. "
                     "Check your Outlook Sent Items: if it is there, press “Email sent”; "
@@ -612,12 +623,14 @@ def send_email(config: Config, username: str, archive: dict[str, Any], row_code:
                 out.errors.append(f"Not sent: {e}. Nothing was recorded.")
             return out
 
-        sent = f"Sent with “Send now” from {view['sender']} to {draft.to_text}" + (
-            f", cc {draft.cc_text}" if draft.cc else "") + "."
+        out.keep_mail = False
+        sent = (f"Sent with “Send now” from {config.email.sender_email} to {draft.to_text}"
+                + (f", cc {draft.cc_text}" if draft.cc else "")
+                + (" (edited before sending)" if edited else "") + ".")
         _record(config, username, archive, row_code, row_code, "email sent",
                 f"{sent} {note}".strip(), "", "", out)
     if out.ok:
-        out.messages.insert(0, f"Email sent to {draft.to_text} from {view['sender']}.")
+        out.messages.insert(0, f"Email sent to {draft.to_text} from {config.email.sender_email}.")
     else:
         out.errors.insert(0, (
             f"The email WAS sent to {draft.to_text}, but recording it failed. Do not "

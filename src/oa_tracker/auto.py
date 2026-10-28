@@ -24,6 +24,10 @@ recorded in the digest and the remaining stages still run):
      ``folder_removed`` (CLOSED_DATA_ARCHIVED).
 4. **Push** fresh statuses back to the List (+ closed-row reconcile), and
    untick the List's "done" for every rejected tick not yet cleared.
+5. **Send** the due emails whose kind is switched on (``auto_send_*``),
+   from the office address — after the drafts are regenerated, before
+   the sheet is (``run_cycle``). Never the PI-contact step; anything for a
+   paper at QA is held for a person.
 
 Everything applied automatically goes through the same ``apply_single``
 path the operator uses, with ``source="auto"`` in the audit log, and is
@@ -39,6 +43,7 @@ resolves them.
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -59,6 +64,8 @@ class AutoRunResult:
     user_notes: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     sharepoint_pushed: str = ""
+    emails_sent: list[str] = field(default_factory=list)
+    emails_held: list[str] = field(default_factory=list)
 
     @property
     def summary(self) -> str:
@@ -66,6 +73,8 @@ class AutoRunResult:
                  f"Routed to operator: {len(self.manual_rows)}",
                  f"Mismatches flagged: {len(self.mismatches)}",
                  f"Errors: {len(self.errors)}"]
+        if self.emails_sent or self.emails_held:
+            parts.insert(1, f"Emails sent: {len(self.emails_sent)}")
         return "; ".join(parts)
 
 
@@ -635,6 +644,127 @@ def _auto_upload(config: Config, archive: dict, result: AutoRunResult, retry: bo
         )
 
 
+# ── Automatic emails ─────────────────────────────────────────────────
+
+# Sendable email step → its [automation] switch and its name in the
+# digest, in sending order (a handover notice goes before the same
+# paper's reminder).
+_SEND_KINDS = {
+    "handover_sent": ("auto_send_handover", "handover notice"),
+    "remind_sent": ("auto_send_reminders", "reminder"),
+    "reject_done_sent": ("auto_send_reject_done", "“not done yet” email"),
+    "completion_sent": ("auto_send_completion", "completion email"),
+}
+
+
+def _unsure_path(config: Config) -> Path:
+    return config.output_dir / "auto_send_unsure.json"
+
+
+def send_emails(config: Config, result: AutoRunResult) -> None:
+    """Send the due emails whose kind is switched on, from the office
+    address: the same draft files, and the same recording, as "Send now"
+    on the web, with source "auto". Held for a person (listed in the
+    digest): anything for a paper at QA (OPEN_ACTIVE: awaiting QA or QA
+    failed — operator decision 2026-10-28), an incomplete draft, anything
+    past ``max_emails_per_run``, and an email whose automatic send got no
+    clear answer or could not be recorded (``auto_send_unsure.json``,
+    until the step is recorded by hand)."""
+    from oa_tracker import mailer
+    from oa_tracker.actions import apply_single
+    from oa_tracker.sheet import build_rows
+
+    gates = config.automation
+    order = list(_SEND_KINDS)
+    all_rows = build_rows(config)
+    pending = {f"{r['publication_id']}:{r['task_code']}" for r in all_rows
+               if r["task_code"] in _SEND_KINDS}
+    try:
+        unsure = json.loads(_unsure_path(config).read_text())
+    except (OSError, ValueError):
+        unsure = {}
+    unsure = {k: v for k, v in unsure.items() if k in pending}   # recorded since → forget
+    rows = sorted((r for r in all_rows if r["task_code"] in _SEND_KINDS
+                   and getattr(gates, _SEND_KINDS[r["task_code"]][0])),
+                  key=lambda r: (r["publication_id"], order.index(r["task_code"])))
+
+    reason = mailer.unavailable_reason(config, web=False) if rows else ""
+    stop = f"automatic sending is not set up: {reason}" if reason else ""
+    if reason:
+        result.errors.append(f"Emails not sent: {reason}")
+    attempts = 0
+    emailed: list[str] = []
+    for r in rows:
+        pub, code = r["publication_id"], r["task_code"]
+        key, label = f"{pub}:{code}", f"{pub} {_SEND_KINDS[code][1]}"
+        with db.get_connection(config.database) as conn:
+            archive = db.get_archive(conn, pub)
+        if stop:
+            result.emails_held.append(f"{label}: not sent — {stop}")
+            continue
+        if archive["status"] == st.OPEN_ACTIVE:
+            result.emails_held.append(
+                f"{label}: held for you — the paper is at QA (data uploaded, or QA "
+                "failed); review it and send it from the web page")
+            continue
+        if key in unsure:
+            result.emails_held.append(
+                f"{label}: held — {unsure[key]}; check Sent Items, then press "
+                "“Email sent” (or “Send now” if it never went out)")
+            continue
+        path = mailer.draft_file(config, archive, code)
+        try:
+            draft = mailer.read_draft(path) if path else None
+        except (OSError, ValueError) as e:
+            result.errors.append(f"{label}: the draft could not be read ({e})")
+            continue
+        problem = "no draft was written for it" if draft is None else draft.problem()
+        if problem:
+            result.emails_held.append(f"{label}: not sent — {problem}")
+            continue
+        if attempts >= gates.max_emails_per_run:
+            stop = f"more than max_emails_per_run ({gates.max_emails_per_run}) due this run"
+            result.emails_held.append(f"{label}: not sent — {stop}")
+            continue
+        attempts += 1
+        try:
+            mailer.send_draft(config, draft)
+        except mailer.SendError as e:
+            if e.maybe_sent:
+                unsure[key] = f"the automatic send on {_now()[:16]} got no clear answer ({e})"
+                stop = "an earlier send this run got no clear answer from Microsoft"
+                result.errors.append(f"{label}: {unsure[key]} — held until you record it")
+            elif e.sign_in:
+                stop = "the Microsoft sign-in failed"
+                result.errors.append(f"Emails not sent: {e}. Run `oa sharepoint sync` "
+                                     "in a terminal to sign in again.")
+            else:
+                result.errors.append(f"{label}: not sent — {e}")
+            continue
+        sent = (f"[auto] Sent automatically from {config.email.sender_email} to "
+                f"{draft.to_text}" + (f", cc {draft.cc_text}" if draft.cc else "") + ".")
+        rec, _, _ = apply_single(config, pub, code, done=1, note=sent, source="auto")
+        if rec.applied and not rec.errors:
+            result.emails_sent.append(f"{label} → {draft.to_text}")
+            emailed.append(pub)
+        else:
+            unsure[key] = f"it was sent automatically on {_now()[:16]} but could not be recorded"
+            result.errors.append(f"{label}: {unsure[key]} ({'; '.join(rec.errors + rec.warnings)})")
+
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    if unsure:
+        _unsure_path(config).write_text(json.dumps(unsure, indent=1))
+    elif _unsure_path(config).exists():
+        _unsure_path(config).unlink()
+
+    if config.sharepoint.enabled:
+        for pub in dict.fromkeys(emailed):
+            try:
+                push_one(config, pub)
+            except Exception as e:  # the next run's push reconciles
+                result.errors.append(f"{pub}: SharePoint List not updated after the email ({e})")
+
+
 # ── Orchestration + digest ───────────────────────────────────────────
 
 def run_cycle(config: Config) -> tuple[AutoRunResult, Path]:
@@ -647,6 +777,13 @@ def run_cycle(config: Config) -> tuple[AutoRunResult, Path]:
     from oa_tracker.sheet import generate_sheet
 
     result = run_auto(config)
+    # Emails go out from freshly written drafts; the sheet, the drafts and
+    # the report are then written from the state after sending.
+    try:
+        generate_emails(config)
+        send_emails(config, result)
+    except Exception as e:
+        result.errors.append(f"automatic emails failed: {e}")
     for what, generate in (("sheet", generate_sheet), ("email", generate_emails),
                            ("report", generate_report)):
         try:
@@ -718,6 +855,8 @@ def write_digest(config: Config, result: AutoRunResult) -> Path:
         result.scan_summary or "(no scan output)",
         "```\n",
         section("Applied automatically", result.auto_applied, "nothing this run"),
+        section("Emails sent automatically", result.emails_sent, "none"),
+        section("Emails held for you (send them from the web page)", result.emails_held, "none"),
         section("Needs your decision (also on the action sheet / proposals TSV)",
                 result.manual_rows + result.mismatches, "nothing waiting"),
         section("Operator worklist (pipeline states only you can advance)",

@@ -140,6 +140,16 @@ class AutomationSettings:
     # empty folder) → reject_done applied directly (untick + email draft).
     # New path (2026-09-17): off = a reject_done row on the sheet instead.
     auto_reject_done: bool = False
+    # Emails the run sends itself, from [email] sender_email
+    # (oa_tracker.mailer), one switch per kind. Never sent automatically:
+    # the PI-contact step, and anything for a paper at QA (OPEN_ACTIVE:
+    # awaiting QA, or QA failed) — those wait for "Send now" on the web.
+    auto_send_reminders: bool = False
+    auto_send_handover: bool = False
+    auto_send_completion: bool = False
+    auto_send_reject_done: bool = False
+    # Safety valve: past this many in one run the rest are held (digest).
+    max_emails_per_run: int = 20
 
 
 @dataclass
@@ -262,5 +272,10 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
             auto_close_on_folder_removed=auto_raw.get(
                 "auto_close_on_folder_removed", auto_defaults.auto_close_on_folder_removed),
             auto_reject_done=auto_raw.get("auto_reject_done", auto_defaults.auto_reject_done),
+            auto_send_reminders=auto_raw.get("auto_send_reminders", auto_defaults.auto_send_reminders),
+            auto_send_handover=auto_raw.get("auto_send_handover", auto_defaults.auto_send_handover),
+            auto_send_completion=auto_raw.get("auto_send_completion", auto_defaults.auto_send_completion),
+            auto_send_reject_done=auto_raw.get("auto_send_reject_done", auto_defaults.auto_send_reject_done),
+            max_emails_per_run=auto_raw.get("max_emails_per_run", auto_defaults.max_emails_per_run),
         ),
     )

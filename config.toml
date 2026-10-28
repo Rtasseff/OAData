@@ -90,6 +90,15 @@ auto_close_on_folder_removed = true  # OPEN_DB_UPDATED + folder gone + PID → c
 # action sheet instead (done=1 does the same thing). Flip to true once
 # the rows have looked right for a few weeks.
 auto_reject_done = false
+# Emails the run sends itself from [email] sender_email, per kind (2026-10-28). Never sent
+# automatically: the PI-contact step, and anything for a paper at QA (data uploaded and
+# awaiting QA, or QA failed) — those wait for "Send now" on the web page. Set one to
+# false and that kind waits for "Send now" too.
+auto_send_reminders = true
+auto_send_handover = true
+auto_send_completion = true
+auto_send_reject_done = true
+max_emails_per_run = 20            # safety valve: past this, the rest are held (digest)
 # NOTE: there is deliberately no auto_publish switch — publishing mints a
 # permanent DOI and always waits for the operator (sheet row `zenodo_publish`).
 

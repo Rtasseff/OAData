@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from oa_tracker import sharepoint as sp
 from oa_tracker import status as st
+from oa_tracker.mailer import DRAFT_STEMS
 
 
 @dataclass(frozen=True)
@@ -67,10 +68,13 @@ ELSEWHERE_STEP = (
 )
 
 _EMAIL_STEPS = (
-    "Read the email below. “Send now” sends it from the office address and "
-    "records it as sent, in one go.",
-    "Or open the draft in Outlook, send it from there, then press “Email "
-    "sent”. Once it is recorded, the draft and this action stop recurring.",
+    "Read the email below and change anything you need: “Send now” sends "
+    "what the boxes hold, from the office address, and records it as sent.",
+    "Or download the draft, send it from Outlook, then press “Email sent”. "
+    "Once it is recorded, the draft and this action stop recurring.",
+    "The 07:00 run sends this kind of email by itself when its switch is on "
+    "([automation] auto_send_*), except for a paper at QA: those wait here "
+    "for you.",
 )
 
 # "Send now" on the email steps (oa_tracker.mailer); "Email sent" stays for
@@ -137,7 +141,7 @@ SPECS: dict[str, ActionSpec] = {
         title="Send the reminder email",
         steps=_EMAIL_STEPS,
         buttons=(SEND, EMAIL_SENT),
-        email_stem="reminder_{pub_id}_{n}",
+        email_stem=DRAFT_STEMS["remind_sent"],
     ),
     "contact_pi_manual": ActionSpec(
         title="Contact the PI personally (maximum reminders reached)",
@@ -158,19 +162,19 @@ SPECS: dict[str, ActionSpec] = {
         title="Send the handover notice to the new data contact",
         steps=_EMAIL_STEPS,
         buttons=(SEND, EMAIL_SENT),
-        email_stem="handover_{pub_id}",
+        email_stem=DRAFT_STEMS["handover_sent"],
     ),
     "completion_sent": ActionSpec(
         title="Send the completion email (data archived)",
         steps=_EMAIL_STEPS,
         buttons=(SEND, EMAIL_SENT),
-        email_stem="completion_{pub_id}",
+        email_stem=DRAFT_STEMS["completion_sent"],
     ),
     "reject_done_sent": ActionSpec(
         title="Send the “not done yet” email",
         steps=_EMAIL_STEPS,
         buttons=(SEND, EMAIL_SENT),
-        email_stem="reject_done_{pub_id}",
+        email_stem=DRAFT_STEMS["reject_done_sent"],
     ),
     "reject_done": ActionSpec(
         title="Reject the Tracker “done” tick",

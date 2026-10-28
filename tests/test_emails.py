@@ -725,3 +725,39 @@ def test_completion_draft_skipped_when_already_sent(test_config):
                      CLOSED_DATA_ARCHIVED, CLOSED_DATA_ARCHIVED, "cli")
     paths = generate_emails(test_config)
     assert all("completion_PUB802" not in p.name for p in paths)
+
+
+def test_reminder_quotes_the_qa_fail_while_the_folder_is_unchanged(test_config):
+    """3302: the contact should hear what QA found, not the generic text."""
+    from oa_tracker.actions import apply_single
+    folder = test_config.sharepoint_root / "PUB9"
+    folder.mkdir()
+    (folder / "data.csv").write_text("1,2")
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB9", folder_path=str(folder),
+                       first_seen_at="2026-01-01T00:00:00", last_seen_at="2026-01-15T00:00:00",
+                       status=OPEN_ACTIVE, next_reminder_at="2020-01-01T00:00:00",
+                       data_contact_email="dc@cicbiomagune.es")
+    apply_single(test_config, "PUB9", "qa_hold", done=1, note="data not zipped, no README")
+    generate_emails(test_config)
+    text = (test_config.email_drafts_dir / "reminder_PUB9_1.txt").read_text()
+    assert '"data not zipped, no README"' in text and "cannot be archived yet" in text
+
+    # The next scan sees the folder changed: generic text again.
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB9", folder_signature="after new upload")
+    generate_emails(test_config)
+    text = (test_config.email_drafts_dir / "reminder_PUB9_1.txt").read_text()
+    assert "data not zipped" not in text
+
+
+def test_titles_lose_their_markup_in_emails(test_config):
+    with get_connection(test_config.database) as conn:
+        upsert_archive(conn, publication_id="PUB8", folder_path="/tmp/pub8",
+                       first_seen_at="2026-01-01T00:00:00", last_seen_at="2026-01-15T00:00:00",
+                       status=OPEN_INACTIVE, next_reminder_at="2020-01-01T00:00:00",
+                       data_contact_email="dc@cicbiomagune.es",
+                       pub_title="P(NIPAM-<i>co</i>-DMAEMA) hydrogels &amp; nanodiscs")
+    generate_emails(test_config)
+    text = (test_config.email_drafts_dir / "reminder_PUB8_1.txt").read_text()
+    assert "P(NIPAM-co-DMAEMA) hydrogels & nanodiscs" in text

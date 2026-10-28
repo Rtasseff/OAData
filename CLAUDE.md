@@ -33,7 +33,7 @@ src/oa_tracker/
     report.py        — generate weekly_report.md
     checks.py        — shared archive checks: done-tick REJECT_RULES, has_data_contact
     emails.py        — generate email drafts from templates
-    mailer.py        — send a draft from the office address (Graph, Send As) — web "Send now"
+    mailer.py        — send a draft from the office address (Graph, Send As) — web "Send now", oa auto
     zenodo.py        — Zenodo InvenioRDM API client + metadata builder (Stages 2.5/3)
     auto.py          — unattended automation engine behind `oa auto` (cron entry point)
 src/oa_web/          — Django web UI (`oa web`; optional extras `.[web]`) — docs/web_ui.md

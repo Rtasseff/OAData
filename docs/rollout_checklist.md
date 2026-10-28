@@ -78,8 +78,7 @@ the sandbox code first (`oa action <pub> reset_zenodo_code`, then let
 ## Later / follow-ups
 
 - [x] **Office-address Send As grant** — done 2026-10-28.
-- [ ] **Auto-send emails** per kind from `oa auto` — after *Send now*
-      has run for a while; `docs/email_from_office_address.md` §Rollout
-      step 3 (`Mail.Send.Shared` works, verified 2026-10-27).
+- [x] **Auto-send emails** per kind from `oa auto` — live 2026-10-28;
+      `docs/email_from_office_address.md` §Rollout step 3.
 - [ ] Stage 4 (central-DB write-back) still needs an IT write grant;
       until then `db_updated` stays a manual step.

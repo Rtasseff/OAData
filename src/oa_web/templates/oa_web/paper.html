@@ -40,7 +40,7 @@
     {% if c.spec.email_stem and not c.drafts %}
     <div class="notebox">No draft file for this email yet — it is written to output/email_drafts by the next automatic run{% if not a.data_contact_email or a.data_contact_email == "TBD" %} (this paper has no data contact; set one under Other actions){% endif %}.</div>
     {% endif %}
-    {% if c.mail.draft %}
+    {% if c.mail.draft and not can_act %}
     <div class="mail">
       <dl class="kv">
         <dt>From</dt><dd>{% if c.mail.sender %}{{ c.mail.sender }}{% else %}— (no office address set){% endif %}</dd>
@@ -106,13 +106,23 @@
     <form method="post" action="{% url 'paper_action' a.publication_id %}"{% if c.upload %} id="upload-{{ c.row.task_code }}"{% endif %}>{% csrf_token %}
       <input type="hidden" name="task_code" value="{{ c.row.task_code }}">
       <input type="hidden" name="expected_status" value="{{ a.status }}">
-      {% if c.mail.digest %}<input type="hidden" name="draft_digest" value="{{ c.mail.digest }}">{% endif %}
+      {% if c.mail.draft %}
+      <div class="mail mailedit">
+        {% if c.mail.kept_edits %}<p class="msg warning">Your edits from the send that did not go through are kept below. Reload the page to start again from the generated email.</p>{% endif %}
+        <div class="mrow"><span class="mlabel">From</span><span>{{ c.mail.sender|default:"— (no office address set)" }}</span></div>
+        <label class="mrow"><span class="mlabel">To</span><input type="text" name="mail_to" value="{{ c.mail.to }}"></label>
+        <label class="mrow"><span class="mlabel">Cc</span><input type="text" name="mail_cc" value="{{ c.mail.cc }}" placeholder="optional — Name &lt;address&gt;, …"></label>
+        <label class="mrow"><span class="mlabel">Subject</span><input type="text" name="mail_subject" value="{{ c.mail.subject }}"></label>
+        <textarea name="mail_body" rows="18" class="mailtext">{{ c.mail.body }}</textarea>
+        <p class="small">Change anything before “Send now” — what these boxes hold is what is sent. Nothing is saved until then; reload the page to start again from the generated email.</p>
+      </div>
+      {% endif %}
       <div class="fields">
         {% if "zenodo_code" in c.spec.fields %}<div><label>Zenodo record id (numeric)</label><input type="text" name="zenodo_code" inputmode="numeric" value="{{ a.zenodo_code|default:'' }}"></div>{% endif %}
         <div><label>{{ c.spec.note_hint }}</label><textarea name="note" rows="2"></textarea></div>
       </div>
       <div class="btns">
-        {% for b in c.main %}<button class="btn {{ b.style }}{% if b.did %} did{% endif %}" type="submit" name="choice" value="{{ b.choice }}"{% if b.did %} data-did="{{ b.did }}" data-did-key="{{ c.row.task_code }}:{{ b.choice }}"{% endif %}{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}{% if b.sends %}{% if c.mail.can_send %} onclick="return confirm('Send this email now from {{ c.mail.sender|escapejs }} to {{ c.mail.draft.to_text|escapejs }}?')"{% else %} disabled title="{{ c.mail.reason }}"{% endif %}{% endif %}{% if c.upload and c.upload.job.state == "running" %} disabled{% elif b.background and not c.upload.can_auto %} disabled title="Not available for this package — see above"{% endif %}>{{ b.label }}</button>{% endfor %}
+        {% for b in c.main %}<button class="btn {{ b.style }}{% if b.did %} did{% endif %}" type="submit" name="choice" value="{{ b.choice }}"{% if b.did %} data-did="{{ b.did }}" data-did-key="{{ c.row.task_code }}:{{ b.choice }}"{% endif %}{% if b.confirm %} onclick="return confirm('{{ b.confirm|escapejs }}')"{% endif %}{% if b.sends %}{% if c.mail.can_send %} onclick="return confirm('Send this email now from {{ c.mail.sender|escapejs }} to ' + this.form.elements.mail_to.value + '?')"{% else %} disabled title="{{ c.mail.reason }}"{% endif %}{% endif %}{% if c.upload and c.upload.job.state == "running" %} disabled{% elif b.background and not c.upload.can_auto %} disabled title="Not available for this package — see above"{% endif %}>{{ b.label }}</button>{% endfor %}
       </div>
       {% if c.has_did %}<p class="small didhint"><span class="didmark">✓</span> Green buttons only <strong>record</strong> something you have already done yourself — they do not do it for you. Blue buttons make the system do it.</p>{% endif %}
     </form>

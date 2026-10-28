@@ -1715,4 +1715,19 @@ Emails from the office address (2026-10-28):
   file through Graph `/me/sendMail` as PublicationsData, records the
   step. No retry, one send per paper at a time, refused if the draft
   changed since the page loaded; nothing recorded on failure. Not on the
-  PI step. Automatic sending (rollout step 3) is next, per email kind.
+  PI step.
+- Same day, after the first 8 went out with *Send now* (operator's
+  batch, `web:rtasseff/claude`): **automatic sending** in `oa auto`, per
+  kind (`auto_send_reminders` / `_handover` / `_completion` /
+  `_reject_done`, all on), cap `max_emails_per_run` = 20. Operator's
+  rule: nothing automatic for a paper at QA (awaiting QA or QA failed) —
+  held for the web page, listed in the digest. Never the PI step. An
+  unclear send (timeout) or a send that couldn't be recorded is held
+  until recorded by hand (`auto_send_unsure.json`), so nothing goes out
+  twice.
+- The web email card is now an editable form (To/Cc/Subject/text);
+  *Send now* sends what it holds, and a failed send keeps the edits. A
+  step due between runs gets its draft on the spot. Reminders for a
+  QA-failed, unchanged folder quote the QA note (3302 had got the
+  generic text). Titles lose pub-DB markup in emails (3332's
+  `<i>co</i>`).

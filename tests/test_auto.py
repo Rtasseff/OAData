@@ -624,3 +624,130 @@ def test_auto_after_hand_upload_points_at_review(zen_config):
     auto._advance(zen_config, result)
     assert any("validate the Zenodo draft" in w for w in result.awaiting_operator)
     assert not any("MANUAL UPLOAD" in w for w in result.awaiting_operator)
+
+
+# ── Automatic emails ─────────────────────────────────────────────────
+
+@pytest.fixture
+def mail_config(test_config, monkeypatch):
+    """Every email kind switched on, drafts with real headers, and
+    Microsoft replaced by a list — nothing here can send a real email."""
+    from oa_tracker import mailer
+    from oa_tracker.config import EmailSettings, SharePointSettings
+    test_config.email = EmailSettings(sender_email="office@cicbiomagune.es", draft_format="eml")
+    test_config.sharepoint = SharePointSettings(client_id="test-client")   # List push off
+    a = test_config.automation
+    a.enabled = a.auto_send_reminders = a.auto_send_handover = True
+    a.auto_send_completion = a.auto_send_reject_done = True
+    for name in ("reminder", "handover"):
+        (test_config.template_dir / f"{name}.txt").write_text(
+            "To: ${data_contact_name} <${data_contact_email}>\n"
+            f"Subject: {name} ${{publication_id}}\n\n${{publication_title}}\n")
+    outbox = []
+    monkeypatch.setattr(mailer, "send_draft", lambda config, draft: outbox.append(draft))
+    test_config.outbox = outbox
+    return test_config
+
+
+def _due(config, pub_id, status=st.OPEN_INACTIVE, **over):
+    return _seed(config, pub_id, status, next_reminder_at="2020-01-01T00:00:00", **over)
+
+
+def _handover(config, pub_id):
+    with db.get_connection(config.database) as conn:
+        db.insert_event(conn, pub_id, "data_contact_handover", st.OPEN_INACTIVE,
+                        st.OPEN_INACTIVE, "auto")
+
+
+def _send(config):
+    from oa_tracker.emails import generate_emails
+    generate_emails(config)
+    result = auto.AutoRunResult()
+    auto.send_emails(config, result)
+    return result
+
+
+def _codes(config, pub_id, source="auto"):
+    with db.get_connection(config.database) as conn:
+        rows = conn.execute("SELECT action_code FROM events WHERE publication_id=? AND source=?"
+                            " ORDER BY event_id", (pub_id, source)).fetchall()
+    return [r[0] for r in rows]
+
+
+def test_due_emails_go_out_and_a_paper_at_qa_is_held(mail_config):
+    _due(mail_config, "100")
+    _handover(mail_config, "100")
+    _due(mail_config, "200", status=st.OPEN_ACTIVE)         # data uploaded, QA to do
+    result = _send(mail_config)
+    assert [d.subject for d in mail_config.outbox] == ["handover 100", "reminder 100"]
+    assert _codes(mail_config, "100") == ["data_contact_handover", "handover_sent", "remind_sent"]
+    assert len(result.emails_sent) == 2 and "Emails sent: 2" in result.summary
+    assert result.emails_held == [
+        "200 reminder: held for you — the paper is at QA (data uploaded, or QA failed); "
+        "review it and send it from the web page"]
+    assert _codes(mail_config, "200") == []
+
+
+def test_the_pi_step_is_never_sent(mail_config):
+    _due(mail_config, "100", reminder_count=mail_config.reminders.max_reminders - 1)
+    result = _send(mail_config)
+    assert mail_config.outbox == [] and result.emails_held == []
+
+
+def test_switched_off_kinds_and_the_cap(mail_config):
+    mail_config.automation.auto_send_handover = False
+    mail_config.automation.max_emails_per_run = 1
+    _due(mail_config, "100")
+    _handover(mail_config, "100")                           # switched off: left for a person
+    _due(mail_config, "200")
+    result = _send(mail_config)
+    assert [d.subject for d in mail_config.outbox] == ["reminder 100"]
+    assert result.emails_held == ["200 reminder: not sent — more than max_emails_per_run "
+                                  "(1) due this run"]
+
+
+def test_a_failed_sign_in_stops_the_sending(mail_config, monkeypatch):
+    from oa_tracker import mailer
+    calls = []
+
+    def no_sign_in(config, draft):
+        calls.append(draft)
+        raise mailer.SendError("Microsoft sign-in failed (expired)", sign_in=True)
+    monkeypatch.setattr(mailer, "send_draft", no_sign_in)
+    _due(mail_config, "100")
+    _due(mail_config, "200")
+    result = _send(mail_config)
+    assert len(calls) == 1
+    assert "oa sharepoint sync" in result.errors[0]
+    assert result.emails_held == ["200 reminder: not sent — the Microsoft sign-in failed"]
+    assert _codes(mail_config, "100") == _codes(mail_config, "200") == []
+
+
+def test_an_unclear_send_is_held_until_someone_records_it(mail_config, monkeypatch):
+    from oa_tracker import mailer
+
+    def unclear(config, draft):
+        raise mailer.SendError("no answer from Microsoft in time", maybe_sent=True)
+    monkeypatch.setattr(mailer, "send_draft", unclear)
+    _due(mail_config, "100")
+    result = _send(mail_config)
+    assert "no clear answer" in result.errors[0] and _codes(mail_config, "100") == []
+
+    # Next run: not tried again (it may have reached the contact).
+    monkeypatch.setattr(mailer, "send_draft", lambda *a: pytest.fail("must not resend"))
+    result = _send(mail_config)
+    assert result.emails_held[0].startswith("100 reminder: held — the automatic send on")
+
+    # Recorded by hand ("Email sent") → forgotten.
+    apply_single(mail_config, "100", "remind_sent", done=1, source="web:alice")
+    _send(mail_config)
+    assert not (mail_config.output_dir / "auto_send_unsure.json").exists()
+
+
+def test_digest_lists_sent_and_held_emails(mail_config):
+    _due(mail_config, "100")
+    _due(mail_config, "200", status=st.OPEN_ACTIVE)
+    result = _send(mail_config)
+    text = auto.write_digest(mail_config, result).read_text()
+    assert "## Emails sent automatically" in text and "100 reminder →" in text
+    assert "## Emails held for you" in text and "200 reminder: held for you" in text

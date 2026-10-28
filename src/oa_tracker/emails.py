@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import html
+import re
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from email.parser import Parser
@@ -11,7 +13,7 @@ from string import Template
 from typing import Any
 
 from oa_tracker import db, status as st
-from oa_tracker.checks import has_data_contact, is_external_deposit
+from oa_tracker.checks import has_data_contact, is_external_deposit, qa_held
 from oa_tracker.config import Config
 
 
@@ -118,7 +120,13 @@ def _data_required(archive: dict[str, Any]) -> bool:
     return archive.get("oa_data_required") == 1
 
 
-def _reminder_status_note(archive: dict[str, Any]) -> str:
+def _plain(text: str | None) -> str | None:
+    """A title as plain text: the pub-DB keeps markup in some titles
+    (3332: "P(NIPAM-<i>co</i>-DMAEMA)"), which a plain-text email shows raw."""
+    return html.unescape(re.sub(r"<[^>]+>", "", text)) if text else text
+
+
+def _reminder_status_note(archive: dict[str, Any], qa_fail: dict[str, Any] | None = None) -> str:
     """A status-specific sentence for reminder emails. The ask is different
     for an empty folder vs. an upload that stalled before QA — many authors
     drop something incomplete and never come back, and that case needs a
@@ -126,7 +134,18 @@ def _reminder_status_note(archive: dict[str, Any]) -> str:
 
     Package-aware (automation): the note names exactly what is missing —
     the ZIP/README package, or only the Tracker 'done' confirmation. When
-    both are present the archive auto-advances and no reminder is due."""
+    both are present the archive auto-advances and no reminder is due.
+
+    ``qa_fail``: the QA-fail event still holding this folder (the folder
+    hasn't changed since) — its note says what to fix, so it's quoted."""
+    if archive.get("status") == st.OPEN_ACTIVE and qa_fail and (qa_fail.get("note") or "").strip():
+        return (
+            f"We checked the files in the publication folder on "
+            f"{(qa_fail.get('ts') or '')[:10]} and they cannot be archived yet: "
+            f"\"{qa_fail['note'].strip()}\". Please correct this in the folder, "
+            "following the protocol, or reply if you think the deposit is "
+            "already complete as it is."
+        )
     if archive.get("status") == st.OPEN_ACTIVE:
         user_done = bool(archive.get("user_done_flag"))
         has_zip = bool(archive.get("package_has_zip"))
@@ -239,7 +258,7 @@ def _common_template_vars(archive: dict[str, Any], config: Config) -> dict[str, 
     """Variables shared by reminder + completion templates."""
     return {
         "publication_id": archive["publication_id"],
-        "publication_title": archive.get("pub_title") or "(title pending)",
+        "publication_title": _plain(archive.get("pub_title")) or "(title pending)",
         "data_contact_name": archive.get("data_contact_name") or "data contact",
         "data_contact_email": archive.get("data_contact_email") or "TBD",
         "oa_status": _friendly_status(archive["status"]),
@@ -381,7 +400,8 @@ def generate_emails(config: Config) -> list[Path]:
             vars_ = _common_template_vars(archive, config)
             vars_["reminder_number"] = str(n)
             vars_["past_due_marker"] = "PAST DUE - " if past_due else ""
-            status_note = _reminder_status_note(archive)
+            status_note = _reminder_status_note(
+                archive, db.get_last_event(conn, pub_id, "qa_hold") if qa_held(archive) else None)
             if past_due:
                 status_note = (
                     "Please note: this request is now PAST DUE — the maximum "

@@ -219,8 +219,16 @@ only PublicationsData. The sent copy lands in the operator's Sent Items.
    twice. A refusal records nothing; a timeout says to check Sent Items
    first. If the sign-in has expired, `oa sharepoint sync` in a
    terminal renews it for both.
-3. **Automatic sending** by `oa auto`, switched on per email kind
-   (reminder, completion, handover, …) in `[automation]` once step 2 has
-   run for a while without surprises. If the cached login has expired,
-   the run holds the emails and says so in the digest. It never drops
-   them silently.
+3. ✅ 2026-10-28 (operator decision, the day step 2 sent its first 8):
+   **automatic sending** by `oa auto` (`auto.send_emails`), per kind —
+   `[automation] auto_send_reminders` / `_handover` / `_completion` /
+   `_reject_done`, all on — from the same draft files and with the same
+   recording (source `auto`). Held for a person and listed in the
+   digest: every email for a paper at QA (`OPEN_ACTIVE`: awaiting QA or
+   QA failed — operator's rule), anything past `max_emails_per_run`
+   (20), and a send that got no clear answer or could not be recorded
+   (`output/auto_send_unsure.json`, until the step is recorded by hand).
+   Never: the PI-contact step. An expired sign-in stops the sending and
+   says so. The web card became an editable form (To/Cc/Subject/text)
+   at the same time, and reminders for a QA-failed folder now quote the
+   QA note.
