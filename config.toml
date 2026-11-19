@@ -10,7 +10,10 @@ template_dir = "./templates"
 # always-visible channel (and reminders that do go out point to it).
 first_reminder_days = 21      # days after became_active before first reminder
 reminder_interval_days = 14    # days between subsequent reminders
-max_reminders = 3
+# max_reminders counts the PI-contact step: max_reminders - 1 automatic reminders,
+# then contact_pi_manual. 5 (2026-11-19) = 4 reminders at 21/+14/+14/+14 days,
+# then contact the PI by hand 14 days after the 4th.
+max_reminders = 5
 
 [sharepoint]                  # parallel track — user-facing List (see docs/sharepoint_list_design.md)
 enabled = true
@@ -22,6 +25,8 @@ list_name = "OA Archive Tracker"
 sop_url = "https://intranet.cicbiomagune.es/content/32-open-access-archiving-publication-data"
 # The List view users land on from email links (their own data-contact papers).
 tracker_url = "https://biomagune.sharepoint.com/sites/PublicationsData/Lists/OA%20Archive%20Tracker/My%20datacontact%20papers.aspx"
+# Demo page for the OA Archive Tracker — "OA Tracker tool demo" under Helpful links in email drafts.
+tracker_demo_url = "https://biomagune.sharepoint.com/sites/ResearchDataManagement/SitePages/OA-Archive-Tracker.aspx"
 # Links the Folder column to each publication's SharePoint folder ({pub_id} is filled per row).
 # Verified against pub 3117's folder URL (Shared Documents library on the PublicationsData site).
 folder_url_template = "https://biomagune.sharepoint.com/sites/PublicationsData/Shared%20Documents/Forms/Standard%20View.aspx?id=%2Fsites%2FPublicationsData%2FShared%20Documents%2F{pub_id}"
@@ -91,10 +96,14 @@ auto_close_on_folder_removed = true  # OPEN_DB_UPDATED + folder gone + PID → c
 # the rows have looked right for a few weeks.
 auto_reject_done = false
 # Emails the run sends itself from [email] sender_email, per kind (2026-10-28). Never sent
-# automatically: the PI-contact step, and anything for a paper at QA (data uploaded and
-# awaiting QA, or QA failed) — those wait for "Send now" on the web page. Set one to
-# false and that kind waits for "Send now" too.
+# automatically: the PI-contact step, and anything for a paper awaiting QA (data uploaded,
+# not yet checked) — those wait for "Send now" on the web page. Set one to false and that
+# kind waits for "Send now" too.
 auto_send_reminders = true
+# Reminders for a paper whose QA failed and whose folder hasn't changed since (2026-11-19):
+# they quote the QA note and show "QA failed". false → they wait for "Send now" again.
+# Needs auto_send_reminders on as well.
+auto_send_qa_failed_reminders = true
 auto_send_handover = true
 auto_send_completion = true
 auto_send_reject_done = true
@@ -103,8 +112,7 @@ max_emails_per_run = 20            # safety valve: past this, the rest are held 
 # permanent DOI and always waits for the operator (sheet row `zenodo_publish`).
 
 [email]                       # outbound email drafts produced by `oa emails`
-sender_name = "Ryan Tasseff"
-sender_title = "Data Quality Officer"
+sender_name = "Data Quality Office"   # the email sign-off (and the From name on .eml drafts)
 sender_email = "PublicationsData@biomagune.onmicrosoft.com"   # From of .eml drafts and of "Send now" (Send As granted 2026-10-28)
 # "Send now" on the web page's email steps: sends the draft from sender_email through
 # Microsoft Graph (the SharePoint sign-in) and records it as sent. false → button greyed out.

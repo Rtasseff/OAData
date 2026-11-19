@@ -13,13 +13,20 @@ Open Access requirements: ${flags}
 
 The dataset DOI has been linked to your publication record - no further action is required on your part.
 
-You can review this publication, and any others where you are the data contact, at any time in the OA Archive Tracker:
+For your future publications, the archiving protocol explains what to prepare and how to deposit it:
+
+  Archiving protocol (SOP) - ${protocol_url}
+
+The OA Archive Tracker is a tool to help you along the way: you can review this publication, and any others where you are the data contact, at any time:
 
   OA Archive Tracker - ${tracker_url}
+
+Helpful links:
+  Data folder for this publication - ${sharepoint_folder_url}
+  OA Tracker tool demo - ${tracker_demo_url}
 
 Thank you for your contribution to Open Access research data!
 
 Best regards,
 ${sender_name}
-${sender_title}
 CIC biomaGUNE

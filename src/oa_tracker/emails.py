@@ -71,9 +71,19 @@ _TRACKER_URL = (
     "OA%20Archive%20Tracker/My%20datacontact%20papers.aspx"
 )
 
+# Demo page for the Tracker — fallback for ``[sharepoint] tracker_demo_url``.
+_TRACKER_DEMO_URL = (
+    "https://biomagune.sharepoint.com/sites/ResearchDataManagement/"
+    "SitePages/OA-Archive-Tracker.aspx"
+)
+
 
 def _load_template(template_dir: Path, name: str) -> Template:
     return Template((template_dir / name).read_text())
+
+
+# OPEN_ACTIVE after a failed QA, folder unchanged since (checks.qa_held).
+_QA_FAILED_STATUS = "QA failed (files uploaded, changes needed)"
 
 
 def _friendly_status(status: str) -> str:
@@ -261,13 +271,15 @@ def _common_template_vars(archive: dict[str, Any], config: Config) -> dict[str, 
         "publication_title": _plain(archive.get("pub_title")) or "(title pending)",
         "data_contact_name": archive.get("data_contact_name") or "data contact",
         "data_contact_email": archive.get("data_contact_email") or "TBD",
-        "oa_status": _friendly_status(archive["status"]),
+        "oa_status": (_QA_FAILED_STATUS if qa_held(archive)
+                      else _friendly_status(archive["status"])),
         "flags": _flags_description(archive),
         "current_status": archive["status"],
         "became_active_at": archive.get("became_active_at") or "unknown",
         "sharepoint_folder_url": _folder_url(archive, config),
         "protocol_url": config.sharepoint.sop_url or _PROTOCOL_URL,
         "tracker_url": config.sharepoint.tracker_url or _TRACKER_URL,
+        "tracker_demo_url": config.sharepoint.tracker_demo_url or _TRACKER_DEMO_URL,
         "sender_name": config.email.sender_name,
         "sender_title": config.email.sender_title,
     }
@@ -405,7 +417,7 @@ def generate_emails(config: Config) -> list[Path]:
             if past_due:
                 status_note = (
                     "Please note: this request is now PAST DUE — the maximum "
-                    f"number of scheduled reminders ({max_rem}) has been "
+                    f"number of scheduled reminders ({max_rem - 1}) has been "
                     "reached without the deposit being completed. "
                 ) + status_note
             vars_["status_note"] = status_note

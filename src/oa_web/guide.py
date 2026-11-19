@@ -74,7 +74,8 @@ _EMAIL_STEPS = (
     "Once it is recorded, the draft and this action stop recurring.",
     "The 07:00 run sends this kind of email by itself when its switch is on "
     "([automation] auto_send_*), except for a paper at QA: those wait here "
-    "for you.",
+    "for you. Reminders for a paper whose QA failed go out by themselves "
+    "too (auto_send_qa_failed_reminders).",
 )
 
 # "Send now" on the email steps (oa_tracker.mailer); "Email sent" stays for

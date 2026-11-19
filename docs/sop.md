@@ -367,8 +367,13 @@ the new contact (`handover_<pub>.eml` + a `handover_sent` row) — add
 `--no-notify` to skip it (e.g. when correcting a typo in an address). When the
 previous contact was the `TBD` placeholder, the notice reads "first
 assigned data contact" and the reminder clock restarts (first reminder
-`first_reminder_days` from now). Archives with no data contact get no
-reminder drafts; the report ("Missing Data Contact") and the digest list
+`first_reminder_days` from now). The data contact defaults to the
+corresponding author from the central DB until you set one, except when
+there is no reachable biomaGUNE corresponding author: none recorded, the
+"no biomaGUNE corresponding author" marker, or a person whose personnel
+record (`center_user`) is ended, i.e. staff who have left the centre
+even though the publication still lists them. The contact is then `TBD`
+and you choose one by hand. Archives with no data contact get no reminder drafts; the report ("Missing Data Contact") and the digest list
 them. `reset_*` clears that flag so the next scan re-seeds
 from the central DB (corresponding author for the data contact, or
 the Zenodo record code if the central DB lists Zenodo as the
@@ -376,7 +381,7 @@ repository). Each writes an event to the audit log with `source="cli"`.
 
 ### Final reminder: manual PI contact
 
-The tool sends `max_reminders - 1` automated reminder emails. Once an archive has reached that count (i.e. one slot remains), the next sheet generation replaces the usual `remind_sent` row with a **`contact_pi_manual`** row. At this stage the operator should step in personally — direct email from their own account, a phone call, or an in-person conversation with the PI — rather than send yet another template reminder.
+The tool sends `max_reminders - 1` automated reminder emails. With the current settings (`max_reminders = 5`, since 2026-11-19) that is 4 reminders, at 21 days and then every 14 days (days 21, 35, 49, 63), and the PI contact comes due 14 days after the 4th (day 77). The count includes logged PI contacts. Once an archive has reached that count (i.e. one slot remains), the next sheet generation replaces the usual `remind_sent` row with a **`contact_pi_manual`** row. At this stage the operator should step in personally — direct email from their own account, a phone call, or an in-person conversation with the PI — rather than send yet another template reminder.
 
 To support that personal contact, `oa emails` still produces a draft: the **past-due variant** (`reminder_<pub>_<n>_PASTDUE.eml`), the normal reminder marked "PAST DUE" in the subject and body. Use it as-is, as a skeleton for a personalized email, or just as the fact sheet for a face-to-face conversation. The sheet row's `note` names the file.
 
@@ -536,7 +541,10 @@ unattended and advances what it safely can:
    go out from the office address and are recorded as sent (`auto`).
    **Held for you** (listed in the digest, sent from the web page): every
    email for a paper at QA — data uploaded and awaiting QA, or QA failed
-   — and anything past `max_emails_per_run` (20). The PI-contact step is
+   — except the reminders for a paper whose QA failed and whose folder
+   hasn't changed since, which go out by themselves (since 2026-11-19,
+   `auto_send_qa_failed_reminders`; they show "QA failed" and quote the QA
+   note) — and anything past `max_emails_per_run` (20). The PI-contact step is
    never sent. If the Microsoft sign-in has expired, nothing is sent and
    the digest says to run `oa sharepoint sync`; a send that got no clear
    answer is held until you check Sent Items and record it. Then fresh
@@ -594,7 +602,7 @@ Steps 1–4 are regeneration; steps 5–7 are the real weekly work.
 
 * `oa emails` produces reminder drafts (from `templates/reminder.txt`) for every archive whose `next_reminder_at` is due **and** whose `reminder_count` is still below the manual-contact threshold — and completion drafts (from `templates/completion.txt`) for every archive that is published-and-open (`OPEN_ZENODO_PUBLISHED` or `OPEN_DB_UPDATED`) and hasn't been marked sent, plus a short window after closure to catch the `done=2` shortcut. Every such archive also carries a **`completion_sent`** row on the action sheet — the "send it, then tick it" companion to the draft, mirroring `remind_sent`/`handover_sent`. The row and the draft both stop recurring once you set `done=1` on the `completion_sent` row.
 * Reminders are suppressed for archives whose central mandate is paper-only, no-OA, or missing (the operator sheet still flags those — we just don't pester data contacts for data the mandate doesn't require).
-* The 07:00 run sends the due emails itself (§8.1b step 5), except those for a paper at QA and the PI-contact step. On the web page each email step shows the email in editable boxes — To, Cc, Subject, text — and **Send now** sends what the boxes hold from the office address (`[email] sender_email`, PublicationsData) and records the step as sent in one go (the audit note says when it was edited). A step that comes due between runs gets its draft written on the spot. Or send the `.eml` from Outlook — its From is already the office address — and press **Email sent** (web) or set `done=1` on its `remind_sent` / `handover_sent` / `completion_sent` / `reject_done_sent` row (sheet). Replies come to the PublicationsData inbox, so check it as part of the weekly session.
+* The 07:00 run sends the due emails itself (§8.1b step 5), except those for a paper at QA (reminders for a QA-failed paper do go out) and the PI-contact step. On the web page each email step shows the email in editable boxes — To, Cc, Subject, text — and **Send now** sends what the boxes hold from the office address (`[email] sender_email`, PublicationsData) and records the step as sent in one go (the audit note says when it was edited). A step that comes due between runs gets its draft written on the spot. Or send the `.eml` from Outlook — its From is already the office address — and press **Email sent** (web) or set `done=1` on its `remind_sent` / `handover_sent` / `completion_sent` / `reject_done_sent` row (sheet). Replies come to the PublicationsData inbox, so check it as part of the weekly session.
 * `oa emails` also writes a **Zenodo cheat sheet** to `output/zenodo_cheat/<pub_id>.txt` for every archive in `OPEN_READY_FOR_ZENODO_DRAFT`, `OPEN_ZENODO_DRAFT_CREATED`, or `OPEN_ZENODO_DRAFT_VALIDATED`. The cheat sheet consolidates publication metadata, OA-mandate flags, data-contact info, the central DB's existing repository reference, and the operator-managed Zenodo code — everything needed to create a Zenodo deposit by hand. (Future Stage 2.5 will automate the Zenodo creation itself; the cheat sheet is the manual interim.)
 
 #### When you create the Zenodo draft

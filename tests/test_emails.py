@@ -742,6 +742,7 @@ def test_reminder_quotes_the_qa_fail_while_the_folder_is_unchanged(test_config):
     generate_emails(test_config)
     text = (test_config.email_drafts_dir / "reminder_PUB9_1.txt").read_text()
     assert '"data not zipped, no README"' in text and "cannot be archived yet" in text
+    assert "Status: QA failed (files uploaded, changes needed)" in text
 
     # The next scan sees the folder changed: generic text again.
     with get_connection(test_config.database) as conn:
@@ -749,6 +750,7 @@ def test_reminder_quotes_the_qa_fail_while_the_folder_is_unchanged(test_config):
     generate_emails(test_config)
     text = (test_config.email_drafts_dir / "reminder_PUB9_1.txt").read_text()
     assert "data not zipped" not in text
+    assert "Status: Active (files uploaded, awaiting QA)" in text
 
 
 def test_titles_lose_their_markup_in_emails(test_config):
@@ -761,3 +763,35 @@ def test_titles_lose_their_markup_in_emails(test_config):
     generate_emails(test_config)
     text = (test_config.email_drafts_dir / "reminder_PUB8_1.txt").read_text()
     assert "P(NIPAM-co-DMAEMA) hydrogels & nanodiscs" in text
+
+
+def test_shipped_email_templates_lead_with_the_protocol(test_config):
+    """Every shipped email template fills completely, links the archiving
+    protocol before the Tracker (the protocol is the main reference), lists
+    the data folder and the Tracker demo under Helpful links, and signs off
+    as the office — not a person (2026-11-19)."""
+    from pathlib import Path
+    from string import Template
+    from oa_tracker.emails import _common_template_vars
+    real = Path(__file__).resolve().parent.parent / "templates"
+    archive = {"publication_id": "3337", "pub_title": "A paper",
+               "data_contact_name": "Dana Contact", "data_contact_email": "d@x.es",
+               "status": OPEN_INACTIVE}
+    base = _common_template_vars(archive, test_config)
+    extras = {
+        "reminder.txt": {"reminder_number": "2", "past_due_marker": "", "status_note": ""},
+        "handover.txt": {"handover_line": ""},
+        "reject_done.txt": {"reject_reasons": "no ZIP was found"},
+        "completion.txt": {"final_pid": "10.5281/zenodo.1", "final_url": "https://z/1",
+                           "repository": "Zenodo", "cc_line": ""},
+    }
+    for name, more in extras.items():
+        text = Template((real / name).read_text()).substitute(**base, **more)  # strict
+        protocol = text.index(f"Archiving protocol (SOP) - {base['protocol_url']}")
+        assert protocol < text.index(f"OA Archive Tracker - {base['tracker_url']}"), name
+        helpful = text.index("Helpful links:")
+        assert text.index(f"Data folder for this publication - {base['sharepoint_folder_url']}") > helpful
+        assert text.index(f"OA Tracker tool demo - {base['tracker_demo_url']}") > helpful
+        assert text.rstrip().endswith(
+            f"Best regards,\n{test_config.email.sender_name}\nCIC biomaGUNE"), name
+        assert "Ryan" not in text, name

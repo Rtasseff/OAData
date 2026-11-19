@@ -25,8 +25,8 @@ class EmailSettings:
     conservative (``txt``, current behavior) so code that builds ``Config``
     directly is unchanged; ``config.toml`` sets the active production values.
     """
-    sender_name: str = "Ryan Tasseff"
-    sender_title: str = "Data Quality Officer"
+    sender_name: str = "Data Quality Office"
+    sender_title: str = ""          # ${sender_title}; the shipped templates no longer use it
     sender_email: str = ""          # used as the From header in .eml drafts; blank → omit From
     draft_format: str = "txt"       # "txt" | "eml" | "both"
     # The web page's "Send now" on email steps: sends the draft through
@@ -50,6 +50,7 @@ class SharePointSettings:
     list_name: str = "OA Archive Tracker"
     sop_url: str = ""               # protocol/SOP link — used by the List SOP column AND email drafts
     tracker_url: str = ""           # the List view users land on (e.g. "My data-contact papers")
+    tracker_demo_url: str = ""      # the Tracker demo page — "OA Tracker tool demo" in email drafts
     # Optional ``str.format`` template with a ``{pub_id}`` field; when set,
     # the Folder column links to the publication's SharePoint folder.
     folder_url_template: str = ""
@@ -143,8 +144,11 @@ class AutomationSettings:
     # Emails the run sends itself, from [email] sender_email
     # (oa_tracker.mailer), one switch per kind. Never sent automatically:
     # the PI-contact step, and anything for a paper at QA (OPEN_ACTIVE:
-    # awaiting QA, or QA failed) — those wait for "Send now" on the web.
+    # awaiting QA, or QA failed) — those wait for "Send now" on the web —
+    # except, with auto_send_qa_failed_reminders, the reminders for a paper
+    # whose QA failed and whose folder hasn't changed since (checks.qa_held).
     auto_send_reminders: bool = False
+    auto_send_qa_failed_reminders: bool = False
     auto_send_handover: bool = False
     auto_send_completion: bool = False
     auto_send_reject_done: bool = False
@@ -231,6 +235,7 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
             list_name=sp_raw.get("list_name", sp_defaults.list_name),
             sop_url=sp_raw.get("sop_url", sp_defaults.sop_url),
             tracker_url=sp_raw.get("tracker_url", sp_defaults.tracker_url),
+            tracker_demo_url=sp_raw.get("tracker_demo_url", sp_defaults.tracker_demo_url),
             folder_url_template=sp_raw.get("folder_url_template", sp_defaults.folder_url_template),
             sync_closed=sp_raw.get("sync_closed", sp_defaults.sync_closed),
             token_cache=token_cache,
@@ -276,6 +281,8 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
             auto_send_handover=auto_raw.get("auto_send_handover", auto_defaults.auto_send_handover),
             auto_send_completion=auto_raw.get("auto_send_completion", auto_defaults.auto_send_completion),
             auto_send_reject_done=auto_raw.get("auto_send_reject_done", auto_defaults.auto_send_reject_done),
+            auto_send_qa_failed_reminders=auto_raw.get(
+                "auto_send_qa_failed_reminders", auto_defaults.auto_send_qa_failed_reminders),
             max_emails_per_run=auto_raw.get("max_emails_per_run", auto_defaults.max_emails_per_run),
         ),
     )

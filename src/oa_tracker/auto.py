@@ -27,7 +27,8 @@ recorded in the digest and the remaining stages still run):
 5. **Send** the due emails whose kind is switched on (``auto_send_*``),
    from the office address — after the drafts are regenerated, before
    the sheet is (``run_cycle``). Never the PI-contact step; anything for a
-   paper at QA is held for a person.
+   paper at QA is held for a person — except reminders for a QA-failed,
+   unchanged folder (``auto_send_qa_failed_reminders``).
 
 Everything applied automatically goes through the same ``apply_single``
 path the operator uses, with ``source="auto"`` in the audit log, and is
@@ -666,7 +667,9 @@ def send_emails(config: Config, result: AutoRunResult) -> None:
     address: the same draft files, and the same recording, as "Send now"
     on the web, with source "auto". Held for a person (listed in the
     digest): anything for a paper at QA (OPEN_ACTIVE: awaiting QA or QA
-    failed — operator decision 2026-10-28), an incomplete draft, anything
+    failed — operator decision 2026-10-28) except the reminders for a
+    QA-failed, unchanged folder when ``auto_send_qa_failed_reminders`` is on
+    (operator decision 2026-11-19), an incomplete draft, anything
     past ``max_emails_per_run``, and an email whose automatic send got no
     clear answer or could not be recorded (``auto_send_unsure.json``,
     until the step is recorded by hand)."""
@@ -702,7 +705,9 @@ def send_emails(config: Config, result: AutoRunResult) -> None:
         if stop:
             result.emails_held.append(f"{label}: not sent — {stop}")
             continue
-        if archive["status"] == st.OPEN_ACTIVE:
+        qa_failed_reminder = (code == "remind_sent" and qa_held(archive)
+                              and gates.auto_send_qa_failed_reminders)
+        if archive["status"] == st.OPEN_ACTIVE and not qa_failed_reminder:
             result.emails_held.append(
                 f"{label}: held for you — the paper is at QA (data uploaded, or QA "
                 "failed); review it and send it from the web page")

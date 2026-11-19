@@ -229,6 +229,9 @@ only PublicationsData. The sent copy lands in the operator's Sent Items.
    (20), and a send that got no clear answer or could not be recorded
    (`output/auto_send_unsure.json`, until the step is recorded by hand).
    Never: the PI-contact step. An expired sign-in stops the sending and
-   says so. The web card became an editable form (To/Cc/Subject/text)
+   says so. 2026-11-19 (operator decision): reminders for a QA-failed,
+   unchanged folder are sent automatically too
+   (`auto_send_qa_failed_reminders`); awaiting-QA papers stay held.
+   The web card became an editable form (To/Cc/Subject/text)
    at the same time, and reminders for a QA-failed folder now quote the
    QA note.

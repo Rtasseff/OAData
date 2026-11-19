@@ -10,7 +10,11 @@ Open Access requirements: ${flags}
 
 ${status_note}
 
-You can check the status and respond yourself in the OA Archive Tracker. It opens to the publications where you are the data contact:
+Please follow the archiving protocol to complete the deposit. It explains what to prepare and how to upload it:
+
+  Archiving protocol (SOP) - ${protocol_url}
+
+The OA Archive Tracker is a tool to help you along the way: you can check the status and respond yourself. It opens to the publications where you are the data contact:
 
   OA Archive Tracker - ${tracker_url}
 
@@ -22,11 +26,10 @@ Open the row for this publication and you can:
 
 Helpful links:
   Data folder for this publication - ${sharepoint_folder_url}
-  Archiving protocol (SOP) - ${protocol_url}
+  OA Tracker tool demo - ${tracker_demo_url}
 
 If you would rather not use the Tracker, just reply to this email and we will help.
 
 Best regards,
 ${sender_name}
-${sender_title}
 CIC biomaGUNE

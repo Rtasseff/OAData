@@ -58,7 +58,8 @@ address, sends nothing when pressed twice, and records nothing when
 Microsoft refuses the send — the edits are kept on the page for another
 try (see [email_from_office_address.md](email_from_office_address.md)).
 These are the emails the 07:00 run did not send itself: those for a
-paper at QA, kinds switched off, or ones that came due since. The PI
+paper at QA (except reminders for a QA-failed paper, which it sends),
+kinds switched off, or ones that came due since. The PI
 step (`contact_pi_manual`) stays personal: no *Send now*. The Zenodo
 review step shows the DOI/URL the system reserved and **confirm**
 records them after checking the record is public (the CLI's

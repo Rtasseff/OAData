@@ -688,6 +688,31 @@ def test_due_emails_go_out_and_a_paper_at_qa_is_held(mail_config):
     assert _codes(mail_config, "200") == []
 
 
+def test_a_qa_failed_reminder_goes_out_but_awaiting_qa_is_held(mail_config):
+    """2026-11-19: reminders for a QA-failed, unchanged folder are sent;
+    a paper awaiting QA, and other kinds for a QA-failed paper, still wait."""
+    mail_config.automation.auto_send_qa_failed_reminders = True
+    _due(mail_config, "300", status=st.OPEN_ACTIVE,
+         folder_signature="sig", qa_hold_signature="sig")    # QA failed, unchanged
+    _handover(mail_config, "300")
+    _due(mail_config, "400", status=st.OPEN_ACTIVE,
+         folder_signature="new", qa_hold_signature="old")    # changed since → awaiting QA
+    result = _send(mail_config)
+    assert [d.subject for d in mail_config.outbox] == ["reminder 300"]
+    assert _codes(mail_config, "300") == ["data_contact_handover", "remind_sent"]
+    assert [h.split(":")[0] for h in result.emails_held] == ["300 handover notice",
+                                                            "400 reminder"]
+
+
+def test_qa_failed_reminders_wait_when_switched_off(mail_config):
+    mail_config.automation.auto_send_qa_failed_reminders = False
+    _due(mail_config, "300", status=st.OPEN_ACTIVE,
+         folder_signature="sig", qa_hold_signature="sig")
+    result = _send(mail_config)
+    assert mail_config.outbox == []
+    assert result.emails_held[0].startswith("300 reminder: held for you")
+
+
 def test_the_pi_step_is_never_sent(mail_config):
     _due(mail_config, "100", reminder_count=mail_config.reminders.max_reminders - 1)
     result = _send(mail_config)

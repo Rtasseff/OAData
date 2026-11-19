@@ -1731,3 +1731,22 @@ Emails from the office address (2026-10-28):
   QA-failed, unchanged folder quote the QA note (3302 had got the
   generic text). Titles lose pub-DB markup in emails (3332's
   `<i>co</i>`).
+
+Email wording and reminder schedule (2026-11-19):
+
+- All four data-contact templates lead with the archiving protocol (SOP)
+  link, ahead of the OA Archive Tracker link (now introduced as a tool to
+  help). Helpful links = the publication's data folder + the Tracker demo
+  page (`[sharepoint] tracker_demo_url`). Sign-off is the office
+  (`[email] sender_name = "Data Quality Office"`), no personal name/title.
+- `max_reminders` 3 → 5: four automatic reminders (days 21, 35, 49, 63),
+  then the PI contact by hand 14 days after the 4th. The past-due note now
+  quotes the number of reminders actually sent (`max_reminders - 1`).
+- Operator decision: reminders for a QA-failed, unchanged folder are sent
+  by `oa auto` (`[automation] auto_send_qa_failed_reminders`, on). They
+  show "QA failed (files uploaded, changes needed)" as the status and
+  quote the QA note. Papers awaiting QA, and other email kinds for a
+  QA-failed paper, are still held for the web page.
+- Same day: the cached Microsoft sign-in had been revoked on 2026-11-06,
+  so no email or List push worked 2026-11-09..19 until
+  `oa sharepoint sync --read-only` signed in again.
